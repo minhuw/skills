@@ -82,6 +82,7 @@ test("unresolved jury answers pause the active decision and answer resumes that 
   assert.equal(decision.status, "needs-user");
   assert.ok(Array.isArray(decision.pendingUserQuestions), "expected pending user questions");
   assert.equal(decision.pendingUserQuestions.length, 1, "the original focused question should be escalated once");
+  assert.equal(decision.pendingUserQuestions[0].recommended_default, "");
   assert.equal(decision.pendingUserQuestions[0].opinions.length, 3);
   const answered = runJson(["answer", "--mock", "--state", statePath, "--answer", "blue"]);
   assert.equal(answered.state.decisions[0].status, "resolved");
@@ -91,6 +92,72 @@ test("unresolved jury answers pause the active decision and answer resumes that 
   assert.ok(answered.state.decisions[0].final, "expected a decision final after the answer");
 });
 
+test("answer does not re-ask the same unresolved focused question", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "always-escalates.js",
+    `
+const fs = require("node:fs");
+const prompt = fs.readFileSync(0, "utf8");
+if (prompt.includes("acting as the mediator")) {
+  console.log(JSON.stringify({
+    recommendation: "Pick the option that best matches the user's product intent.",
+    rationale: "The fake mediator intentionally requires the user so repeat escalation can be tested.",
+    consensus: false,
+    requires_user: true,
+    unresolved_disagreements: ["No clear majority."],
+    confidence: 0.4
+  }));
+  process.exit(0);
+}
+const agent = /Your juror id is ([^\\n.]+)/.exec(prompt)?.[1] || "unknown";
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Recommendation from " + agent,
+  rationale: "Distinct fake juror position.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.6
+}));
+`
+  );
+  const configPath = path.join(tmp, "always-escalates-agents.json");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      agents: [
+        { name: "a", command: commandPath },
+        { name: "b", command: commandPath },
+        { name: "c", command: commandPath }
+      ]
+    })
+  );
+  const { statePath, state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--agents",
+    "a,b,c",
+    "--question",
+    "Which option should ship?",
+    "--prompt",
+    "choose"
+  ]);
+  assert.equal(state.decisions[0].status, "needs-user");
+  assert.equal(state.decisions[0].pendingUserQuestions.length, 1);
+
+  const answered = runJson(["answer", "--state", statePath, "--answer", "Ship option B"]);
+  const decision = answered.state.decisions[0];
+  assert.equal(decision.status, "resolved");
+  assert.equal(decision.pendingUserQuestions, null);
+  assert.ok(decision.final, "expected final instead of a repeated user question");
+  assert.equal(decision.final.open_user_questions.length, 1);
+  assert.equal(decision.final.open_user_questions[0].question, "Which option should ship?");
+});
 
 test("pending user-question markdown includes decision summary before the question", () => {
   const result = run(["start", "--mock", "--cwd", tmp, "--prompt", "no-majority-demo: pick a header color"]);
@@ -388,10 +455,195 @@ test("a zero user-question budget surfaces open questions in the decision final"
   assert.equal(decision.status, "resolved");
   assert.equal(decision.pendingUserQuestions, null);
   assert.ok(decision.final.open_user_questions.length >= 1, "unasked questions must be surfaced");
+  assert.equal(decision.final.open_user_questions[0].recommended_default, "");
 });
 
+test("old-shape mediator responses do not resolve split recommendations", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "old-shape-mediator.js",
+    `
+const fs = require("node:fs");
+const prompt = fs.readFileSync(0, "utf8");
+if (prompt.includes("acting as the mediator")) {
+  console.log(JSON.stringify({
+    recommendation: "Pick the first listed option.",
+    rationale: "This intentionally omits requires_user to mimic an old mediator response.",
+    consensus: false,
+    unresolved_disagreements: ["The fake jurors disagree."],
+    confidence: 0.5
+  }));
+  process.exit(0);
+}
+const agent = /Your juror id is ([^\\n.]+)/.exec(prompt)?.[1] || "unknown";
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Recommendation from " + agent,
+  rationale: "Distinct fake juror position.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.7
+}));
+`
+  );
+  const configPath = path.join(tmp, "old-shape-mediator-agents.json");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      agents: [
+        { name: "a", command: commandPath },
+        { name: "b", command: commandPath },
+        { name: "c", command: commandPath }
+      ]
+    })
+  );
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--agents",
+    "a,b,c",
+    "--question",
+    "Which split recommendation should win?",
+    "--prompt",
+    "choose"
+  ]);
+  const decision = state.decisions[0];
+  assert.equal(decision.status, "needs-user");
+  assert.equal(decision.pendingUserQuestions.length, 1);
+  assert.equal(decision.final, null);
+});
 
+test("actionable non-consensus mediator output resolves without user escalation", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "actionable-non-consensus-mediator.js",
+    `
+const fs = require("node:fs");
+const prompt = fs.readFileSync(0, "utf8");
+if (prompt.includes("acting as the mediator")) {
+  console.log(JSON.stringify({
+    recommendation: "Ship option A with the narrower implementation boundary.",
+    rationale: "Two jurors prefer the same actionable direction with different wording; no user decision is required.",
+    consensus: false,
+    requires_user: false,
+    unresolved_disagreements: ["One juror preferred a broader implementation."],
+    confidence: 0.76
+  }));
+  process.exit(0);
+}
+const agent = /Your juror id is ([^\\n.]+)/.exec(prompt)?.[1] || "unknown";
+const recommendations = {
+  a: "Ship option A first because it is the smallest reversible slice.",
+  b: "Prefer option A now, then revisit the broader architecture later.",
+  c: "Ship option B because the architecture is cleaner."
+};
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: recommendations[agent] || "Ship option A.",
+  rationale: "Fake juror position.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.7
+}));
+`
+  );
+  const configPath = path.join(tmp, "actionable-non-consensus-agents.json");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      agents: [
+        { name: "a", command: commandPath },
+        { name: "b", command: commandPath },
+        { name: "c", command: commandPath }
+      ]
+    })
+  );
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--agents",
+    "a,b,c",
+    "--question",
+    "Which actionable split should win?",
+    "--prompt",
+    "choose"
+  ]);
+  const decision = state.decisions[0];
+  assert.equal(decision.status, "resolved");
+  assert.equal(decision.pendingUserQuestions, null);
+  assert.equal(decision.final.requires_user, false);
+  assert.equal(decision.final.consensus, false);
+  assert.match(decision.final.recommendation, /Ship option A/);
+});
 
+test("fallback majority detection uses full recommendation text", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "long-prefix-jurors.js",
+    `
+const fs = require("node:fs");
+const prompt = fs.readFileSync(0, "utf8");
+if (prompt.includes("acting as the mediator")) {
+  process.exit(2);
+}
+const agent = /Your juror id is ([^\\n.]+)/.exec(prompt)?.[1] || "unknown";
+const sharedPrefix = "Keep the same implementation boundary and defer unrelated cleanup while preserving the current sync behavior, validation surface, and planner integration because ";
+const tails = {
+  a: "option A should ship first.",
+  b: "option B should ship first.",
+  c: "option C should ship first."
+};
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: sharedPrefix + (tails[agent] || "another option should ship first."),
+  rationale: "The recommendations intentionally diverge after a long shared prefix.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.7
+}));
+`
+  );
+  const configPath = path.join(tmp, "long-prefix-agents.json");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      agents: [
+        { name: "a", command: commandPath },
+        { name: "b", command: commandPath },
+        { name: "c", command: commandPath }
+      ]
+    })
+  );
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--agents",
+    "a,b,c",
+    "--question",
+    "Which long-prefix recommendation is correct?",
+    "--prompt",
+    "choose"
+  ]);
+  const decision = state.decisions[0];
+  assert.equal(decision.status, "needs-user");
+  assert.equal(decision.pendingUserQuestions.length, 1);
+  assert.equal(decision.final, null);
+});
 
 test("round summaries include failed jurors inside sequential decisions", () => {
   const configPath = path.join(tmp, "failing-agent.json");

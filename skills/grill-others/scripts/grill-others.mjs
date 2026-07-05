@@ -1036,11 +1036,20 @@ function normalizeMediatorResponse(value) {
     const detail = value?.harness_error ? ` Harness error: ${value.harness_error}` : "";
     throw new Error(`Parsed JSON is not a mediator response.${detail}`);
   }
+  if (typeof value.consensus !== "boolean") {
+    throw new Error("Parsed mediator response is missing required boolean consensus.");
+  }
+  if (typeof value.requires_user !== "boolean") {
+    throw new Error("Parsed mediator response is missing required boolean requires_user.");
+  }
+  if (value.consensus && value.requires_user) {
+    throw new Error("Parsed mediator response has inconsistent consensus and requires_user values.");
+  }
   return {
     recommendation: String(value.recommendation ?? "").trim(),
     rationale: String(value.rationale ?? "").trim(),
-    consensus: value.consensus === true,
-    requires_user: value.requires_user === true,
+    consensus: value.consensus,
+    requires_user: value.requires_user,
     unresolved_disagreements: Array.isArray(value.unresolved_disagreements)
       ? value.unresolved_disagreements.map(String)
       : [],
@@ -1285,7 +1294,7 @@ function majorityFallback(perAgent) {
 function recommendationVote(perAgent) {
   const counts = new Map();
   for (const entry of perAgent) {
-    const key = simplifyText(entry.recommendation);
+    const key = comparableText(entry.recommendation);
     if (!key) {
       continue;
     }
@@ -1638,7 +1647,7 @@ function buildUserEscalationQuestion(state, final) {
   return {
     question: focusedQuestion(state),
     why: "The jurors did not produce a clear consensus or majority answer. Review the participant positions and choose the answer to the original focused question.",
-    recommended_default: final.recommendation && final.recommendation !== "No usable recommendation." ? final.recommendation : "",
+    recommended_default: "",
     opinions: jurorOpinions(state)
   };
 }
