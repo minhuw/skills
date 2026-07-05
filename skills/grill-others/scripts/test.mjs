@@ -54,9 +54,12 @@ function test(name, fn) {
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "grill-others-test-"));
 
 test("start creates a sequential v1 state and runs until the planner is done", () => {
-  const { state, decisionSummaries } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "Should we cache results in memory?"]);
+  const { statePath, state, decisionSummaries } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "Should we cache results in memory?"]);
   assert.equal(state.version, 1);
   assert.equal(state.mode, "sequential");
+  assert.equal(state.maxGrillQuestions, 200);
+  assert.equal(typeof state.grillSessionId, "string");
+  assert.equal(statePath, path.join(tmp, ".grill-others", state.grillSessionId, "state.json"));
   assert.equal(state.decisions.length, 1);
   assert.equal(state.decisions[0].status, "resolved");
   assert.ok(state.final, "start must continue until the grill is finished");
@@ -64,6 +67,15 @@ test("start creates a sequential v1 state and runs until the planner is done", (
   assert.equal(decisionSummaries.length, 1);
   assert.equal(decisionSummaries[0].roundSummaries[0].stance_counts.recommend, 3);
   assert.equal(decisionSummaries[0].roundSummaries[0].participants.length, 3);
+});
+
+test("separate starts use separate grill session directories", () => {
+  const first = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "Should first run stay isolated?"]);
+  const second = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "Should second run stay isolated?"]);
+  assert.notEqual(first.state.grillSessionId, second.state.grillSessionId);
+  assert.notEqual(path.dirname(first.statePath), path.dirname(second.statePath));
+  assert.equal(first.statePath, path.join(tmp, ".grill-others", first.state.grillSessionId, "state.json"));
+  assert.equal(second.statePath, path.join(tmp, ".grill-others", second.state.grillSessionId, "state.json"));
 });
 
 test("markdown output is marked as a mock run and shows the final recommendation", () => {
@@ -1045,23 +1057,29 @@ test("claude and pi harnesses reuse juror session ids across rounds", () => {
 const fs = require("node:fs");
 const command = require("node:path").basename(process.argv[1]);
 const argv = process.argv.slice(2);
-const sessionIndex = argv.indexOf("--session-id");
-if (sessionIndex === -1 || !argv[sessionIndex + 1]) {
-  console.error(JSON.stringify(argv));
-  process.exit(2);
-}
 const prompt = argv.at(-1) || "";
 const round = prompt.includes("Current round kind: challenge") ? "challenge" : "initial";
 const mode = prompt.includes("Original user plan or decision:") ? "full" : "compact";
+const sessionFlag = command === "claude" && round === "challenge" ? "--resume" : "--session-id";
+const wrongSessionFlag = sessionFlag === "--resume" ? "--session-id" : "--resume";
+if (argv.includes(wrongSessionFlag)) {
+  console.error("wrong session flag for " + command + " " + round + ": " + JSON.stringify(argv));
+  process.exit(2);
+}
+const sessionIndex = argv.indexOf(sessionFlag);
+if (sessionIndex === -1 || !argv[sessionIndex + 1]) {
+  console.error(JSON.stringify(argv));
+  process.exit(3);
+}
 if (round === "initial" && mode !== "full") {
   console.error("initial prompt should include full context");
-  process.exit(3);
+  process.exit(4);
 }
 if (round === "challenge" && mode !== "compact") {
   console.error("challenge prompt should be compact");
-  process.exit(4);
+  process.exit(5);
 }
-fs.appendFileSync(process.env.GRILL_TEST_SESSION_LOG, command + ":" + argv[sessionIndex + 1] + ":" + round + ":" + mode + "\\n");
+fs.appendFileSync(process.env.GRILL_TEST_SESSION_LOG, command + ":" + sessionFlag + ":" + argv[sessionIndex + 1] + ":" + round + ":" + mode + "\\n");
 const challenge = round === "challenge";
 console.log(JSON.stringify({
   stance: challenge ? "recommend" : "needs-evidence",
@@ -1107,7 +1125,11 @@ console.log(JSON.stringify({
       .trim()
       .split("\n")
       .filter((line) => line.startsWith(`${harness}:`) && line.includes(sessionId));
-    assert.deepEqual(entries, [`${harness}:${sessionId}:initial:full`, `${harness}:${sessionId}:challenge:compact`]);
+    const challengeFlag = harness === "claude" ? "--resume" : "--session-id";
+    assert.deepEqual(entries, [
+      `${harness}:--session-id:${sessionId}:initial:full`,
+      `${harness}:${challengeFlag}:${sessionId}:challenge:compact`
+    ]);
   }
 });
 

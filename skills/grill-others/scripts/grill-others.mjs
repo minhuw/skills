@@ -16,7 +16,7 @@ const PLANNER_SCHEMA = JSON.parse(fs.readFileSync(PLANNER_SCHEMA_PATH, "utf8"));
 const DEFAULT_AGENTS = ["codex", "claude", "pi"];
 const DEFAULT_MAX_ROUNDS = 2;
 const DEFAULT_MAX_USER_QUESTIONS = 3;
-const DEFAULT_MAX_GRILL_QUESTIONS = 5;
+const DEFAULT_MAX_GRILL_QUESTIONS = 200;
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const KILL_GRACE_MS = 5000;
 const CODEX_APP_SERVER_STDIN_CLOSE_GRACE_MS = 500;
@@ -77,7 +77,7 @@ function usage() {
     "  New runs are sequential: start/continue/answer run focused questions until the grill finishes or needs the user.",
     "  --rounds caps jury rounds per focused question.",
     "  --max-user-questions caps how many times the whole run may pause when the jury cannot resolve a focused question (default 3; 0 disables asking).",
-    "  --max-grill-questions caps focused questions per run (default 5).",
+    "  --max-grill-questions caps focused questions per run (default 200).",
     "",
     "Environment:",
     "  GRILL_OTHERS_MOCK=1  Return deterministic mock juror outputs without launching harnesses (output is marked MOCK RUN)."
@@ -139,9 +139,14 @@ function readPrompt(cwd, options) {
   throw new Error("Provide --prompt, --prompt-file, a positional prompt, or piped stdin.");
 }
 
+function newGrillSessionId() {
+  return `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
 function ensureStatePath(cwd, requestedPath = null) {
+  const grillSessionId = newGrillSessionId();
   if (requestedPath) {
-    return path.resolve(cwd, requestedPath);
+    return { statePath: path.resolve(cwd, requestedPath), grillSessionId };
   }
   const dir = path.join(cwd, ".grill-others");
   fs.mkdirSync(dir, { recursive: true });
@@ -149,7 +154,7 @@ function ensureStatePath(cwd, requestedPath = null) {
   if (!fs.existsSync(gitignorePath)) {
     fs.writeFileSync(gitignorePath, "*\n", "utf8");
   }
-  return path.join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID().slice(0, 8)}.json`);
+  return { statePath: path.join(dir, grillSessionId, "state.json"), grillSessionId };
 }
 
 function loadState(statePath) {
@@ -184,6 +189,7 @@ function normalizeSequentialState(state) {
   state.maxRounds ??= DEFAULT_MAX_ROUNDS;
   state.maxUserQuestions ??= DEFAULT_MAX_USER_QUESTIONS;
   state.maxGrillQuestions ??= DEFAULT_MAX_GRILL_QUESTIONS;
+  state.grillSessionId ??= null;
   state.mediation ??= null;
   state.final ??= null;
   state.mock ??= false;
@@ -1465,7 +1471,11 @@ async function callClaude(agent, prompt, options) {
     options.schemaJson ?? JSON.stringify(SCHEMA)
   );
   if (sessionContextAvailable) {
-    args.push("--session-id", options.session.sessionId);
+    if (options.promptMode === "compact") {
+      args.push("--resume", options.session.sessionId);
+    } else {
+      args.push("--session-id", options.session.sessionId);
+    }
   }
   args.push(prompt);
   const result = await spawnWithInput("claude", args, "", withAgentEnv(agent, options));
@@ -1899,6 +1909,9 @@ function markPromptContextResult(agent, session, promptContext, result, ok) {
   }
   if (promptContext.mode === "compact") {
     clearSessionPromptContext(session);
+    if (agent.harness === "claude") {
+      delete session.sessionId;
+    }
   }
 }
 
@@ -3062,11 +3075,12 @@ function shellQuote(value) {
 
 async function handleStart(options) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
-  const statePath = ensureStatePath(cwd, options.state);
+  const { statePath, grillSessionId } = ensureStatePath(cwd, options.state);
   const prompt = readPrompt(cwd, options);
   const state = {
     version: 1,
     mode: "sequential",
+    grillSessionId,
     cwd,
     prompt,
     maxRounds: parseCount(options.rounds, "--rounds", DEFAULT_MAX_ROUNDS, 1),
