@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recommendation", "rationale", "consensus", "unresolved_disagreements", "confidence"],
+  "properties": {
+    "recommendation": {
+      "type": "string"
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "consensus": {
+      "type": "boolean"
+    },
+    "unresolved_disagreements": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "agents": [
+    {
+      "name": "codex-gpt55",
+      "label": "Codex GPT-5.5",
+      "harness": "codex",
+      "model": "gpt-5.5"
+    },
+    {
+      "name": "claude-fable5",
+      "label": "Claude Fable 5",
+      "harness": "claude",
+      "model": "claude-fable-5"
+    },
+    {
+      "name": "pi-openrouter-gemini35-flash",
+      "label": "Pi OpenRouter Gemini 3.5 Flash",
+      "harness": "pi",
+      "model": "openrouter/google/gemini-3.5-flash"
+    }
+  ]
+}
