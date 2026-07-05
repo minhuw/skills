@@ -63,11 +63,17 @@ node /path/to/this/skill/scripts/grill-others.mjs continue --state /path/from/pr
 
 The default agents are:
 
-- `codex`: runs `codex exec` in read-only mode with the juror JSON schema enforced via `--output-schema`.
+- `codex`: runs `codex app-server` in read-only mode with app-server threads persisted in the run state; if app-server is unavailable, it falls back to `codex exec` with the JSON schema enforced via `--output-schema`.
 - `claude`: runs `claude -p` with read-oriented tools and schema-validated structured output via `--json-schema`.
 - `pi`: runs `pi -p --mode json` with read-oriented tools; the schema is embedded in the prompt. Pi must already be logged in or configured with a provider API key; if not, the run still completes and records Pi under failed jurors.
 
-Every planner, juror, and mediator invocation uses a fresh harness session. Conversation continuity across focused questions and rounds is carried in the prompt transcript (summarized and size-bounded), not in harness sessions.
+Built-in harness sessions are persisted per role and agent in the state file. Claude Code and Pi receive a stable `--session-id` for each `(role, agent)` pair, while Codex reuses an app-server thread for each `(role, agent)` pair.
+
+Prompt feeding is session-aware. The first valid turn for each `(role, agent)` pair sends the full bootstrap context: original plan, role rules, repository cwd, roster, prior transcript, and schema guidance. Later turns in a primed persistent session send compact deltas: the current focused question, latest user answer, routed juror questions or disagreement summary, resolved-decision summary when relevant, and schema guidance. If a persistent session is unavailable, Codex falls back to `codex exec`, Codex app-server cannot resume a stored thread, or a compact turn fails, the next turn falls back to full context.
+
+Built-in Claude Code and Pi harnesses require session persistence. Do not configure Claude Code with `--no-session-persistence` or Pi with `--no-session`; those flags are rejected because compact prompting depends on persisted harness context. Use a custom `command` harness for intentionally stateless integrations.
+
+Codex app-server processes are per CLI run, not long-lived daemons owned by the state file. The script closes them on normal exit and on handled `SIGINT`, `SIGTERM`, and `SIGHUP`; the persisted `codexThreadId` values are resume handles, not running processes. Cleanup cannot run for `SIGKILL`, process crashes, or machine shutdown; those can leave inert persisted resume handles, but not live app-server children owned by a completed CLI process.
 
 Harness credentials and provider settings are inherited from the launcher environment. Configure them before running the skill with the harness's normal login flow, shell exports, `direnv`, or another external environment manager.
 
@@ -106,7 +112,7 @@ node /path/to/this/skill/scripts/grill-others.mjs start --cwd "$PWD" --agent-con
 
 Names must be unique case-insensitively. Jurors route questions to `all` or to an exact juror instance name, not to a harness name.
 
-Built-in harnesses support per-instance `model`, `args`, and `env`. Pi also supports `provider`. Model propagation uses the harness CLI flags (`codex exec --model`, `claude --model`, `pi --model`) rather than process-global environment, so concurrent instances can use different models safely. Pi still honors `GRILL_OTHERS_PI_PROVIDER` and `GRILL_OTHERS_PI_MODEL` as fallbacks when a Pi instance does not set `provider` or `model`.
+Built-in harnesses support per-instance `model`, `args`, and `env`. Pi also supports `provider`. Model propagation uses the harness CLI or app-server model fields (`codex exec --model` fallback or app-server `model`, `claude --model`, `pi --model`) rather than process-global environment, so concurrent instances can use different models safely. Codex app-server is launched as `codex ...args app-server`, so Codex global args such as profiles and config overrides apply to the persistent session path as well as the exec fallback. Pi still honors `GRILL_OTHERS_PI_PROVIDER` and `GRILL_OTHERS_PI_MODEL` as fallbacks when a Pi instance does not set `provider` or `model`.
 
 To add future agents, pass `--agent-config path/to/agents.json` on `start`. The specs are persisted in the state file, so `answer` does not need the config again. The file may define command harnesses:
 
@@ -118,13 +124,16 @@ To add future agents, pass `--agent-config path/to/agents.json` on `start`. The 
       "label": "Example Agent",
       "harness": "command",
       "command": "example-agent",
+      "persistentSession": false,
       "args": ["--json", "{{prompt}}"]
     }
   ]
 }
 ```
 
-Supported placeholders are `{{prompt}}`, `{{cwd}}`, `{{sessionId}}`, `{{schemaPath}}`, `{{agentName}}`, `{{agentLabel}}`, `{{harness}}`, `{{model}}`, and `{{provider}}`. `{{sessionId}}` is a fresh UUID per invocation. If no argument contains `{{prompt}}`, the prompt is written to the command's stdin.
+Supported placeholders are `{{prompt}}`, `{{cwd}}`, `{{sessionId}}`, `{{promptMode}}`, `{{promptContextVersion}}`, `{{schemaPath}}`, `{{agentName}}`, `{{agentLabel}}`, `{{harness}}`, `{{model}}`, and `{{provider}}`. If no argument contains `{{prompt}}`, the prompt is written to the command's stdin. For command harnesses without `persistentSession: true`, `{{sessionId}}` is a fresh per-invocation correlation id.
+
+Command harnesses opt into persistent compact prompting by setting `persistentSession: true` and including `{{sessionId}}` in their args. In that mode, the value is stable per `(role, agent)` in the run state, `{{promptMode}}` is `full` or `compact`, and `{{promptContextVersion}}` identifies the compact-context contract. Command harnesses without explicit persistent opt-in keep receiving full prompts every invocation.
 
 Legacy configs and command args using `adapter` or `{{adapter}}` are accepted as aliases for `harness` and `{{harness}}`.
 
