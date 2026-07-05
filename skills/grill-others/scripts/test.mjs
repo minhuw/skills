@@ -1133,6 +1133,89 @@ console.log(JSON.stringify({
   }
 });
 
+test("claude full-turn failure clears the session id before retry", () => {
+  const bin = fs.mkdtempSync(path.join(tmp, "fake-claude-retry-bin-"));
+  const logPath = path.join(tmp, "claude-retry-session.log");
+  const markerPath = path.join(tmp, "claude-retry-marker");
+  writeFakeCommand(
+    bin,
+    "claude",
+    `
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+const prompt = argv.at(-1) || "";
+const sessionFlag = argv.includes("--resume") ? "--resume" : "--session-id";
+const sessionIndex = argv.indexOf(sessionFlag);
+const sessionId = sessionIndex === -1 ? "" : argv[sessionIndex + 1];
+const role = prompt.includes("acting as the planner") ? "planner" : "juror";
+fs.appendFileSync(process.env.GRILL_TEST_CLAUDE_RETRY_LOG, role + ":" + sessionFlag + ":" + sessionId + "\\n");
+if (role === "planner") {
+  console.log(JSON.stringify({
+    done: true,
+    question: "",
+    rationale: "The retried Claude decision resolved.",
+    confidence: 0.8
+  }));
+  process.exit(0);
+}
+if (!fs.existsSync(process.env.GRILL_TEST_CLAUDE_RETRY_MARKER)) {
+  fs.writeFileSync(process.env.GRILL_TEST_CLAUDE_RETRY_MARKER, sessionId);
+  console.error("transient Claude failure after session creation");
+  process.exit(2);
+}
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Claude retry used a fresh full-turn session id.",
+  rationale: "The fake Claude harness succeeds on retry.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.8
+}));
+`
+  );
+  const configPath = path.join(tmp, "claude-retry.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "claude-retry", harness: "claude" }] }));
+  const env = {
+    PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+    GRILL_TEST_CLAUDE_RETRY_LOG: logPath,
+    GRILL_TEST_CLAUDE_RETRY_MARKER: markerPath
+  };
+  const started = runJson(
+    [
+      "start",
+      "--cwd",
+      tmp,
+      "--agent-config",
+      configPath,
+      "--agents",
+      "claude-retry",
+      "--question",
+      "Can Claude retry after a full-turn failure?",
+      "--prompt",
+      "hi"
+    ],
+    { env }
+  );
+  assert.equal(started.state.decisions[0].status, "failed");
+  assert.equal(started.state.harnessSessions.juror?.["claude-retry"]?.sessionId, undefined);
+
+  const continued = runJson(["continue", "--state", started.statePath], { env });
+  assert.equal(continued.state.decisions[0].status, "resolved");
+  const jurorLines = fs
+    .readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .filter((line) => line.startsWith("juror:"));
+  assert.equal(jurorLines.length, 2);
+  const [, firstFlag, firstSessionId] = jurorLines[0].split(":");
+  const [, secondFlag, secondSessionId] = jurorLines[1].split(":");
+  assert.equal(firstFlag, "--session-id");
+  assert.equal(secondFlag, "--session-id");
+  assert.notEqual(firstSessionId, secondSessionId);
+});
+
 test("claude and pi configs cannot disable built-in session persistence", () => {
   for (const [harness, flag] of [
     ["claude", "--no-session-persistence"],
@@ -1684,9 +1767,195 @@ test("round summaries include failed jurors inside sequential decisions", () => 
     "--prompt",
     "hi"
   ]);
+  assert.equal(state.decisions[0].status, "failed");
   assert.equal(state.decisions[0].final.all_jurors_failed, true);
+  assert.equal(state.final, null);
+  assert.equal(decisionSummaries[0].status, "failed");
   assert.equal(decisionSummaries[0].roundSummaries[0].failed_jurors[0].agent, "bad");
   assert.match(decisionSummaries[0].roundSummaries[0].outcome, /No jurors produced a usable response/);
+});
+
+test("continue retries a failed active decision", () => {
+  const markerPath = path.join(tmp, "flaky-agent-marker");
+  const commandPath = writeFakeCommand(
+    tmp,
+    "flaky-agent.js",
+    `
+const fs = require("node:fs");
+const prompt = fs.readFileSync(0, "utf8");
+if (prompt.includes("acting as the planner")) {
+  console.log(JSON.stringify({
+    done: true,
+    question: "",
+    rationale: "The retried focused decision resolved.",
+    confidence: 0.8
+  }));
+  process.exit(0);
+}
+const markerPath = ${JSON.stringify(markerPath)};
+if (!fs.existsSync(markerPath)) {
+  fs.writeFileSync(markerPath, "failed-once");
+  console.error("transient harness failure");
+  process.exit(2);
+}
+if (prompt.includes("Current round kind: challenge")) {
+  console.log(JSON.stringify({
+    stance: "recommend",
+    recommendation: "Retry challenge round ran after harness recovery.",
+    rationale: "The failed infrastructure round did not consume the deliberation budget.",
+    assumptions: [],
+    risks: [],
+    repo_findings: [],
+    questions_for_other_jurors: [],
+    confidence: 0.8
+  }));
+  process.exit(0);
+}
+console.log(JSON.stringify({
+  stance: "needs-evidence",
+  recommendation: "Retry the same focused question after harness recovery.",
+  rationale: "The retry should still have budget for a challenge round.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [
+    { to: "all", question: "Did the failed round consume budget?", why: "Exercise retry round counting." }
+  ],
+  confidence: 0.8
+}));
+`
+  );
+  const configPath = path.join(tmp, "flaky-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "flaky", command: commandPath }] }));
+  const started = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--agents",
+    "flaky",
+    "--question",
+    "Can a failed decision be retried?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.equal(started.state.decisions[0].status, "failed");
+  assert.equal(started.state.final, null);
+
+  const continued = runJson(["continue", "--state", started.statePath]);
+  assert.equal(continued.state.decisions.length, 1);
+  assert.equal(continued.state.decisions[0].status, "resolved");
+  assert.equal(continued.state.decisions[0].rounds.length, 3);
+  assert.equal(continued.state.decisions[0].rounds[2].kind, "challenge");
+  assert.equal(continued.state.decisions[0].final.all_jurors_failed, false);
+  assert.ok(continued.state.final);
+  assert.equal(continued.state.final.resolved_decisions, 1);
+});
+
+test("old all-failed resolved decisions are reopened as failed", () => {
+  const statePath = path.join(tmp, "old-all-failed-state.json");
+  const okFinal = {
+    recommendation: "Use the existing path.",
+    confidence: 0.8,
+    consensus: true,
+    all_jurors_failed: false,
+    unresolved_disagreements: [],
+    risks: [],
+    assumptions: [],
+    repo_findings: [],
+    open_user_questions: []
+  };
+  const failedFinal = {
+    recommendation: "All jurors failed. Fix harness availability, credentials, or CLI flags before using this run as design guidance.",
+    confidence: 0,
+    consensus: false,
+    all_jurors_failed: true,
+    failed_jurors: [{ agent: "bad", error: "failed" }],
+    unresolved_disagreements: [],
+    risks: ["No successful jury response was available to synthesize."],
+    assumptions: [],
+    repo_findings: [],
+    open_user_questions: []
+  };
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify({
+      version: 1,
+      mode: "sequential",
+      cwd: tmp,
+      prompt: "hi",
+      maxRounds: 2,
+      maxUserQuestions: 3,
+      maxGrillQuestions: 200,
+      mock: false,
+      harnessSessions: {
+        juror: {
+          old: {
+            sessionId: "stale-juror-session",
+            contextPrimed: true,
+            promptContextVersion: 1
+          }
+        },
+        planner: {
+          old: {
+            sessionId: "stale-planner-session",
+            contextPrimed: true,
+            promptContextVersion: 1
+          }
+        }
+      },
+      agents: [],
+      activeDecisionIndex: null,
+      decisions: [
+        {
+          id: "d1",
+          question: "Resolved question",
+          status: "resolved",
+          rounds: [],
+          userAnswers: [],
+          pendingUserQuestions: null,
+          mediation: null,
+          final: okFinal
+        },
+        {
+          id: "d2",
+          question: "Failed question",
+          status: "resolved",
+          rounds: [],
+          userAnswers: [],
+          pendingUserQuestions: null,
+          mediation: null,
+          final: failedFinal
+        },
+        {
+          id: "d3",
+          question: "Question that should be discarded",
+          status: "resolved",
+          rounds: [],
+          userAnswers: [],
+          pendingUserQuestions: null,
+          mediation: null,
+          final: okFinal
+        }
+      ],
+      final: {
+        recommendation: "stale final",
+        confidence: 0.5,
+        consensus: false,
+        all_jurors_failed: false,
+        resolved_decisions: 3,
+        decision_count: 3
+      }
+    }),
+    "utf8"
+  );
+  const { state } = runJson(["status", "--state", statePath]);
+  assert.equal(state.final, null);
+  assert.equal(state.decisions.length, 2);
+  assert.equal(state.activeDecisionIndex, 1);
+  assert.equal(state.decisions[1].status, "failed");
+  assert.deepEqual(state.harnessSessions, {});
 });
 
 test("failed juror diagnostics are bounded before challenge rounds", () => {

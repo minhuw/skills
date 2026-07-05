@@ -205,7 +205,22 @@ function normalizeSequentialState(state) {
     decision.final ??= null;
     decision.status ??= decision.pendingUserQuestions?.length ? "needs-user" : decision.final ? "resolved" : "active";
   }
+  repairSequentialAllFailedDecision(state);
   return state;
+}
+
+function repairSequentialAllFailedDecision(state) {
+  const failedIndex = state.decisions.findIndex((decision) => isAllJurorsFailedFinal(decision.final));
+  if (failedIndex === -1) {
+    return;
+  }
+  state.decisions = state.decisions.slice(0, failedIndex + 1);
+  const decision = state.decisions[failedIndex];
+  decision.status = "failed";
+  decision.pendingUserQuestions = null;
+  state.activeDecisionIndex = failedIndex;
+  state.final = null;
+  resetHarnessSessions(state);
 }
 
 function saveState(statePath, state) {
@@ -1907,11 +1922,9 @@ function markPromptContextResult(agent, session, promptContext, result, ok) {
     session.promptContextVersion = PROMPT_CONTEXT_VERSION;
     return;
   }
-  if (promptContext.mode === "compact") {
-    clearSessionPromptContext(session);
-    if (agent.harness === "claude") {
-      delete session.sessionId;
-    }
+  clearSessionPromptContext(session);
+  if (agent.harness === "claude") {
+    delete session.sessionId;
   }
 }
 
@@ -2028,10 +2041,16 @@ function buildDisagreementSummary(state) {
   return lines.join("\n");
 }
 
+function roundHasUsableResponse(round) {
+  return Object.values(round?.responses ?? {}).some((response) => response.ok);
+}
+
 function phaseRoundCount(state) {
   let count = 0;
   for (let i = state.rounds.length - 1; i >= 0; i -= 1) {
-    count += 1;
+    if (roundHasUsableResponse(state.rounds[i])) {
+      count += 1;
+    }
     if (state.rounds[i].kind === "user-answer") {
       break;
     }
@@ -2429,7 +2448,13 @@ function copyDecisionFromFlat(state, decision, flat) {
   decision.pendingUserQuestions = flat.pendingUserQuestions;
   decision.mediation = flat.mediation;
   decision.final = flat.final;
-  decision.status = flat.pendingUserQuestions?.length ? "needs-user" : flat.final ? "resolved" : "active";
+  decision.status = flat.pendingUserQuestions?.length
+    ? "needs-user"
+    : isAllJurorsFailedFinal(flat.final)
+      ? "failed"
+      : flat.final
+        ? "resolved"
+        : "active";
   decision.updatedAt = new Date().toISOString();
   state.harnessSessions = normalizeHarnessSessions(flat.harnessSessions);
   state.mock = Boolean(state.mock || flat.mock);
@@ -2473,9 +2498,17 @@ function buildDecisionSummaries(state) {
   return (state.decisions ?? []).map((decision, index) => summarizeDecision(state, decision, index));
 }
 
+function isAllJurorsFailedFinal(final) {
+  return final?.all_jurors_failed === true;
+}
+
 function buildSequentialFinal(state, reason) {
-  const resolved = (state.decisions ?? []).filter((decision) => decision.status === "resolved" && decision.final);
-  const unresolved = (state.decisions ?? []).filter((decision) => decision.status !== "resolved");
+  const resolved = (state.decisions ?? []).filter(
+    (decision) => decision.status === "resolved" && decision.final && !isAllJurorsFailedFinal(decision.final)
+  );
+  const unresolved = (state.decisions ?? []).filter(
+    (decision) => decision.status !== "resolved" || isAllJurorsFailedFinal(decision.final)
+  );
   const openUserQuestions = collectSequentialOpenUserQuestions(resolved);
   const recommendations = resolved.map(
     (decision, index) => `${index + 1}. ${decision.question}\n   ${decision.final.recommendation}`
@@ -2493,13 +2526,13 @@ function buildSequentialFinal(state, reason) {
       openUserQuestions.length === 0 && resolved.length > 0 && resolved.every((decision) => decision.final.consensus === true),
     synthesized_by: "sequential:resolved-decisions",
     unresolved_disagreements: dedupeSlice(resolved.flatMap((decision) => decision.final.unresolved_disagreements ?? [])),
-    all_jurors_failed: resolved.length === 0 || resolved.every((decision) => decision.final.all_jurors_failed === true),
+    all_jurors_failed: false,
     decision_count: state.decisions.length,
     resolved_decisions: resolved.length,
     unresolved_decisions: unresolved.map((decision) => ({
       id: decision.id,
       question: decision.question,
-      status: decision.status
+      status: isAllJurorsFailedFinal(decision.final) ? "failed" : decision.status
     })),
     stop_reason: reason,
     open_user_questions: openUserQuestions,
@@ -3183,13 +3216,6 @@ async function handleContinue(options) {
     output(state, statePath, options);
     return;
   }
-  const decision = activeSequentialDecision(state);
-  if (decision?.pendingUserQuestions?.length) {
-    throw new Error("Answer the pending user question before continuing.");
-  }
-  if (decision && decision.status !== "resolved") {
-    throw new Error(`Decision ${decision.id} is ${decision.status}; it cannot continue yet.`);
-  }
   state.maxRounds = parseCount(options.rounds, "--rounds", state.maxRounds ?? DEFAULT_MAX_ROUNDS, 1);
   state.maxUserQuestions = parseCount(
     options["max-user-questions"],
@@ -3203,6 +3229,22 @@ async function handleContinue(options) {
     state.maxGrillQuestions ?? DEFAULT_MAX_GRILL_QUESTIONS,
     1
   );
+  const decision = activeSequentialDecision(state);
+  if (decision?.pendingUserQuestions?.length) {
+    throw new Error("Answer the pending user question before continuing.");
+  }
+  if (decision?.status === "failed") {
+    decision.status = "active";
+    decision.pendingUserQuestions = null;
+    decision.final = null;
+    await runSequentialDecision(state, statePath, decision, "initial", options);
+    const finalState = await driveSequentialUntilPause(state, statePath, options);
+    output(finalState, statePath, options);
+    return;
+  }
+  if (decision && decision.status !== "resolved") {
+    throw new Error(`Decision ${decision.id} is ${decision.status}; it cannot continue yet.`);
+  }
   const finalState = await driveSequentialUntilPause(state, statePath, options);
   output(finalState, statePath, options);
 }
