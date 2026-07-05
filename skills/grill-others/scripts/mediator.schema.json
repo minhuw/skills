@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["recommendation", "rationale", "consensus", "unresolved_disagreements", "confidence"],
+  "required": ["recommendation", "rationale", "consensus", "requires_user", "unresolved_disagreements", "confidence"],
   "properties": {
     "recommendation": {
       "type": "string"
@@ -11,6 +11,9 @@
       "type": "string"
     },
     "consensus": {
+      "type": "boolean"
+    },
+    "requires_user": {
       "type": "boolean"
     },
     "unresolved_disagreements": {

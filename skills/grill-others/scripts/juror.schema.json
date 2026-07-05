@@ -10,13 +10,12 @@
     "risks",
     "repo_findings",
     "questions_for_other_jurors",
-    "questions_for_user",
     "confidence"
   ],
   "properties": {
     "stance": {
       "type": "string",
-      "enum": ["recommend", "block", "needs-evidence", "needs-user"]
+      "enum": ["recommend", "block", "needs-evidence"]
     },
     "recommendation": {
       "type": "string"
@@ -56,25 +55,6 @@
             "type": "string"
           },
           "why": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "questions_for_user": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["question", "why", "recommended_default"],
-        "properties": {
-          "question": {
-            "type": "string"
-          },
-          "why": {
-            "type": "string"
-          },
-          "recommended_default": {
             "type": "string"
           }
         }

@@ -38,7 +38,6 @@ const JUROR_JSON = `JSON.stringify({
   risks: [],
   repo_findings: [process.env.GRILL_TEST_VALUE || ""].filter(Boolean),
   questions_for_other_jurors: [],
-  questions_for_user: [],
   confidence: 0.9
 })`;
 
@@ -77,12 +76,13 @@ test("markdown output is marked as a mock run and shows a single decision with a
   assert.doesNotMatch(result.stdout, /## Latest Jury Round/);
 });
 
-test("user questions pause the active decision and answer resumes that decision", () => {
-  const { statePath, state } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "ask-user-demo: pick a header color"]);
+test("unresolved jury answers pause the active decision and answer resumes that decision", () => {
+  const { statePath, state } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "no-majority-demo: pick a header color"]);
   const decision = state.decisions[0];
   assert.equal(decision.status, "needs-user");
   assert.ok(Array.isArray(decision.pendingUserQuestions), "expected pending user questions");
-  assert.equal(decision.pendingUserQuestions.length, 1, "identical questions from jurors must be deduplicated");
+  assert.equal(decision.pendingUserQuestions.length, 1, "the original focused question should be escalated once");
+  assert.equal(decision.pendingUserQuestions[0].opinions.length, 3);
   const answered = runJson(["answer", "--mock", "--state", statePath, "--answer", "blue"]);
   assert.equal(answered.state.decisions[0].status, "resolved");
   assert.equal(answered.state.decisions[0].userAnswers.length, 1);
@@ -91,10 +91,12 @@ test("user questions pause the active decision and answer resumes that decision"
   assert.ok(answered.state.decisions[0].final, "expected a decision final after the answer");
 });
 
+
 test("pending user-question markdown includes decision summary before the question", () => {
-  const result = run(["start", "--mock", "--cwd", tmp, "--prompt", "ask-user-demo: pick a header color"]);
+  const result = run(["start", "--mock", "--cwd", tmp, "--prompt", "no-majority-demo: pick a header color"]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /## Decision 1[\s\S]*## Jury Rounds[\s\S]*## Questions For User/);
+  assert.match(result.stdout, /Juror positions:/);
 });
 
 test("continue finalizes when the planner says no more questions are needed", () => {
@@ -121,9 +123,9 @@ test("stance disagreement triggers a challenge round inside one decision", () =>
   const decision = state.decisions[0];
   assert.equal(decision.rounds.length, 2, "needs-evidence stances must trigger exactly one challenge round");
   assert.ok(decision.final);
-  assert.equal(decision.final.consensus, false);
+  assert.equal(decision.final.consensus, true);
   assert.match(decision.final.recommendation, /reversible/, "the 2-of-3 majority recommendation must win");
-  assert.ok(decision.final.unresolved_disagreements.length > 0);
+  assert.equal(decision.final.unresolved_disagreements.length, 0);
   assert.ok(decisionSummaries[0].roundSummaries[0].divergences.some((entry) => entry.type === "stance-split"));
   assert.ok(decisionSummaries[0].roundSummaries[1].divergences.some((entry) => entry.type === "recommendation-split"));
 });
@@ -147,7 +149,7 @@ test("answer reuses custom agents persisted in sequential state", () => {
     "--agents",
     "codex,example",
     "--prompt",
-    "ask-user-demo: choose"
+    "no-majority-demo: choose"
   ]);
   assert.deepEqual(state.agents.map((agent) => agent.name), ["codex", "example"]);
   const answered = runJson(["answer", "--mock", "--state", statePath, "--answer", "blue"]);
@@ -381,12 +383,15 @@ console.log(${JUROR_JSON});
 });
 
 test("a zero user-question budget surfaces open questions in the decision final", () => {
-  const { state } = runJson(["start", "--mock", "--cwd", tmp, "--max-user-questions", "0", "--prompt", "ask-user-demo: pick a color"]);
+  const { state } = runJson(["start", "--mock", "--cwd", tmp, "--max-user-questions", "0", "--prompt", "no-majority-demo: pick a color"]);
   const decision = state.decisions[0];
   assert.equal(decision.status, "resolved");
   assert.equal(decision.pendingUserQuestions, null);
   assert.ok(decision.final.open_user_questions.length >= 1, "unasked questions must be surfaced");
 });
+
+
+
 
 test("round summaries include failed jurors inside sequential decisions", () => {
   const configPath = path.join(tmp, "failing-agent.json");
@@ -473,7 +478,7 @@ test("status summaries expose stale prior juror context for old v2 states", () =
 });
 
 test("continue is rejected while a decision is waiting for the user", () => {
-  const { statePath } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "ask-user-demo: choose"]);
+  const { statePath } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "no-majority-demo: choose"]);
   const result = run(["continue", "--mock", "--state", statePath]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Answer the pending user question/);
