@@ -53,27 +53,47 @@ function test(name, fn) {
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "grill-others-test-"));
 
-test("start creates a sequential v1 state and resolves one focused decision", () => {
+test("start creates a sequential v1 state and runs until the planner is done", () => {
   const { state, decisionSummaries } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "Should we cache results in memory?"]);
   assert.equal(state.version, 1);
   assert.equal(state.mode, "sequential");
   assert.equal(state.decisions.length, 1);
   assert.equal(state.decisions[0].status, "resolved");
-  assert.equal(state.final, null, "start must pause after one decision for review");
+  assert.ok(state.final, "start must continue until the grill is finished");
+  assert.equal(state.final.resolved_decisions, 1);
   assert.equal(decisionSummaries.length, 1);
   assert.equal(decisionSummaries[0].roundSummaries[0].stance_counts.recommend, 3);
   assert.equal(decisionSummaries[0].roundSummaries[0].participants.length, 3);
 });
 
-test("markdown output is marked as a mock run and shows a single decision with a continue command", () => {
+test("markdown output is marked as a mock run and shows the final recommendation", () => {
   const result = run(["start", "--mock", "--cwd", tmp, "--prompt", "anything"]);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /MOCK RUN/);
   assert.match(result.stdout, /Mode: sequential/);
   assert.match(result.stdout, /## Decision 1/);
   assert.match(result.stdout, /## Jury Rounds/);
-  assert.match(result.stdout, /continue --state/);
+  assert.match(result.stdout, /## Final Recommendation/);
+  assert.doesNotMatch(result.stdout, /continue --state/);
   assert.doesNotMatch(result.stdout, /## Latest Jury Round/);
+});
+
+test("--question seeds only the first focused decision", () => {
+  const { state } = runJson([
+    "start",
+    "--mock",
+    "--cwd",
+    tmp,
+    "--question",
+    "Should this seeded question run once?",
+    "--prompt",
+    "Should we cache results in memory?",
+    "--max-grill-questions",
+    "3"
+  ]);
+  assert.equal(state.decisions.length, 1);
+  assert.equal(state.decisions[0].question, "Should this seeded question run once?");
+  assert.ok(state.final, "the seeded run should still finish after the planner reports done");
 });
 
 test("unresolved jury answers pause the active decision and answer resumes that decision", () => {
@@ -166,7 +186,7 @@ test("pending user-question markdown includes decision summary before the questi
   assert.match(result.stdout, /Juror positions:/);
 });
 
-test("continue finalizes when the planner says no more questions are needed", () => {
+test("continue returns the final state when the planner is already done", () => {
   const { statePath } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "Should we cache results in memory?"]);
   const continued = runJson(["continue", "--mock", "--state", statePath]);
   assert.ok(continued.state.final, "expected a top-level final after continue");
@@ -174,15 +194,13 @@ test("continue finalizes when the planner says no more questions are needed", ()
   assert.match(continued.state.final.recommendation, /Resolved focused decisions/);
 });
 
-test("continue can run a second focused question before finalizing", () => {
-  const { statePath } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "two-question-demo: check two risks"]);
-  const second = runJson(["continue", "--mock", "--state", statePath]);
-  assert.equal(second.state.decisions.length, 2);
-  assert.equal(second.state.decisions[1].status, "resolved");
-  assert.equal(second.state.final, null);
-  const done = runJson(["continue", "--mock", "--state", statePath]);
-  assert.ok(done.state.final);
-  assert.equal(done.state.final.resolved_decisions, 2);
+test("start can run a second focused question before finalizing", () => {
+  const { state } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "two-question-demo: check two risks"]);
+  assert.equal(state.decisions.length, 2);
+  assert.equal(state.decisions[0].status, "resolved");
+  assert.equal(state.decisions[1].status, "resolved");
+  assert.ok(state.final);
+  assert.equal(state.final.resolved_decisions, 2);
 });
 
 test("stance disagreement triggers a challenge round inside one decision", () => {
@@ -456,6 +474,28 @@ test("a zero user-question budget surfaces open questions in the decision final"
   assert.equal(decision.pendingUserQuestions, null);
   assert.ok(decision.final.open_user_questions.length >= 1, "unasked questions must be surfaced");
   assert.equal(decision.final.open_user_questions[0].recommended_default, "");
+});
+
+test("open user questions stop sequential auto-continuation", () => {
+  const args = [
+    "start",
+    "--mock",
+    "--cwd",
+    tmp,
+    "--max-user-questions",
+    "0",
+    "--prompt",
+    "no-majority-demo two-question-demo: pick a color"
+  ];
+  const { state } = runJson(args);
+  assert.equal(state.decisions.length, 1);
+  assert.equal(state.final, null, "the top-level final must wait while open questions are visible");
+  assert.ok(state.decisions[0].final.open_user_questions.length >= 1);
+
+  const rendered = run(args);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /Open user questions/);
+  assert.doesNotMatch(rendered.stdout, /continue --state/);
 });
 
 test("old-shape mediator responses do not resolve split recommendations", () => {

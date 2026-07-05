@@ -56,7 +56,7 @@ function usage() {
     "  grill-others.mjs status --state FILE [--json]",
     "",
     "Notes:",
-    "  New runs are sequential: each command handles one focused grill question, then pauses for review.",
+    "  New runs are sequential: start/continue/answer run focused questions until the grill finishes or needs the user.",
     "  --rounds caps jury rounds per focused question.",
     "  --max-user-questions caps how many times the whole run may pause when the jury cannot resolve a focused question (default 3; 0 disables asking).",
     "  --max-grill-questions caps focused questions per run (default 5).",
@@ -1592,6 +1592,7 @@ function buildDecisionSummaries(state) {
 function buildSequentialFinal(state, reason) {
   const resolved = (state.decisions ?? []).filter((decision) => decision.status === "resolved" && decision.final);
   const unresolved = (state.decisions ?? []).filter((decision) => decision.status !== "resolved");
+  const openUserQuestions = collectSequentialOpenUserQuestions(resolved);
   const recommendations = resolved.map(
     (decision, index) => `${index + 1}. ${decision.question}\n   ${decision.final.recommendation}`
   );
@@ -1604,7 +1605,8 @@ function buildSequentialFinal(state, reason) {
       resolved.length > 0
         ? resolved.reduce((sum, decision) => sum + Number(decision.final.confidence ?? 0), 0) / resolved.length
         : 0,
-    consensus: resolved.length > 0 && resolved.every((decision) => decision.final.consensus === true),
+    consensus:
+      openUserQuestions.length === 0 && resolved.length > 0 && resolved.every((decision) => decision.final.consensus === true),
     synthesized_by: "sequential:resolved-decisions",
     unresolved_disagreements: dedupeSlice(resolved.flatMap((decision) => decision.final.unresolved_disagreements ?? [])),
     all_jurors_failed: resolved.length === 0 || resolved.every((decision) => decision.final.all_jurors_failed === true),
@@ -1616,10 +1618,35 @@ function buildSequentialFinal(state, reason) {
       status: decision.status
     })),
     stop_reason: reason,
+    open_user_questions: openUserQuestions,
     risks: dedupeSlice(resolved.flatMap((decision) => decision.final.risks ?? [])),
     assumptions: dedupeSlice(resolved.flatMap((decision) => decision.final.assumptions ?? [])),
     repo_findings: dedupeSlice(resolved.flatMap((decision) => decision.final.repo_findings ?? []))
   };
+}
+
+function collectSequentialOpenUserQuestions(decisions) {
+  const seen = new Set();
+  const questions = [];
+  for (const decision of decisions) {
+    for (const question of decision.final?.open_user_questions ?? []) {
+      const key = `${decision.id}:${comparableText(question.question)}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      questions.push({
+        ...question,
+        decision_id: decision.id,
+        decision_question: decision.question
+      });
+    }
+  }
+  return questions;
+}
+
+function hasOpenUserQuestions(decision) {
+  return (decision?.final?.open_user_questions ?? []).length > 0;
 }
 
 function dedupeSlice(values) {
@@ -1786,7 +1813,7 @@ async function chooseNextQuestion(state, options) {
       reason: `Reached --max-grill-questions (${state.maxGrillQuestions}).`
     };
   }
-  if (options.question) {
+  if (options.question && state.decisions.length === 0) {
     return {
       done: false,
       question: String(options.question).trim(),
@@ -1834,17 +1861,34 @@ async function runSequentialDecision(state, statePath, decision, initialRoundKin
   return saveState(statePath, state);
 }
 
-async function startNextSequentialDecision(state, statePath, options) {
-  const next = await chooseNextQuestion(state, options);
-  if (next.done) {
-    state.activeDecisionIndex = null;
-    state.final = buildSequentialFinal(state, next.reason);
-    return saveState(statePath, state);
+async function driveSequentialUntilPause(state, statePath, options) {
+  while (true) {
+    if (state.final) {
+      return saveState(statePath, state);
+    }
+    const active = activeSequentialDecision(state);
+    if (active?.pendingUserQuestions?.length) {
+      return saveState(statePath, state);
+    }
+    if (hasOpenUserQuestions(active)) {
+      return saveState(statePath, state);
+    }
+    if (active && active.status !== "resolved") {
+      return saveState(statePath, state);
+    }
+
+    const next = await chooseNextQuestion(state, options);
+    if (next.done) {
+      state.activeDecisionIndex = null;
+      state.final = buildSequentialFinal(state, next.reason);
+      return saveState(statePath, state);
+    }
+
+    const decision = createDecision(state, next.question, next.planner);
+    state.decisions.push(decision);
+    state.activeDecisionIndex = state.decisions.length - 1;
+    await runSequentialDecision(state, statePath, decision, "initial", options);
   }
-  const decision = createDecision(state, next.question, next.planner);
-  state.decisions.push(decision);
-  state.activeDecisionIndex = state.decisions.length - 1;
-  return runSequentialDecision(state, statePath, decision, "initial", options);
 }
 
 function activeSequentialDecision(state) {
@@ -2066,7 +2110,7 @@ function renderSequentialMarkdown(state, statePath) {
 
     if (latest.final) {
       renderFinalBlock(lines, latest.final, "## Decision Result");
-      if (!state.final) {
+      if (!state.final && !hasOpenUserQuestions(latest)) {
         lines.push("");
         lines.push("Next:");
         lines.push("");
@@ -2167,7 +2211,7 @@ async function handleStart(options) {
     mediation: null,
     final: null
   };
-  const finalState = await startNextSequentialDecision(state, statePath, options);
+  const finalState = await driveSequentialUntilPause(state, statePath, options);
   output(finalState, statePath, options);
 }
 
@@ -2219,7 +2263,8 @@ async function handleSequentialAnswer(options, statePath, state) {
   });
   decision.pendingUserQuestions = null;
   decision.status = "active";
-  return runSequentialDecision(state, statePath, decision, "user-answer", options);
+  await runSequentialDecision(state, statePath, decision, "user-answer", options);
+  return driveSequentialUntilPause(state, statePath, options);
 }
 
 async function handleAnswer(options) {
@@ -2270,7 +2315,7 @@ async function handleContinue(options) {
     state.maxGrillQuestions ?? DEFAULT_MAX_GRILL_QUESTIONS,
     1
   );
-  const finalState = await startNextSequentialDecision(state, statePath, options);
+  const finalState = await driveSequentialUntilPause(state, statePath, options);
   output(finalState, statePath, options);
 }
 
