@@ -268,6 +268,10 @@ function normalizeHarnessSessions(value) {
         next.contextPrimed = true;
         next.promptContextVersion = PROMPT_CONTEXT_VERSION;
       }
+      const codexTokenUsageTotal = next.codexThreadId ? normalizeUsage(session.codexTokenUsageTotal) : null;
+      if (codexTokenUsageTotal) {
+        next.codexTokenUsageTotal = codexTokenUsageTotal;
+      }
       if (Object.keys(next).length > 0) {
         normalized[role][agentName] = next;
       }
@@ -513,18 +517,17 @@ function responseTiming(startedAtMs) {
 }
 
 function numberValue(value) {
+  if (value == null) {
+    return null;
+  }
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
 
-function firstNumberDeep(value, keys, seen = new Set()) {
-  if (!value || typeof value !== "object") {
+function firstOwnNumber(value, keys) {
+  if (!isPlainObject(value)) {
     return null;
   }
-  if (seen.has(value)) {
-    return null;
-  }
-  seen.add(value);
   for (const key of keys) {
     if (Object.hasOwn(value, key)) {
       const number = numberValue(value[key]);
@@ -533,51 +536,294 @@ function firstNumberDeep(value, keys, seen = new Set()) {
       }
     }
   }
-  for (const nested of Object.values(value)) {
-    const number = firstNumberDeep(nested, keys, seen);
-    if (number != null) {
-      return number;
-    }
-  }
   return null;
 }
 
-function sumNumbersDeep(value, keys, seen = new Set()) {
-  if (!value || typeof value !== "object") {
-    return 0;
+function compactUsage(usage) {
+  const entries = Object.entries(usage).filter(([, value]) => value != null);
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
+
+const NORMALIZED_USAGE_FIELDS = [
+  "inputTokens",
+  "cachedInputTokens",
+  "outputTokens",
+  "reasoningOutputTokens",
+  "totalTokens",
+  "costUsd"
+];
+
+function usageDelta(current, previous) {
+  if (!current) {
+    return null;
   }
-  if (seen.has(value)) {
-    return 0;
+  if (!previous) {
+    return current;
   }
-  seen.add(value);
-  let sum = 0;
-  for (const key of keys) {
-    if (Object.hasOwn(value, key)) {
-      sum += numberValue(value[key]) ?? 0;
+  const delta = {};
+  for (const field of NORMALIZED_USAGE_FIELDS) {
+    if (current[field] == null) {
+      continue;
+    }
+    if (previous[field] == null) {
+      continue;
+    }
+    const nextValue = Number(current[field]) - Number(previous[field]);
+    delta[field] = Number.isFinite(nextValue) && nextValue >= 0 ? nextValue : current[field];
+  }
+  return compactUsage(delta);
+}
+
+function usageSum(left, right) {
+  if (!left) {
+    return right ?? null;
+  }
+  if (!right) {
+    return left;
+  }
+  const sum = {};
+  for (const field of NORMALIZED_USAGE_FIELDS) {
+    if (left[field] == null && right[field] == null) {
+      continue;
+    }
+    sum[field] = Number(left[field] ?? 0) + Number(right[field] ?? 0);
+  }
+  return compactUsage(sum);
+}
+
+function usageEqual(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+  return NORMALIZED_USAGE_FIELDS.every((field) => {
+    if (left[field] == null || right[field] == null) {
+      return left[field] == null && right[field] == null;
+    }
+    return Number(left[field]) === Number(right[field]);
+  });
+}
+
+function sameCumulativeUsage(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+  if (left.totalTokens != null && right.totalTokens != null) {
+    return Number(left.totalTokens) === Number(right.totalTokens);
+  }
+  return usageEqual(left, right);
+}
+
+function normalizeUsageObject(value, inheritedCost = null) {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+
+  const directInput = firstOwnNumber(value, ["input_tokens", "inputTokens", "prompt_tokens", "promptTokens", "input"]);
+  const cacheCreation = firstOwnNumber(value, ["cache_creation_input_tokens", "cacheCreationInputTokens"]);
+  const cacheRead = firstOwnNumber(value, ["cache_read_input_tokens", "cacheReadInputTokens", "cacheRead"]);
+  const cacheWrite = firstOwnNumber(value, ["cache_write_input_tokens", "cacheWriteInputTokens", "cacheWrite"]);
+  const explicitCachedInput = firstOwnNumber(value, ["cached_input_tokens", "cachedInputTokens", "cached_tokens", "cachedTokens"]);
+  const detailsCachedInput =
+    firstOwnNumber(value.input_tokens_details, ["cached_tokens", "cachedTokens"]) ??
+    firstOwnNumber(value.inputTokensDetails, ["cached_tokens", "cachedTokens"]) ??
+    firstOwnNumber(value.prompt_tokens_details, ["cached_tokens", "cachedTokens"]) ??
+    firstOwnNumber(value.promptTokensDetails, ["cached_tokens", "cachedTokens"]);
+  const hasAdditiveCachedInput =
+    cacheCreation != null || cacheRead != null || cacheWrite != null || explicitCachedInput != null;
+  const cachedInputTokens =
+    cacheCreation != null || cacheRead != null || cacheWrite != null
+      ? (cacheCreation ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0)
+      : explicitCachedInput ?? detailsCachedInput;
+  const outputTokens = firstOwnNumber(value, ["output_tokens", "outputTokens", "completion_tokens", "completionTokens", "output"]);
+  const explicitReasoningOutput = firstOwnNumber(value, ["reasoning_output_tokens", "reasoningOutputTokens", "reasoning"]);
+  const reasoningOutputTokens =
+    explicitReasoningOutput ??
+    firstOwnNumber(value.output_tokens_details, ["reasoning_tokens", "reasoningTokens"]) ??
+    firstOwnNumber(value.outputTokensDetails, ["reasoning_tokens", "reasoningTokens"]) ??
+    firstOwnNumber(value.completion_tokens_details, ["reasoning_tokens", "reasoningTokens"]) ??
+    firstOwnNumber(value.completionTokensDetails, ["reasoning_tokens", "reasoningTokens"]);
+  const synthesizedInputTokens =
+    directInput != null
+      ? directInput + (hasAdditiveCachedInput ? cachedInputTokens ?? 0 : 0)
+      : cachedInputTokens;
+  const synthesizedOutputTokens =
+    outputTokens != null ? outputTokens + (explicitReasoningOutput != null ? reasoningOutputTokens ?? 0 : 0) : reasoningOutputTokens;
+  const totalTokens =
+    firstOwnNumber(value, ["total_tokens", "totalTokens"]) ??
+    (synthesizedInputTokens != null || synthesizedOutputTokens != null
+      ? (synthesizedInputTokens ?? 0) + (synthesizedOutputTokens ?? 0)
+      : null);
+  const costUsd =
+    firstOwnNumber(value, ["total_cost_usd", "totalCostUsd", "cost_usd", "costUsd", "costUSD"]) ??
+    firstOwnNumber(value.cost, ["total", "usd", "costUsd", "costUSD"]) ??
+    inheritedCost;
+  return compactUsage({ inputTokens: directInput, cachedInputTokens, outputTokens, reasoningOutputTokens, totalTokens, costUsd });
+}
+
+function normalizeModelUsage(value, inheritedCost = null) {
+  if (!isPlainObject(value)) {
+    return null;
+  }
+
+  const aggregate = {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalTokens: 0,
+    costUsd: 0
+  };
+  let tokenCalls = 0;
+  let inputCalls = 0;
+  let cachedInputCalls = 0;
+  let outputCalls = 0;
+  let reasoningOutputCalls = 0;
+  let costCalls = 0;
+  for (const modelUsage of Object.values(value)) {
+    const usage = normalizeUsageObject(modelUsage);
+    if (!usage) {
+      continue;
+    }
+    const hasTokens =
+      usage.inputTokens != null ||
+      usage.cachedInputTokens != null ||
+      usage.outputTokens != null ||
+      usage.reasoningOutputTokens != null ||
+      usage.totalTokens != null;
+    if (hasTokens) {
+      aggregate.inputTokens += Number(usage.inputTokens ?? 0);
+      aggregate.cachedInputTokens += Number(usage.cachedInputTokens ?? 0);
+      aggregate.outputTokens += Number(usage.outputTokens ?? 0);
+      aggregate.reasoningOutputTokens += Number(usage.reasoningOutputTokens ?? 0);
+      aggregate.totalTokens += Number(
+        usage.totalTokens ??
+          Number(usage.inputTokens ?? 0) +
+            Number(usage.cachedInputTokens ?? 0) +
+            Number(usage.outputTokens ?? 0) +
+            Number(usage.reasoningOutputTokens ?? 0)
+      );
+      tokenCalls += 1;
+      inputCalls += usage.inputTokens != null ? 1 : 0;
+      cachedInputCalls += usage.cachedInputTokens != null ? 1 : 0;
+      outputCalls += usage.outputTokens != null ? 1 : 0;
+      reasoningOutputCalls += usage.reasoningOutputTokens != null ? 1 : 0;
+    }
+    if (usage.costUsd != null) {
+      aggregate.costUsd += Number(usage.costUsd);
+      costCalls += 1;
     }
   }
-  for (const nested of Object.values(value)) {
-    sum += sumNumbersDeep(nested, keys, seen);
+
+  return compactUsage({
+    inputTokens: inputCalls > 0 ? aggregate.inputTokens : null,
+    cachedInputTokens: cachedInputCalls > 0 ? aggregate.cachedInputTokens : null,
+    outputTokens: outputCalls > 0 ? aggregate.outputTokens : null,
+    reasoningOutputTokens: reasoningOutputCalls > 0 ? aggregate.reasoningOutputTokens : null,
+    totalTokens: tokenCalls > 0 ? aggregate.totalTokens : null,
+    costUsd: costCalls > 0 ? aggregate.costUsd : inheritedCost
+  });
+}
+
+function normalizeCodexInfoUsage(value, inheritedCost = null) {
+  if (!isPlainObject(value)) {
+    return null;
   }
-  return sum;
+  const lastUsage = normalizeUsageObject(value.last_token_usage ?? value.lastTokenUsage, inheritedCost);
+  const totalUsage = normalizeUsageObject(value.total_token_usage ?? value.totalTokenUsage, inheritedCost);
+  return betterUsage(lastUsage, totalUsage);
+}
+
+function withInheritedCost(usage, inheritedCost) {
+  if (!usage || usage.costUsd != null || inheritedCost == null) {
+    return usage;
+  }
+  return { ...usage, costUsd: inheritedCost };
+}
+
+function hasTokenUsageFields(usage) {
+  return Boolean(
+    usage &&
+      (usage.inputTokens != null ||
+        usage.cachedInputTokens != null ||
+        usage.outputTokens != null ||
+        usage.reasoningOutputTokens != null ||
+        usage.totalTokens != null)
+  );
+}
+
+function hasNonZeroTokenUsage(usage) {
+  return Boolean(
+    usage &&
+      ["inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens", "totalTokens"].some(
+        (field) => Number(usage[field] ?? 0) > 0
+      )
+  );
+}
+
+function combineUsageWithModelUsage(usage, modelUsage) {
+  if (!usage || !modelUsage) {
+    return usage ?? modelUsage ?? null;
+  }
+  if (
+    hasTokenUsageFields(usage) &&
+    (!hasTokenUsageFields(modelUsage) || (hasNonZeroTokenUsage(usage) && !hasNonZeroTokenUsage(modelUsage)))
+  ) {
+    return withInheritedCost(usage, modelUsage.costUsd);
+  }
+  return withInheritedCost(betterUsage(usage, modelUsage), usage.costUsd ?? modelUsage.costUsd);
+}
+
+function normalizeWrappedUsage(value, inheritedCost = null) {
+  const wrappers = ["response", "data", "params", "payload", "event", "message", "result"];
+  for (const key of wrappers) {
+    if (!isPlainObject(value[key])) {
+      continue;
+    }
+    const usage = normalizeUsage(value[key]);
+    if (usage) {
+      return withInheritedCost(usage, inheritedCost);
+    }
+  }
+  return null;
 }
 
 function normalizeUsage(value) {
   if (!value || typeof value !== "object") {
     return null;
   }
-  const directInput = firstNumberDeep(value, ["input_tokens", "inputTokens", "prompt_tokens", "promptTokens"]);
-  const cachedInput =
-    sumNumbersDeep(value, ["cache_creation_input_tokens", "cacheCreationInputTokens"]) +
-    sumNumbersDeep(value, ["cache_read_input_tokens", "cacheReadInputTokens"]);
-  const inputTokens = directInput != null || cachedInput > 0 ? (directInput ?? 0) + cachedInput : null;
-  const outputTokens = firstNumberDeep(value, ["output_tokens", "outputTokens", "completion_tokens", "completionTokens"]);
-  const totalTokens =
-    firstNumberDeep(value, ["total_tokens", "totalTokens"]) ??
-    (inputTokens != null || outputTokens != null ? (inputTokens ?? 0) + (outputTokens ?? 0) : null);
-  const costUsd = firstNumberDeep(value, ["total_cost_usd", "totalCostUsd", "cost_usd", "costUsd"]);
-  const usage = { inputTokens, outputTokens, totalTokens, costUsd };
-  return Object.values(usage).some((entry) => entry != null) ? usage : null;
+  const inheritedCost =
+    firstOwnNumber(value, ["total_cost_usd", "totalCostUsd", "cost_usd", "costUsd", "costUSD"]) ??
+    firstOwnNumber(value.cost, ["total", "usd", "costUsd", "costUSD"]);
+  if (isPlainObject(value.tokenUsage)) {
+    return withInheritedCost(normalizeUsageObject(value.tokenUsage.total, inheritedCost) ?? normalizeUsage(value.tokenUsage), inheritedCost);
+  }
+  if (isPlainObject(value.total)) {
+    return normalizeUsageObject(value.total, inheritedCost);
+  }
+  if (isPlainObject(value.last)) {
+    return normalizeUsageObject(value.last, inheritedCost);
+  }
+  if (isPlainObject(value.usage)) {
+    const usage = withInheritedCost(
+      betterUsage(normalizeUsageObject(value.usage, inheritedCost), normalizeUsage(value.usage)),
+      inheritedCost
+    );
+    return combineUsageWithModelUsage(
+      usage,
+      normalizeModelUsage(value.modelUsage, inheritedCost)
+    );
+  }
+  const infoUsage = normalizeCodexInfoUsage(value.info, inheritedCost) ?? normalizeCodexInfoUsage(value, inheritedCost);
+  if (infoUsage) {
+    return infoUsage;
+  }
+
+  const wrappedUsage = normalizeWrappedUsage(value, inheritedCost);
+  if (wrappedUsage) {
+    return wrappedUsage;
+  }
+
+  return combineUsageWithModelUsage(normalizeUsageObject(value, inheritedCost), normalizeModelUsage(value.modelUsage, inheritedCost));
 }
 
 function betterUsage(left, right) {
@@ -622,6 +868,43 @@ function usageFromRaw(raw) {
 
 function usageFromResult(result, raw) {
   return betterUsage(normalizeUsage(result?.usage), usageFromRaw(raw));
+}
+
+function hasLegacyInclusiveCachedInput(storedUsage, rawUsage) {
+  if (!storedUsage || !rawUsage) {
+    return false;
+  }
+  if (storedUsage.cachedInputTokens != null || rawUsage.cachedInputTokens == null) {
+    return false;
+  }
+  if (storedUsage.inputTokens == null || rawUsage.inputTokens == null) {
+    return false;
+  }
+  return Number(storedUsage.inputTokens) === Number(rawUsage.inputTokens) + Number(rawUsage.cachedInputTokens);
+}
+
+function responseUsage(response) {
+  const rawUsage = usageFromRaw(response?.raw);
+  const storedUsage = normalizeUsage(response?.usage);
+  if (!rawUsage || !storedUsage) {
+    return rawUsage ?? storedUsage ?? null;
+  }
+  const compatibleTotal =
+    storedUsage.totalTokens == null || rawUsage.totalTokens == null || Number(storedUsage.totalTokens) === Number(rawUsage.totalTokens);
+  const compatibleCost =
+    storedUsage.costUsd == null || rawUsage.costUsd == null || Number(storedUsage.costUsd) === Number(rawUsage.costUsd);
+  if (compatibleTotal && compatibleCost) {
+    const legacyInclusiveCachedInput = hasLegacyInclusiveCachedInput(storedUsage, rawUsage);
+    return compactUsage({
+      inputTokens: legacyInclusiveCachedInput ? rawUsage.inputTokens : storedUsage.inputTokens,
+      cachedInputTokens: storedUsage.cachedInputTokens ?? rawUsage.cachedInputTokens,
+      outputTokens: storedUsage.outputTokens,
+      reasoningOutputTokens: storedUsage.reasoningOutputTokens ?? rawUsage.reasoningOutputTokens,
+      totalTokens: storedUsage.totalTokens ?? rawUsage.totalTokens,
+      costUsd: storedUsage.costUsd ?? rawUsage.costUsd
+    });
+  }
+  return storedUsage;
 }
 
 function simplifyText(value) {
@@ -1385,6 +1668,13 @@ function codexTurnError(turn) {
 async function captureCodexAppServerTurn(client, threadId, agent, prompt, options) {
   let turnId = null;
   let lastAgentMessage = "";
+  let lastTurnTokenUsage = null;
+  const session = isPlainObject(options.session) ? options.session : null;
+  const turnStartTokenUsageTotal = normalizeUsage(session?.codexTokenUsageTotal);
+  const reusedThreadWithoutUsageBaseline = options.codexThreadReused === true && !turnStartTokenUsageTotal;
+  let turnObservedTokenUsageBaseline = null;
+  let lastThreadTokenUsageTotalUsedForLast = null;
+  let pendingThreadTokenUsageTotal = null;
   let completed = false;
   const previousHandler = client.notificationHandler;
   let resolveCompletion;
@@ -1393,6 +1683,60 @@ async function captureCodexAppServerTurn(client, threadId, agent, prompt, option
     resolveCompletion = resolve;
     rejectCompletion = reject;
   });
+  const persistThreadUsageTotal = () => {
+    if (session && pendingThreadTokenUsageTotal) {
+      session.codexTokenUsageTotal = pendingThreadTokenUsageTotal;
+    }
+  };
+  const resolveTurn = (result) => {
+    persistThreadUsageTotal();
+    resolveCompletion(result);
+  };
+  const resolveTurnAfterNotifications = (result, fallback) => {
+    setImmediate(() => resolveTurn(resultWithUsage(result, fallback)));
+  };
+  const resultWithUsage = (result, fallback) => ({
+    ...result,
+    usage: normalizeUsage(lastTurnTokenUsage) ?? normalizeUsage(fallback)
+  });
+  const captureTokenUsageUpdate = (params) => {
+    const tokenUsage = params.tokenUsage ?? params;
+    if (isPlainObject(tokenUsage?.last)) {
+      const currentThreadTokenUsageTotal = normalizeUsage(tokenUsage.total);
+      if (currentThreadTokenUsageTotal) {
+        pendingThreadTokenUsageTotal = currentThreadTokenUsageTotal;
+        if (turnStartTokenUsageTotal) {
+          lastTurnTokenUsage = usageDelta(currentThreadTokenUsageTotal, turnStartTokenUsageTotal);
+          return;
+        }
+        if (!reusedThreadWithoutUsageBaseline) {
+          lastTurnTokenUsage = currentThreadTokenUsageTotal;
+          return;
+        }
+        if (sameCumulativeUsage(currentThreadTokenUsageTotal, lastThreadTokenUsageTotalUsedForLast)) {
+          return;
+        }
+        lastThreadTokenUsageTotalUsedForLast = currentThreadTokenUsageTotal;
+      }
+      lastTurnTokenUsage = usageSum(lastTurnTokenUsage, normalizeUsage(tokenUsage.last));
+      return;
+    }
+    const currentThreadTokenUsageTotal = normalizeUsage(tokenUsage);
+    if (!currentThreadTokenUsageTotal) {
+      return;
+    }
+    if (reusedThreadWithoutUsageBaseline) {
+      if (turnObservedTokenUsageBaseline) {
+        lastTurnTokenUsage = usageDelta(currentThreadTokenUsageTotal, turnObservedTokenUsageBaseline);
+      } else {
+        turnObservedTokenUsageBaseline = currentThreadTokenUsageTotal;
+      }
+      pendingThreadTokenUsageTotal = currentThreadTokenUsageTotal;
+      return;
+    }
+    lastTurnTokenUsage = usageDelta(currentThreadTokenUsageTotal, turnStartTokenUsageTotal);
+    pendingThreadTokenUsageTotal = currentThreadTokenUsageTotal;
+  };
   const timeout = setTimeout(() => {
     if (completed) {
       return;
@@ -1401,17 +1745,27 @@ async function captureCodexAppServerTurn(client, threadId, agent, prompt, option
     if (turnId) {
       client.request("turn/interrupt", { threadId, turnId }).catch(() => {});
     }
-    resolveCompletion({
+    resolveTurn(resultWithUsage({
       status: 124,
       stdout: lastAgentMessage,
       stderr: `Timed out after ${options.timeoutMs}ms.`
-    });
+    }));
   }, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   timeout.unref?.();
 
   client.setNotificationHandler((message) => {
     if (message.params?.threadId && message.params.threadId !== threadId) {
       previousHandler?.(message);
+      return;
+    }
+    if (completed && message.method !== "thread/tokenUsage/updated") {
+      return;
+    }
+    if (message.method === "thread/tokenUsage/updated") {
+      const params = message.params ?? {};
+      if (!params.turnId || !turnId || params.turnId === turnId) {
+        captureTokenUsageUpdate(params);
+      }
       return;
     }
     if (message.method === "item/completed" && message.params?.item?.type === "agentMessage") {
@@ -1421,23 +1775,22 @@ async function captureCodexAppServerTurn(client, threadId, agent, prompt, option
     if (message.method === "error") {
       completed = true;
       clearTimeout(timeout);
-      resolveCompletion({
+      resolveTurn(resultWithUsage({
         status: 1,
         stdout: lastAgentMessage,
         stderr: message.params?.error?.message ?? "Codex app-server reported an error."
-      });
+      }, message));
       return;
     }
     if (message.method === "turn/completed") {
       const turn = message.params?.turn;
       completed = true;
       clearTimeout(timeout);
-      resolveCompletion({
+      resolveTurnAfterNotifications({
         status: turn?.status === "completed" ? 0 : 1,
         stdout: lastAgentMessage,
-        stderr: codexTurnError(turn),
-        usage: normalizeUsage(turn)
-      });
+        stderr: codexTurnError(turn)
+      }, turn);
     }
   });
 
@@ -1453,12 +1806,12 @@ async function captureCodexAppServerTurn(client, threadId, agent, prompt, option
     if (response.turn?.status && response.turn.status !== "inProgress") {
       completed = true;
       clearTimeout(timeout);
-      return {
+      persistThreadUsageTotal();
+      return resultWithUsage({
         status: response.turn.status === "completed" ? 0 : 1,
         stdout: lastAgentMessage,
-        stderr: codexTurnError(response.turn),
-        usage: normalizeUsage(response.turn)
-      };
+        stderr: codexTurnError(response.turn)
+      }, response.turn);
     }
     client.trackTurn(threadId, turnId, (error) => {
       if (completed) {
@@ -1470,6 +1823,7 @@ async function captureCodexAppServerTurn(client, threadId, agent, prompt, option
     });
     return await completion;
   } finally {
+    persistThreadUsageTotal();
     client.untrackTurn(threadId, turnId);
     clearTimeout(timeout);
     client.setNotificationHandler(previousHandler ?? null);
@@ -1509,11 +1863,13 @@ async function ensureCodexThread(agent, options) {
       return { client, threadId: session.codexThreadId, reused: true };
     } catch {
       delete session.codexThreadId;
+      delete session.codexTokenUsageTotal;
       session.contextPrimed = false;
       delete session.promptContextVersion;
     }
   }
 
+  delete session.codexTokenUsageTotal;
   const response = await client.request("thread/start", codexThreadStartParams(agent, options));
   const threadId = response.thread?.id;
   if (!threadId) {
@@ -1525,8 +1881,12 @@ async function ensureCodexThread(agent, options) {
 }
 
 async function callCodexAppServer(agent, prompt, options) {
-  const { client, threadId } = options.codexThread ?? (await ensureCodexThread(agent, options));
-  const result = await captureCodexAppServerTurn(client, threadId, agent, prompt, options);
+  const codexThread = options.codexThread ?? (await ensureCodexThread(agent, options));
+  const { client, threadId } = codexThread;
+  const result = await captureCodexAppServerTurn(client, threadId, agent, prompt, {
+    ...options,
+    codexThreadReused: codexThread.reused
+  });
   return { ...result, sessionContextAvailable: true };
 }
 
@@ -3152,15 +3512,44 @@ function addUsageTotals(target, response, role) {
   }
   target.durationMs += Number(response.durationMs ?? 0);
   target.promptChars += Number(response.promptChars ?? 0);
-  const usage = response.usage ?? {};
-  const hasTokenUsage = usage.inputTokens != null || usage.outputTokens != null || usage.totalTokens != null;
+  const usage = responseUsage(response) ?? {};
+  const hasInputTokens = usage.inputTokens != null;
+  const hasCachedInputTokens = usage.cachedInputTokens != null;
+  const hasOutputTokens = usage.outputTokens != null;
+  const hasReasoningOutputTokens = usage.reasoningOutputTokens != null;
+  const hasTotalTokens = usage.totalTokens != null;
+  const hasTokenUsage =
+    hasInputTokens || hasCachedInputTokens || hasOutputTokens || hasReasoningOutputTokens || hasTotalTokens;
   const hasCost = usage.costUsd != null;
   target.inputTokens += Number(usage.inputTokens ?? 0);
+  target.cachedInputTokens += Number(usage.cachedInputTokens ?? 0);
   target.outputTokens += Number(usage.outputTokens ?? 0);
+  target.reasoningOutputTokens += Number(usage.reasoningOutputTokens ?? 0);
   target.totalTokens += Number(
-    usage.totalTokens ?? (hasTokenUsage ? Number(usage.inputTokens ?? 0) + Number(usage.outputTokens ?? 0) : 0)
+    usage.totalTokens ??
+      (hasTokenUsage
+        ? Number(usage.inputTokens ?? 0) +
+          Number(usage.cachedInputTokens ?? 0) +
+          Number(usage.outputTokens ?? 0) +
+          Number(usage.reasoningOutputTokens ?? 0)
+        : 0)
   );
   target.costUsd += Number(usage.costUsd ?? 0);
+  if (hasInputTokens) {
+    target.reportedInputTokenCalls += 1;
+  }
+  if (hasCachedInputTokens) {
+    target.reportedCachedInputTokenCalls += 1;
+  }
+  if (hasOutputTokens) {
+    target.reportedOutputTokenCalls += 1;
+  }
+  if (hasReasoningOutputTokens) {
+    target.reportedReasoningOutputTokenCalls += 1;
+  }
+  if (hasTotalTokens) {
+    target.reportedTotalTokenCalls += 1;
+  }
   if (hasTokenUsage) {
     target.reportedTokenUsageCalls += 1;
   }
@@ -3173,14 +3562,17 @@ function addUsageTotals(target, response, role) {
 }
 
 function hasUsageTelemetry(response) {
+  const usage = responseUsage(response);
   return Boolean(
     response &&
       (response.promptChars != null ||
         response.durationMs != null ||
-        response.usage?.inputTokens != null ||
-        response.usage?.outputTokens != null ||
-        response.usage?.totalTokens != null ||
-        response.usage?.costUsd != null)
+        usage?.inputTokens != null ||
+        usage?.cachedInputTokens != null ||
+        usage?.outputTokens != null ||
+        usage?.reasoningOutputTokens != null ||
+        usage?.totalTokens != null ||
+        usage?.costUsd != null)
   );
 }
 
@@ -3194,9 +3586,16 @@ function emptyUsageRow(agent) {
     durationMs: 0,
     promptChars: 0,
     inputTokens: 0,
+    cachedInputTokens: 0,
     outputTokens: 0,
+    reasoningOutputTokens: 0,
     totalTokens: 0,
     costUsd: 0,
+    reportedInputTokenCalls: 0,
+    reportedCachedInputTokenCalls: 0,
+    reportedOutputTokenCalls: 0,
+    reportedReasoningOutputTokenCalls: 0,
+    reportedTotalTokenCalls: 0,
     reportedTokenUsageCalls: 0,
     reportedCostCalls: 0,
     reportedUsageCalls: 0
@@ -3290,25 +3689,31 @@ function renderAgentUsageSummary(lines, state) {
   }
   lines.push("## Agent Usage Summary");
   lines.push("");
-  lines.push("| Agent | Roles | Calls | OK | Failed | Reported tokens | Reported cost | Prompt chars | Approx prompt tokens | Wall time |");
-  lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+  lines.push(
+    "| Agent | Roles | Calls | OK | Failed | Input | Cached input | Output | Reasoning output | Total | Reported cost | Prompt chars | Approx prompt tokens | Wall time |"
+  );
+  lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
   for (const row of rows) {
-    const hasTokenUsage = row.reportedTokenUsageCalls > 0;
-    const hasCost = row.reportedCostCalls > 0;
     const approxPromptTokens = Math.ceil(row.promptChars / 4);
     const roles = ["planner", "juror", "mediator"].filter((role) => row.roles.has(role)).join(", ");
     lines.push(
       `| ${row.agent} | ${roles} | ${row.calls} | ${row.ok} | ${row.failed} | ${formatUsageNumber(
+        row.inputTokens,
+        row.reportedInputTokenCalls > 0
+      )} | ${formatUsageNumber(row.cachedInputTokens, row.reportedCachedInputTokenCalls > 0)} | ${formatUsageNumber(
+        row.outputTokens,
+        row.reportedOutputTokenCalls > 0
+      )} | ${formatUsageNumber(row.reasoningOutputTokens, row.reportedReasoningOutputTokenCalls > 0)} | ${formatUsageNumber(
         row.totalTokens,
-        hasTokenUsage
-      )} | ${formatCost(row.costUsd, hasCost)} | ${formatNumber(row.promptChars)} | ${formatNumber(
+        row.reportedTotalTokenCalls > 0 || row.reportedTokenUsageCalls > 0
+      )} | ${formatCost(row.costUsd, row.reportedCostCalls > 0)} | ${formatNumber(row.promptChars)} | ${formatNumber(
         approxPromptTokens
       )} | ${formatDuration(row.durationMs)} |`
     );
   }
   lines.push("");
   lines.push(
-    "Reported token/cost columns are populated only when a harness emits usage metadata. Approx prompt tokens use chars/4 and are not billing data."
+    "Token and reported cost columns are populated only when a harness emits that usage metadata. Total falls back to the sum of reported token fields when no total is emitted. Approx prompt tokens use chars/4 and are not billing data."
   );
   lines.push("");
 }

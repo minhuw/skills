@@ -155,10 +155,1020 @@ console.log(JSON.stringify({
   assert.equal(rendered.status, 0, rendered.stderr);
   assert.doesNotMatch(rendered.stdout, /## Questions And Juror Answers/);
   assert.doesNotMatch(rendered.stdout, /usage-agent: recommend; Use the usage-aware path/);
-  assert.match(rendered.stdout, /\| usage-agent \| juror \| 1 \| 1 \| 0 \| 20 \| \$0\.0123 \|/);
+  assert.match(rendered.stdout, /\| usage-agent \| juror \| 1 \| 1 \| 0 \| 12 \| n\/a \| 8 \| n\/a \| 20 \| \$0\.0123 \|/);
 });
 
-test("agent usage summary preserves reported zero token and cost values", () => {
+test("usage metadata is parsed from response.completed JSONL wrappers", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "wrapped-usage-agent.js",
+    `
+console.log(JSON.stringify({
+  type: "response.completed",
+  response: {
+    usage: {
+      input_tokens: 7,
+      input_tokens_details: { cached_tokens: 3 },
+      output_tokens: 4,
+      output_tokens_details: { reasoning_tokens: 2 },
+      total_tokens: 16
+    }
+  }
+}));
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use wrapped usage.",
+  rationale: "The fake harness reports usage in a response.completed event.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9
+}));
+`
+  );
+  const configPath = path.join(tmp, "wrapped-usage-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "wrapped-usage-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does wrapped usage render?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["wrapped-usage-agent"].usage, {
+    inputTokens: 7,
+    cachedInputTokens: 3,
+    outputTokens: 4,
+    reasoningOutputTokens: 2,
+    totalTokens: 16
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| wrapped-usage-agent \| juror \| 1 \| 1 \| 0 \| 7 \| 3 \| 4 \| 2 \| 16 \| n\/a \|/);
+});
+
+test("usage metadata parses prompt and completion token detail aliases", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "prompt-completion-details-agent.js",
+    `
+console.log(JSON.stringify({
+  type: "response.completed",
+  response: {
+    usage: {
+      prompt_tokens: 7,
+      completion_tokens: 4,
+      total_tokens: 16,
+      prompt_tokens_details: {
+        cached_tokens: 3
+      },
+      completion_tokens_details: {
+        reasoning_tokens: 2
+      }
+    }
+  }
+}));
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use prompt/completion detail usage.",
+  rationale: "The fake harness reports OpenAI-style detail aliases.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9
+}));
+`
+  );
+  const configPath = path.join(tmp, "prompt-completion-details-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "prompt-completion-details-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does prompt/completion detail usage render?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["prompt-completion-details-agent"].usage, {
+    inputTokens: 7,
+    cachedInputTokens: 3,
+    outputTokens: 4,
+    reasoningOutputTokens: 2,
+    totalTokens: 16
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| prompt-completion-details-agent \| juror \| 1 \| 1 \| 0 \| 7 \| 3 \| 4 \| 2 \| 16 \| n\/a \|/);
+});
+
+test("usage metadata does not synthesize totals by double-counting detail aliases", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "prompt-completion-subset-details-agent.js",
+    `
+console.log(JSON.stringify({
+  type: "response.completed",
+  response: {
+    usage: {
+      prompt_tokens: 7,
+      completion_tokens: 4,
+      prompt_tokens_details: {
+        cached_tokens: 3
+      },
+      completion_tokens_details: {
+        reasoning_tokens: 2
+      }
+    }
+  }
+}));
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use prompt/completion subset detail usage.",
+  rationale: "The fake harness reports OpenAI-style detail aliases without an explicit total.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9
+}));
+`
+  );
+  const configPath = path.join(tmp, "prompt-completion-subset-details-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "prompt-completion-subset-details-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does prompt/completion detail usage avoid double-counting?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["prompt-completion-subset-details-agent"].usage, {
+    inputTokens: 7,
+    cachedInputTokens: 3,
+    outputTokens: 4,
+    reasoningOutputTokens: 2,
+    totalTokens: 11
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| prompt-completion-subset-details-agent \| juror \| 1 \| 1 \| 0 \| 7 \| 3 \| 4 \| 2 \| 11 \| n\/a \|/);
+});
+
+test("usage metadata includes explicit split fields in synthesized totals", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "explicit-split-fields-agent.js",
+    `
+console.log(JSON.stringify({
+  type: "response.completed",
+  response: {
+    usage: {
+      input_tokens: 11,
+      cached_input_tokens: 4,
+      output_tokens: 7,
+      reasoning_output_tokens: 1
+    }
+  }
+}));
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use explicit split-field usage.",
+  rationale: "The fake harness reports explicit token splits without an explicit total.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9
+}));
+`
+  );
+  const configPath = path.join(tmp, "explicit-split-fields-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "explicit-split-fields-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does explicit split-field usage synthesize totals?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["explicit-split-fields-agent"].usage, {
+    inputTokens: 11,
+    cachedInputTokens: 4,
+    outputTokens: 7,
+    reasoningOutputTokens: 1,
+    totalTokens: 23
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| explicit-split-fields-agent \| juror \| 1 \| 1 \| 0 \| 11 \| 4 \| 7 \| 1 \| 23 \| n\/a \|/);
+});
+
+test("usage metadata is parsed from Codex JSON token-count events", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "codex-json-usage-agent.js",
+    `
+console.log(JSON.stringify({
+  type: "token_count",
+  payload: {
+    info: {
+      last_token_usage: {
+        input_tokens: 3,
+        output_tokens: 2,
+        total_tokens: 5
+      },
+      total_token_usage: {
+        input_tokens: 11,
+        cached_input_tokens: 4,
+        output_tokens: 7,
+        reasoning_output_tokens: 1,
+        total_tokens: 23
+      }
+    }
+  }
+}));
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use Codex JSON usage.",
+  rationale: "The fake harness reports Codex JSON token-count events.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9
+}));
+`
+  );
+  const configPath = path.join(tmp, "codex-json-usage-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "codex-json-usage-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does Codex JSON usage render?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["codex-json-usage-agent"].usage, {
+    inputTokens: 11,
+    cachedInputTokens: 4,
+    outputTokens: 7,
+    reasoningOutputTokens: 1,
+    totalTokens: 23
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| codex-json-usage-agent \| juror \| 1 \| 1 \| 0 \| 11 \| 4 \| 7 \| 1 \| 23 \| n\/a \|/);
+});
+
+test("tokenUsage wrappers preserve inherited cost metadata", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "token-usage-cost-agent.js",
+    `
+console.log(JSON.stringify({
+  total_cost_usd: 0.25,
+  tokenUsage: {
+    inputTokens: 5,
+    outputTokens: 6,
+    totalTokens: 11
+  }
+}));
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use tokenUsage cost.",
+  rationale: "The fake harness reports cost outside tokenUsage.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9
+}));
+`
+  );
+  const configPath = path.join(tmp, "token-usage-cost-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "token-usage-cost-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does tokenUsage cost render?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["token-usage-cost-agent"].usage, {
+    inputTokens: 5,
+    outputTokens: 6,
+    totalTokens: 11,
+    costUsd: 0.25
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| token-usage-cost-agent \| juror \| 1 \| 1 \| 0 \| 5 \| n\/a \| 6 \| n\/a \| 11 \| \$0\.2500 \|/);
+});
+
+test("tokenUsage wrappers prefer cumulative totals over last request", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "token-usage-total-agent.js",
+    `
+console.log(JSON.stringify({
+  tokenUsage: {
+    last: {
+      inputTokens: 5,
+      outputTokens: 6,
+      totalTokens: 11
+    },
+    total: {
+      inputTokens: 50,
+      cachedInputTokens: 7,
+      outputTokens: 60,
+      reasoningOutputTokens: 3,
+      totalTokens: 120
+    }
+  }
+}));
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use cumulative tokenUsage.",
+  rationale: "The fake harness reports last and cumulative token usage.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9
+}));
+`
+  );
+  const configPath = path.join(tmp, "token-usage-total-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "token-usage-total-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does tokenUsage prefer cumulative totals?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["token-usage-total-agent"].usage, {
+    inputTokens: 50,
+    cachedInputTokens: 7,
+    outputTokens: 60,
+    reasoningOutputTokens: 3,
+    totalTokens: 120
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| token-usage-total-agent \| juror \| 1 \| 1 \| 0 \| 50 \| 7 \| 60 \| 3 \| 120 \| n\/a \|/);
+});
+
+test("usage wrappers prefer nested cumulative totals over last request", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "usage-total-agent.js",
+    `
+console.log(JSON.stringify({
+  total_cost_usd: 0.25,
+  usage: {
+    last: {
+      inputTokens: 5,
+      outputTokens: 6,
+      totalTokens: 11
+    },
+    total: {
+      inputTokens: 50,
+      cachedInputTokens: 7,
+      outputTokens: 60,
+      reasoningOutputTokens: 3,
+      totalTokens: 120
+    }
+  }
+}));
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use cumulative usage snapshots.",
+  rationale: "The fake harness reports last and cumulative usage snapshots under usage.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9
+}));
+`
+  );
+  const configPath = path.join(tmp, "usage-total-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "usage-total-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does usage prefer nested cumulative totals?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["usage-total-agent"].usage, {
+    inputTokens: 50,
+    cachedInputTokens: 7,
+    outputTokens: 60,
+    reasoningOutputTokens: 3,
+    totalTokens: 120,
+    costUsd: 0.25
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| usage-total-agent \| juror \| 1 \| 1 \| 0 \| 50 \| 7 \| 60 \| 3 \| 120 \| \$0\.2500 \|/);
+});
+
+test("usage wrappers preserve sibling cost metadata", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "usage-sibling-cost-agent.js",
+    `
+console.log(JSON.stringify({
+  usage: {
+    input_tokens: 10,
+    output_tokens: 5,
+    total_tokens: 15
+  },
+  cost: { total: 0.01 }
+}));
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use sibling cost.",
+  rationale: "The fake harness reports cost beside usage.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9
+}));
+`
+  );
+  const configPath = path.join(tmp, "usage-sibling-cost-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "usage-sibling-cost-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does sibling usage cost render?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["usage-sibling-cost-agent"].usage, {
+    inputTokens: 10,
+    outputTokens: 5,
+    totalTokens: 15,
+    costUsd: 0.01
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| usage-sibling-cost-agent \| juror \| 1 \| 1 \| 0 \| 10 \| n\/a \| 5 \| n\/a \| 15 \| \$0\.0100 \|/);
+});
+
+test("pi usage aliases are rendered in split usage columns", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "pi-style-usage-agent.js",
+    `
+console.log(JSON.stringify({
+  type: "usage",
+  usage: {
+    input: 11,
+    output: 13,
+    cacheRead: 17,
+    cacheWrite: 19,
+    reasoning: 23,
+    totalTokens: 83,
+    cost: { total: 0.0042 }
+  }
+}));
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use Pi usage aliases.",
+  rationale: "The fake harness reports usage with Pi field names.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9
+}));
+`
+  );
+  const configPath = path.join(tmp, "pi-style-usage-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "pi-style-usage-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does Pi-style usage render?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["pi-style-usage-agent"].usage, {
+    inputTokens: 11,
+    cachedInputTokens: 36,
+    outputTokens: 13,
+    reasoningOutputTokens: 23,
+    totalTokens: 83,
+    costUsd: 0.0042
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| pi-style-usage-agent \| juror \| 1 \| 1 \| 0 \| 11 \| 36 \| 13 \| 23 \| 83 \| \$0\.0042 \|/);
+});
+
+test("claude-style usage is not double counted from nested telemetry", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "claude-style-usage-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Trust the top-level Claude usage object.",
+  rationale: "Claude Code repeats cache usage in nested iteration and model telemetry.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9,
+  total_cost_usd: 0.5,
+  usage: {
+    input_tokens: 10,
+    cache_creation_input_tokens: 20,
+    cache_read_input_tokens: 30,
+    output_tokens: 5,
+    iterations: [
+      {
+        input_tokens: 1,
+        cache_creation_input_tokens: 2000,
+        cache_read_input_tokens: 3000,
+        output_tokens: 2
+      }
+    ]
+  },
+  modelUsage: {
+    "claude-fable-5": {
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheCreationInputTokens: 20,
+      cacheReadInputTokens: 30,
+      costUSD: 0.5
+    }
+  }
+}));
+`
+  );
+  const configPath = path.join(tmp, "claude-style-usage-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "claude-style-usage-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does Claude-style usage render?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["claude-style-usage-agent"].usage, {
+    inputTokens: 10,
+    cachedInputTokens: 50,
+    outputTokens: 5,
+    totalTokens: 65,
+    costUsd: 0.5
+  });
+
+  const statePath = path.join(tmp, ".grill-others", state.grillSessionId, "state.json");
+  const saved = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  saved.decisions[0].rounds[0].responses["claude-style-usage-agent"].usage = {
+    inputTokens: 10,
+    outputTokens: 5,
+    totalTokens: 65,
+    costUsd: 0.5
+  };
+  fs.writeFileSync(statePath, JSON.stringify(saved, null, 2));
+
+  const rendered = run(["status", "--state", statePath]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| claude-style-usage-agent \| juror \| 1 \| 1 \| 0 \| 10 \| 50 \| 5 \| n\/a \| 65 \| \$0\.5000 \|/);
+  assert.doesNotMatch(rendered.stdout, /\| claude-style-usage-agent \| juror \| 1 \| 1 \| 0 \| 10,000 \|/);
+  assert.doesNotMatch(rendered.stdout, /\$9\.0000/);
+});
+
+test("agent usage summary avoids mixing legacy inclusive input with raw cache split", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "legacy-inclusive-input-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use legacy inclusive input usage.",
+  rationale: "The fake harness reports Claude-style cache usage.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9,
+  total_cost_usd: 0.5,
+  usage: {
+    input_tokens: 10,
+    cache_creation_input_tokens: 20,
+    cache_read_input_tokens: 30,
+    output_tokens: 5
+  }
+}));
+`
+  );
+  const configPath = path.join(tmp, "legacy-inclusive-input-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "legacy-inclusive-input-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does legacy inclusive input render compatibly?",
+    "--prompt",
+    "hi"
+  ]);
+  const statePath = path.join(tmp, ".grill-others", state.grillSessionId, "state.json");
+  const saved = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  saved.decisions[0].rounds[0].responses["legacy-inclusive-input-agent"].usage = {
+    inputTokens: 60,
+    outputTokens: 5,
+    totalTokens: 65,
+    costUsd: 0.5
+  };
+  fs.writeFileSync(statePath, JSON.stringify(saved, null, 2));
+
+  const rendered = run(["status", "--state", statePath]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| legacy-inclusive-input-agent \| juror \| 1 \| 1 \| 0 \| 10 \| 50 \| 5 \| n\/a \| 65 \| \$0\.5000 \|/);
+  assert.doesNotMatch(rendered.stdout, /\| legacy-inclusive-input-agent \| juror \| 1 \| 1 \| 0 \| 60 \| 50 \|/);
+});
+
+test("modelUsage telemetry wins over placeholder top-level usage", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "model-usage-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use model usage.",
+  rationale: "The fake harness reports real usage in modelUsage and placeholders in usage.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9,
+  usage: {
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0
+  },
+  modelUsage: {
+    "claude-fable-5": {
+      inputTokens: 12,
+      outputTokens: 7,
+      cacheReadInputTokens: 30,
+      costUSD: 0.25
+    }
+  }
+}));
+`
+  );
+  const configPath = path.join(tmp, "model-usage-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "model-usage-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does modelUsage beat placeholders?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["model-usage-agent"].usage, {
+    inputTokens: 12,
+    cachedInputTokens: 30,
+    outputTokens: 7,
+    totalTokens: 49,
+    costUsd: 0.25
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| model-usage-agent \| juror \| 1 \| 1 \| 0 \| 12 \| 30 \| 7 \| n\/a \| 49 \| \$0\.2500 \|/);
+});
+
+test("modelUsage inherits cost from sibling usage when model tokens win", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "model-usage-sibling-cost-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use model usage tokens with sibling cost.",
+  rationale: "The fake harness reports richer tokens in modelUsage and cost in usage.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9,
+  usage: {
+    inputTokens: 10,
+    outputTokens: 5,
+    totalTokens: 15,
+    costUSD: 0.33
+  },
+  modelUsage: {
+    "gpt-5": {
+      inputTokens: 10,
+      cachedInputTokens: 20,
+      outputTokens: 5,
+      reasoningOutputTokens: 2,
+      totalTokens: 37
+    }
+  }
+}));
+`
+  );
+  const configPath = path.join(tmp, "model-usage-sibling-cost-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "model-usage-sibling-cost-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does modelUsage inherit sibling usage cost?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["model-usage-sibling-cost-agent"].usage, {
+    inputTokens: 10,
+    cachedInputTokens: 20,
+    outputTokens: 5,
+    reasoningOutputTokens: 2,
+    totalTokens: 37,
+    costUsd: 0.33
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(
+    rendered.stdout,
+    /\| model-usage-sibling-cost-agent \| juror \| 1 \| 1 \| 0 \| 10 \| 20 \| 5 \| 2 \| 37 \| \$0\.3300 \|/
+  );
+});
+
+test("modelUsage cost augments token-bearing usage", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "model-cost-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use usage tokens with model cost.",
+  rationale: "The fake harness reports tokens in usage and cost in modelUsage.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9,
+  usage: {
+    inputTokens: 12,
+    outputTokens: 8,
+    totalTokens: 20
+  },
+  modelUsage: {
+    "gpt-5": {
+      costUSD: 0.04
+    }
+  }
+}));
+`
+  );
+  const configPath = path.join(tmp, "model-cost-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "model-cost-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does modelUsage cost preserve usage tokens?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["model-cost-agent"].usage, {
+    inputTokens: 12,
+    outputTokens: 8,
+    totalTokens: 20,
+    costUsd: 0.04
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| model-cost-agent \| juror \| 1 \| 1 \| 0 \| 12 \| n\/a \| 8 \| n\/a \| 20 \| \$0\.0400 \|/);
+});
+
+test("modelUsage zero placeholders do not replace real usage tokens", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "model-zero-placeholder-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use usage tokens with model cost placeholders.",
+  rationale: "The fake harness reports real tokens in usage and zero token placeholders in modelUsage.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9,
+  usage: {
+    inputTokens: 12,
+    outputTokens: 8,
+    totalTokens: 20
+  },
+  modelUsage: {
+    "gpt-5": {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      reasoningOutputTokens: 0,
+      totalTokens: 0,
+      costUSD: 0.04
+    }
+  }
+}));
+`
+  );
+  const configPath = path.join(tmp, "model-zero-placeholder-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "model-zero-placeholder-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Do modelUsage zero placeholders preserve usage tokens?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["model-zero-placeholder-agent"].usage, {
+    inputTokens: 12,
+    outputTokens: 8,
+    totalTokens: 20,
+    costUsd: 0.04
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(
+    rendered.stdout,
+    /\| model-zero-placeholder-agent \| juror \| 1 \| 1 \| 0 \| 12 \| n\/a \| 8 \| n\/a \| 20 \| \$0\.0400 \|/
+  );
+});
+
+test("modelUsage cost augments flat token-bearing usage", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "flat-model-cost-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use flat tokens with model cost.",
+  rationale: "The fake harness reports flat tokens and modelUsage cost.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9,
+  inputTokens: 12,
+  outputTokens: 8,
+  totalTokens: 20,
+  modelUsage: {
+    "gpt-5": {
+      costUSD: 0.04
+    }
+  }
+}));
+`
+  );
+  const configPath = path.join(tmp, "flat-model-cost-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "flat-model-cost-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does modelUsage cost preserve flat usage tokens?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["flat-model-cost-agent"].usage, {
+    inputTokens: 12,
+    outputTokens: 8,
+    totalTokens: 20,
+    costUsd: 0.04
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| flat-model-cost-agent \| juror \| 1 \| 1 \| 0 \| 12 \| n\/a \| 8 \| n\/a \| 20 \| \$0\.0400 \|/);
+});
+
+test("agent usage summary preserves reported zero token values", () => {
   const commandPath = writeFakeCommand(
     tmp,
     "zero-usage-agent.js",
@@ -201,7 +1211,107 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| zero-usage-agent \| juror \| 1 \| 1 \| 0 \| 0 \| \$0\.0000 \|/);
+  assert.match(rendered.stdout, /\| zero-usage-agent \| juror \| 1 \| 1 \| 0 \| 0 \| n\/a \| 0 \| n\/a \| 0 \| \$0\.0000 \|/);
+});
+
+test("agent usage summary preserves stored total-only usage over raw zero placeholders", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "total-only-usage-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use total-only usage.",
+  rationale: "Some harnesses persist a total while raw output contains zero placeholders for unavailable splits.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9,
+  usage: { input_tokens: 0, output_tokens: 0, total_tokens: 20 }
+}));
+`
+  );
+  const configPath = path.join(tmp, "total-only-usage-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "total-only-usage-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does total-only usage render?",
+    "--prompt",
+    "hi"
+  ]);
+  const statePath = path.join(tmp, ".grill-others", state.grillSessionId, "state.json");
+  const saved = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  saved.decisions[0].rounds[0].responses["total-only-usage-agent"].usage = {
+    inputTokens: null,
+    outputTokens: null,
+    totalTokens: 20,
+    costUsd: null
+  };
+  fs.writeFileSync(statePath, JSON.stringify(saved, null, 2));
+
+  const rendered = run(["status", "--state", statePath]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| total-only-usage-agent \| juror \| 1 \| 1 \| 0 \| n\/a \| n\/a \| n\/a \| n\/a \| 20 \| n\/a \|/);
+});
+
+test("agent usage summary preserves stored totals over partial raw details", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "stored-usage-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use stored usage.",
+  rationale: "Stored usage should beat a partial retained raw event.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9,
+  usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+  total_cost_usd: 0.2
+}));
+`
+  );
+  const configPath = path.join(tmp, "stored-usage-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "stored-usage-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does stored usage beat partial raw?",
+    "--prompt",
+    "hi"
+  ]);
+  const statePath = path.join(tmp, ".grill-others", state.grillSessionId, "state.json");
+  const saved = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  saved.decisions[0].rounds[0].responses["stored-usage-agent"].raw = JSON.stringify({
+    usage: {
+      input_tokens: 5,
+      input_tokens_details: { cached_tokens: 4 },
+      output_tokens: 1,
+      output_tokens_details: { reasoning_tokens: 2 },
+      total_tokens: 10
+    }
+  });
+  fs.writeFileSync(statePath, JSON.stringify(saved, null, 2));
+
+  const rendered = run(["status", "--state", statePath]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| stored-usage-agent \| juror \| 1 \| 1 \| 0 \| 100 \| n\/a \| 50 \| n\/a \| 150 \| \$0\.2000 \|/);
 });
 
 test("agent usage summary includes planner and mediator calls", () => {
@@ -288,8 +1398,8 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| a \| planner, juror, mediator \| 3 \| 3 \| 0 \| 60 \| \$0\.0060 \|/);
-  assert.match(rendered.stdout, /\| b \| juror \| 1 \| 1 \| 0 \| 20 \| \$0\.0020 \|/);
+  assert.match(rendered.stdout, /\| a \| planner, juror, mediator \| 3 \| 3 \| 0 \| 57 \| n\/a \| 3 \| n\/a \| 60 \| \$0\.0060 \|/);
+  assert.match(rendered.stdout, /\| b \| juror \| 1 \| 1 \| 0 \| 19 \| n\/a \| 1 \| n\/a \| 20 \| \$0\.0020 \|/);
 });
 
 test("agent usage summary includes failed planner and mediator attempts", () => {
@@ -375,8 +1485,8 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| a \| planner, juror, mediator \| 3 \| 1 \| 2 \| 36 \| \$0\.0036 \|/);
-  assert.match(rendered.stdout, /\| b \| planner, juror, mediator \| 3 \| 3 \| 0 \| 60 \| \$0\.0060 \|/);
+  assert.match(rendered.stdout, /\| a \| planner, juror, mediator \| 3 \| 1 \| 2 \| 33 \| n\/a \| 3 \| n\/a \| 36 \| \$0\.0036 \|/);
+  assert.match(rendered.stdout, /\| b \| planner, juror, mediator \| 3 \| 3 \| 0 \| 57 \| n\/a \| 3 \| n\/a \| 60 \| \$0\.0060 \|/);
 });
 
 test("agent usage summary preserves mediator usage before user answer", () => {
@@ -454,9 +1564,9 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", statePath]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| a \| juror, mediator \| 4 \| 4 \| 0 \| 80 \| \$0\.0080 \|/);
-  assert.match(rendered.stdout, /\| b \| juror \| 2 \| 2 \| 0 \| 40 \| \$0\.0040 \|/);
-  assert.match(rendered.stdout, /\| c \| juror \| 2 \| 2 \| 0 \| 40 \| \$0\.0040 \|/);
+  assert.match(rendered.stdout, /\| a \| juror, mediator \| 4 \| 4 \| 0 \| 76 \| n\/a \| 4 \| n\/a \| 80 \| \$0\.0080 \|/);
+  assert.match(rendered.stdout, /\| b \| juror \| 2 \| 2 \| 0 \| 38 \| n\/a \| 2 \| n\/a \| 40 \| \$0\.0040 \|/);
+  assert.match(rendered.stdout, /\| c \| juror \| 2 \| 2 \| 0 \| 38 \| n\/a \| 2 \| n\/a \| 40 \| \$0\.0040 \|/);
 });
 
 test("--question seeds only the first focused decision", () => {
@@ -1026,7 +2136,55 @@ function handle(message) {
         completedAtMs: Date.now()
       }
     });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: message.params.threadId,
+        turnId: "turn-1",
+        tokenUsage: {
+          last: {
+            inputTokens: 1,
+            cachedInputTokens: 2,
+            outputTokens: 3,
+            reasoningOutputTokens: 4,
+            totalTokens: 10
+          },
+          total: {
+            inputTokens: 1,
+            cachedInputTokens: 2,
+            outputTokens: 3,
+            reasoningOutputTokens: 4,
+            totalTokens: 10
+          },
+          modelContextWindow: 128000
+        }
+      }
+    });
     write({ method: "turn/completed", params: { threadId: message.params.threadId, turn: turn("turn-1", "completed") } });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: message.params.threadId,
+        turnId: "turn-1",
+        tokenUsage: {
+          last: {
+            inputTokens: 10,
+            cachedInputTokens: 20,
+            outputTokens: 30,
+            reasoningOutputTokens: 0,
+            totalTokens: 60
+          },
+          total: {
+            inputTokens: 11,
+            cachedInputTokens: 22,
+            outputTokens: 33,
+            reasoningOutputTokens: 4,
+            totalTokens: 70
+          },
+          modelContextWindow: 128000
+        }
+      }
+    });
     return;
   }
   write({ id: message.id, error: { message: "unexpected method " + message.method } });
@@ -1076,12 +2234,878 @@ process.stdin.on("end", () => {
   );
   assert.equal(state.decisions[0].rounds[0].responses["codex-app"].ok, true);
   assert.equal(state.decisions[0].rounds[0].responses["codex-app"].promptMode, "full");
+  assert.deepEqual(state.decisions[0].rounds[0].responses["codex-app"].usage, {
+    inputTokens: 11,
+    cachedInputTokens: 22,
+    outputTokens: 33,
+    reasoningOutputTokens: 4,
+    totalTokens: 70
+  });
   assert.equal(state.harnessSessions.juror["codex-app"].codexThreadId, "thread-1");
   assert.equal(state.harnessSessions.juror["codex-app"].contextPrimed, true);
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| codex-app \| juror \| 1 \| 1 \| 0 \| 11 \| 22 \| 33 \| 4 \| 70 \| n\/a \|/);
   const log = fs.readFileSync(logPath, "utf8");
   assert.match(log, /argv:--profile jury-profile -c features\.fake=true app-server/);
   assert.match(log, /thread\/start:gpt-5:read-only:never\nturn\/start:thread-1:object:full\nstdin\/end/);
   assert.doesNotMatch(log, /thread\/resume/);
+});
+
+test("codex app-server flat cumulative token updates are counted per turn", () => {
+  const bin = fs.mkdtempSync(path.join(tmp, "fake-codex-app-cumulative-bin-"));
+  const logPath = path.join(tmp, "codex-app-server-cumulative.log");
+  writeFakeCommand(
+    bin,
+    "codex",
+    `
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+if (argv[0] !== "app-server") {
+  console.error("codex exec fallback should not be used");
+  process.exit(2);
+}
+const logPath = process.env.GRILL_TEST_CODEX_APP_LOG;
+function write(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+let threadCount = 0;
+let turnCount = 0;
+let plannerTurns = 0;
+const usageByThread = new Map();
+function turn(id, status = "inProgress") {
+  return { id, items: [], itemsView: "all", status, error: null, startedAt: null, completedAt: null, durationMs: null };
+}
+function nextThreadUsage(threadId) {
+  const previous = usageByThread.get(threadId) ?? {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+    totalTokens: 0
+  };
+  const next = {
+    inputTokens: previous.inputTokens + 10,
+    cachedInputTokens: previous.cachedInputTokens + 1,
+    outputTokens: previous.outputTokens + 2,
+    reasoningOutputTokens: previous.reasoningOutputTokens + 3,
+    totalTokens: previous.totalTokens + 16
+  };
+  usageByThread.set(threadId, next);
+  return next;
+}
+function responseFor(prompt) {
+  if (prompt.includes("acting as the planner") || prompt.includes("continuing as planner")) {
+    plannerTurns += 1;
+    if (plannerTurns <= 2) {
+      return JSON.stringify({
+        done: false,
+        question: "Question " + plannerTurns + "?",
+        rationale: "Ask focused question " + plannerTurns + ".",
+        confidence: 0.8
+      });
+    }
+    return JSON.stringify({
+      done: true,
+      question: "",
+      rationale: "No more focused questions are needed.",
+      confidence: 0.8
+    });
+  }
+  return JSON.stringify({
+    stance: "recommend",
+    recommendation: "Answer this focused question.",
+    rationale: "The fake juror answered the current question.",
+    assumptions: [],
+    risks: [],
+    repo_findings: [],
+    questions_for_other_jurors: [],
+    confidence: 0.9
+  });
+}
+function handle(message) {
+  if (message.method === "initialize") {
+    write({ id: message.id, result: { serverInfo: { name: "fake-codex", version: "1" }, capabilities: {} } });
+    return;
+  }
+  if (message.method === "initialized") {
+    return;
+  }
+  if (message.method === "thread/start") {
+    threadCount += 1;
+    const threadId = "thread-" + threadCount;
+    fs.appendFileSync(logPath, "thread/start:" + threadId + "\\n");
+    write({
+      id: message.id,
+      result: {
+        thread: { id: threadId },
+        model: message.params.model,
+        modelProvider: "fake",
+        serviceTier: null,
+        cwd: message.params.cwd,
+        instructionSources: [],
+        approvalPolicy: "never",
+        approvalsReviewer: "codex",
+        sandbox: { type: "readOnly", networkAccess: false },
+        reasoningEffort: null
+      }
+    });
+    return;
+  }
+  if (message.method === "turn/start") {
+    turnCount += 1;
+    const turnId = "turn-" + turnCount;
+    const prompt = message.params.input?.[0]?.text || "";
+    const mode = prompt.includes("Original user plan or decision:") ? "full" : "compact";
+    fs.appendFileSync(logPath, "turn/start:" + message.params.threadId + ":" + mode + "\\n");
+    write({ id: message.id, result: { turn: turn(turnId) } });
+    write({
+      method: "item/completed",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        item: { type: "agentMessage", id: "item-" + turnCount, text: responseFor(prompt), phase: null, memoryCitation: null },
+        completedAtMs: Date.now()
+      }
+    });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        tokenUsage: nextThreadUsage(message.params.threadId)
+      }
+    });
+    write({ method: "turn/completed", params: { threadId: message.params.threadId, turn: turn(turnId, "completed") } });
+    return;
+  }
+  write({ id: message.id, error: { message: "unexpected method " + message.method } });
+}
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index = buffer.indexOf("\\n");
+  while (index !== -1) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+    index = buffer.indexOf("\\n");
+  }
+});
+`
+  );
+  const configPath = path.join(tmp, "codex-app-server-cumulative.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "codex-cumulative", harness: "codex", model: "gpt-5" }] }));
+  const { state } = runJson(
+    [
+      "start",
+      "--cwd",
+      tmp,
+      "--agent-config",
+      configPath,
+      "--max-grill-questions",
+      "3",
+      "--prompt",
+      "Ask two questions, then stop."
+    ],
+    { env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, GRILL_TEST_CODEX_APP_LOG: logPath } }
+  );
+  assert.equal(state.decisions.length, 2);
+  assert.equal(state.final.resolved_decisions, 2);
+  assert.equal(state.decisions[0].planner.usage.totalTokens, 16);
+  assert.equal(state.decisions[1].planner.usage.totalTokens, 16);
+  assert.equal(state.lastPlanner.usage.totalTokens, 16);
+  assert.equal(state.decisions[0].rounds[0].responses["codex-cumulative"].usage.totalTokens, 16);
+  assert.equal(state.decisions[1].rounds[0].responses["codex-cumulative"].usage.totalTokens, 16);
+  assert.equal(state.harnessSessions.planner["codex-cumulative"].codexTokenUsageTotal.totalTokens, 48);
+  assert.equal(state.harnessSessions.juror["codex-cumulative"].codexTokenUsageTotal.totalTokens, 32);
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| codex-cumulative \| planner, juror \| 5 \| 5 \| 0 \| 50 \| 5 \| 10 \| 15 \| 80 \| n\/a \|/);
+  const log = fs.readFileSync(logPath, "utf8");
+  assert.match(log, /thread\/start:thread-1\nturn\/start:thread-1:full\nthread\/start:thread-2\nturn\/start:thread-2:full/);
+  assert.match(log, /turn\/start:thread-1:compact/);
+  assert.match(log, /turn\/start:thread-2:compact/);
+});
+
+test("codex app-server clears usage baseline when a stored thread is replaced", () => {
+  const bin = fs.mkdtempSync(path.join(tmp, "fake-codex-app-replaced-thread-bin-"));
+  const logPath = path.join(tmp, "codex-app-server-replaced-thread.log");
+  writeFakeCommand(
+    bin,
+    "codex",
+    `
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+if (argv[0] !== "app-server") {
+  console.error("codex exec fallback should not be used");
+  process.exit(2);
+}
+const logPath = process.env.GRILL_TEST_CODEX_APP_LOG;
+function write(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function turn(id, status = "inProgress") {
+  return { id, items: [], itemsView: "all", status, error: null, startedAt: null, completedAt: null, durationMs: null };
+}
+function handle(message) {
+  if (message.method === "initialize") {
+    write({ id: message.id, result: { serverInfo: { name: "fake-codex", version: "1" }, capabilities: {} } });
+    return;
+  }
+  if (message.method === "initialized") {
+    return;
+  }
+  if (message.method === "thread/resume") {
+    fs.appendFileSync(logPath, "thread/resume:" + message.params.threadId + "\\n");
+    write({ id: message.id, error: { message: "missing thread" } });
+    return;
+  }
+  if (message.method === "thread/start") {
+    fs.appendFileSync(logPath, "thread/start:new-thread\\n");
+    write({
+      id: message.id,
+      result: {
+        thread: { id: "new-thread" },
+        model: message.params.model,
+        modelProvider: "fake",
+        serviceTier: null,
+        cwd: message.params.cwd,
+        instructionSources: [],
+        approvalPolicy: "never",
+        approvalsReviewer: "codex",
+        sandbox: { type: "readOnly", networkAccess: false },
+        reasoningEffort: null
+      }
+    });
+    return;
+  }
+  if (message.method === "turn/start") {
+    const turnId = "turn-1";
+    fs.appendFileSync(logPath, "turn/start:" + message.params.threadId + "\\n");
+    write({ id: message.id, result: { turn: turn(turnId) } });
+    write({
+      method: "item/completed",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: JSON.stringify({
+            done: true,
+            question: "",
+            rationale: "Fresh replacement thread is done.",
+            confidence: 0.8
+          }),
+          phase: null,
+          memoryCitation: null
+        },
+        completedAtMs: Date.now()
+      }
+    });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        tokenUsage: {
+          inputTokens: 20,
+          cachedInputTokens: 1,
+          outputTokens: 5,
+          totalTokens: 26
+        }
+      }
+    });
+    write({ method: "turn/completed", params: { threadId: message.params.threadId, turn: turn(turnId, "completed") } });
+    return;
+  }
+  write({ id: message.id, error: { message: "unexpected method " + message.method } });
+}
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index = buffer.indexOf("\\n");
+  while (index !== -1) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+    index = buffer.indexOf("\\n");
+  }
+});
+`
+  );
+  const grillSessionId = "replaced-thread-session";
+  const statePath = path.join(tmp, ".grill-others", grillSessionId, "state.json");
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify(
+      {
+        version: 1,
+        mode: "sequential",
+        grillSessionId,
+        cwd: tmp,
+        prompt: "Stop after checking replacement thread usage.",
+        agents: [{ name: "codex-reset", harness: "codex", model: "gpt-5" }],
+        decisions: [],
+        activeDecisionIndex: null,
+        maxGrillQuestions: 1,
+        maxUserQuestions: 0,
+        mock: false,
+        final: null,
+        harnessSessions: {
+          planner: {
+            "codex-reset": {
+              codexThreadId: "old-thread",
+              codexTokenUsageTotal: {
+                inputTokens: 10,
+                totalTokens: 10
+              }
+            }
+          }
+        }
+      },
+      null,
+      2
+    )
+  );
+  const { state } = runJson(["continue", "--state", statePath], {
+    env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, GRILL_TEST_CODEX_APP_LOG: logPath }
+  });
+  assert.equal(state.lastPlanner.usage.totalTokens, 26);
+  assert.equal(state.lastPlanner.usage.inputTokens, 20);
+  assert.equal(state.harnessSessions.planner["codex-reset"].codexThreadId, "new-thread");
+  assert.equal(state.harnessSessions.planner["codex-reset"].codexTokenUsageTotal.totalTokens, 26);
+  const log = fs.readFileSync(logPath, "utf8");
+  assert.match(log, /thread\/resume:old-thread\nthread\/start:new-thread\nturn\/start:new-thread/);
+});
+
+test("codex app-server deduplicates last updates when resumed old state has no usage baseline", () => {
+  const bin = fs.mkdtempSync(path.join(tmp, "fake-codex-app-old-baseline-bin-"));
+  const logPath = path.join(tmp, "codex-app-server-old-baseline.log");
+  writeFakeCommand(
+    bin,
+    "codex",
+    `
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+if (argv[0] !== "app-server") {
+  console.error("codex exec fallback should not be used");
+  process.exit(2);
+}
+const logPath = process.env.GRILL_TEST_CODEX_APP_LOG;
+function write(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function turn(id, status = "inProgress") {
+  return { id, items: [], itemsView: "all", status, error: null, startedAt: null, completedAt: null, durationMs: null };
+}
+function handle(message) {
+  if (message.method === "initialize") {
+    write({ id: message.id, result: { serverInfo: { name: "fake-codex", version: "1" }, capabilities: {} } });
+    return;
+  }
+  if (message.method === "initialized") {
+    return;
+  }
+  if (message.method === "thread/resume") {
+    fs.appendFileSync(logPath, "thread/resume:" + message.params.threadId + "\\n");
+    write({
+      id: message.id,
+      result: {
+        thread: { id: message.params.threadId },
+        model: message.params.model,
+        modelProvider: "fake",
+        serviceTier: null,
+        cwd: message.params.cwd,
+        instructionSources: [],
+        approvalPolicy: "never",
+        approvalsReviewer: "codex",
+        sandbox: { type: "readOnly", networkAccess: false },
+        reasoningEffort: null
+      }
+    });
+    return;
+  }
+  if (message.method === "turn/start") {
+    const turnId = "turn-1";
+    fs.appendFileSync(logPath, "turn/start:" + message.params.threadId + "\\n");
+    write({ id: message.id, result: { turn: turn(turnId) } });
+    write({
+      method: "item/completed",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: JSON.stringify({
+            done: true,
+            question: "",
+            rationale: "Old thread resume is done.",
+            confidence: 0.8
+          }),
+          phase: null,
+          memoryCitation: null
+        },
+        completedAtMs: Date.now()
+      }
+    });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        tokenUsage: {
+          last: {
+            inputTokens: 2,
+            outputTokens: 1,
+            totalTokens: 3
+          },
+          total: {
+            inputTokens: 102,
+            outputTokens: 1,
+            totalTokens: 103
+          }
+        }
+      }
+    });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        tokenUsage: {
+          last: {
+            inputTokens: 4,
+            outputTokens: 2,
+            totalTokens: 6
+          },
+          total: {
+            inputTokens: 106,
+            outputTokens: 3,
+            totalTokens: 109
+          }
+        }
+      }
+    });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        tokenUsage: {
+          last: {
+            inputTokens: 4,
+            outputTokens: 2,
+            totalTokens: 6
+          },
+          total: {
+            inputTokens: 106,
+            cachedInputTokens: 2,
+            outputTokens: 3,
+            totalTokens: 109,
+            costUsd: 0.01
+          }
+        }
+      }
+    });
+    write({ method: "turn/completed", params: { threadId: message.params.threadId, turn: turn(turnId, "completed") } });
+    return;
+  }
+  write({ id: message.id, error: { message: "unexpected method " + message.method } });
+}
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index = buffer.indexOf("\\n");
+  while (index !== -1) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+    index = buffer.indexOf("\\n");
+  }
+});
+`
+  );
+  const grillSessionId = "old-baseline-session";
+  const statePath = path.join(tmp, ".grill-others", grillSessionId, "state.json");
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify(
+      {
+        version: 1,
+        mode: "sequential",
+        grillSessionId,
+        cwd: tmp,
+        prompt: "Stop after checking resumed old-state usage.",
+        agents: [{ name: "codex-old", harness: "codex", model: "gpt-5" }],
+        decisions: [],
+        activeDecisionIndex: null,
+        maxGrillQuestions: 1,
+        maxUserQuestions: 0,
+        mock: false,
+        final: null,
+        harnessSessions: {
+          planner: {
+            "codex-old": {
+              codexThreadId: "old-thread"
+            }
+          }
+        }
+      },
+      null,
+      2
+    )
+  );
+  const { state } = runJson(["continue", "--state", statePath], {
+    env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, GRILL_TEST_CODEX_APP_LOG: logPath }
+  });
+  assert.deepEqual(state.lastPlanner.usage, {
+    inputTokens: 6,
+    outputTokens: 3,
+    totalTokens: 9
+  });
+  assert.equal(state.harnessSessions.planner["codex-old"].codexTokenUsageTotal.totalTokens, 109);
+  const log = fs.readFileSync(logPath, "utf8");
+  assert.match(log, /thread\/resume:old-thread\nturn\/start:old-thread/);
+});
+
+test("codex app-server does not count flat cumulative history when resumed old state has no usage baseline", () => {
+  const bin = fs.mkdtempSync(path.join(tmp, "fake-codex-app-old-flat-baseline-bin-"));
+  const logPath = path.join(tmp, "codex-app-server-old-flat-baseline.log");
+  writeFakeCommand(
+    bin,
+    "codex",
+    `
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+if (argv[0] !== "app-server") {
+  console.error("codex exec fallback should not be used");
+  process.exit(2);
+}
+const logPath = process.env.GRILL_TEST_CODEX_APP_LOG;
+function write(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function turn(id, status = "inProgress") {
+  return { id, items: [], itemsView: "all", status, error: null, startedAt: null, completedAt: null, durationMs: null };
+}
+function handle(message) {
+  if (message.method === "initialize") {
+    write({ id: message.id, result: { serverInfo: { name: "fake-codex", version: "1" }, capabilities: {} } });
+    return;
+  }
+  if (message.method === "initialized") {
+    return;
+  }
+  if (message.method === "thread/resume") {
+    fs.appendFileSync(logPath, "thread/resume:" + message.params.threadId + "\\n");
+    write({
+      id: message.id,
+      result: {
+        thread: { id: message.params.threadId },
+        model: message.params.model,
+        modelProvider: "fake",
+        serviceTier: null,
+        cwd: message.params.cwd,
+        instructionSources: [],
+        approvalPolicy: "never",
+        approvalsReviewer: "codex",
+        sandbox: { type: "readOnly", networkAccess: false },
+        reasoningEffort: null
+      }
+    });
+    return;
+  }
+  if (message.method === "turn/start") {
+    const turnId = "turn-1";
+    fs.appendFileSync(logPath, "turn/start:" + message.params.threadId + "\\n");
+    write({ id: message.id, result: { turn: turn(turnId) } });
+    write({
+      method: "item/completed",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: JSON.stringify({
+            done: true,
+            question: "",
+            rationale: "Old flat cumulative resume is done.",
+            confidence: 0.8
+          }),
+          phase: null,
+          memoryCitation: null
+        },
+        completedAtMs: Date.now()
+      }
+    });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        tokenUsage: {
+          inputTokens: 100,
+          totalTokens: 100
+        }
+      }
+    });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        tokenUsage: {
+          inputTokens: 104,
+          outputTokens: 1,
+          totalTokens: 105
+        }
+      }
+    });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        tokenUsage: {
+          inputTokens: 108,
+          outputTokens: 2,
+          totalTokens: 110
+        }
+      }
+    });
+    write({ method: "turn/completed", params: { threadId: message.params.threadId, turn: turn(turnId, "completed") } });
+    return;
+  }
+  write({ id: message.id, error: { message: "unexpected method " + message.method } });
+}
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index = buffer.indexOf("\\n");
+  while (index !== -1) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+    index = buffer.indexOf("\\n");
+  }
+});
+`
+  );
+  const grillSessionId = "old-flat-baseline-session";
+  const statePath = path.join(tmp, ".grill-others", grillSessionId, "state.json");
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify(
+      {
+        version: 1,
+        mode: "sequential",
+        grillSessionId,
+        cwd: tmp,
+        prompt: "Stop after checking resumed old-state flat usage.",
+        agents: [{ name: "codex-old-flat", harness: "codex", model: "gpt-5" }],
+        decisions: [],
+        activeDecisionIndex: null,
+        maxGrillQuestions: 1,
+        maxUserQuestions: 0,
+        mock: false,
+        final: null,
+        harnessSessions: {
+          planner: {
+            "codex-old-flat": {
+              codexThreadId: "old-thread"
+            }
+          }
+        }
+      },
+      null,
+      2
+    )
+  );
+  const { state } = runJson(["continue", "--state", statePath], {
+    env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, GRILL_TEST_CODEX_APP_LOG: logPath }
+  });
+  assert.deepEqual(state.lastPlanner.usage, {
+    inputTokens: 8,
+    totalTokens: 10
+  });
+  assert.equal(state.harnessSessions.planner["codex-old-flat"].codexTokenUsageTotal.totalTokens, 110);
+  const log = fs.readFileSync(logPath, "utf8");
+  assert.match(log, /thread\/resume:old-thread\nturn\/start:old-thread/);
+});
+
+test("codex app-server skips cumulative fields missing from the saved baseline", () => {
+  const bin = fs.mkdtempSync(path.join(tmp, "fake-codex-app-partial-baseline-bin-"));
+  const logPath = path.join(tmp, "codex-app-server-partial-baseline.log");
+  writeFakeCommand(
+    bin,
+    "codex",
+    `
+const fs = require("node:fs");
+const argv = process.argv.slice(2);
+if (argv[0] !== "app-server") {
+  console.error("codex exec fallback should not be used");
+  process.exit(2);
+}
+const logPath = process.env.GRILL_TEST_CODEX_APP_LOG;
+function write(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function turn(id, status = "inProgress") {
+  return { id, items: [], itemsView: "all", status, error: null, startedAt: null, completedAt: null, durationMs: null };
+}
+function handle(message) {
+  if (message.method === "initialize") {
+    write({ id: message.id, result: { serverInfo: { name: "fake-codex", version: "1" }, capabilities: {} } });
+    return;
+  }
+  if (message.method === "initialized") {
+    return;
+  }
+  if (message.method === "thread/resume") {
+    fs.appendFileSync(logPath, "thread/resume:" + message.params.threadId + "\\n");
+    write({
+      id: message.id,
+      result: {
+        thread: { id: message.params.threadId },
+        model: message.params.model,
+        modelProvider: "fake",
+        serviceTier: null,
+        cwd: message.params.cwd,
+        instructionSources: [],
+        approvalPolicy: "never",
+        approvalsReviewer: "codex",
+        sandbox: { type: "readOnly", networkAccess: false },
+        reasoningEffort: null
+      }
+    });
+    return;
+  }
+  if (message.method === "turn/start") {
+    const turnId = "turn-1";
+    fs.appendFileSync(logPath, "turn/start:" + message.params.threadId + "\\n");
+    write({ id: message.id, result: { turn: turn(turnId) } });
+    write({
+      method: "item/completed",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        item: {
+          type: "agentMessage",
+          id: "item-1",
+          text: JSON.stringify({
+            done: true,
+            question: "",
+            rationale: "Partial baseline resume is done.",
+            confidence: 0.8
+          }),
+          phase: null,
+          memoryCitation: null
+        },
+        completedAtMs: Date.now()
+      }
+    });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        tokenUsage: {
+          inputTokens: 50,
+          outputTokens: 7,
+          totalTokens: 110,
+          costUsd: 0.5
+        }
+      }
+    });
+    write({ method: "turn/completed", params: { threadId: message.params.threadId, turn: turn(turnId, "completed") } });
+    return;
+  }
+  write({ id: message.id, error: { message: "unexpected method " + message.method } });
+}
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index = buffer.indexOf("\\n");
+  while (index !== -1) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+    index = buffer.indexOf("\\n");
+  }
+});
+`
+  );
+  const grillSessionId = "partial-baseline-session";
+  const statePath = path.join(tmp, ".grill-others", grillSessionId, "state.json");
+  fs.mkdirSync(path.dirname(statePath), { recursive: true });
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify(
+      {
+        version: 1,
+        mode: "sequential",
+        grillSessionId,
+        cwd: tmp,
+        prompt: "Stop after checking partial baseline usage.",
+        agents: [{ name: "codex-partial", harness: "codex", model: "gpt-5" }],
+        decisions: [],
+        activeDecisionIndex: null,
+        maxGrillQuestions: 1,
+        maxUserQuestions: 0,
+        mock: false,
+        final: null,
+        harnessSessions: {
+          planner: {
+            "codex-partial": {
+              codexThreadId: "old-thread",
+              codexTokenUsageTotal: {
+                totalTokens: 100
+              }
+            }
+          }
+        }
+      },
+      null,
+      2
+    )
+  );
+  const { state } = runJson(["continue", "--state", statePath], {
+    env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, GRILL_TEST_CODEX_APP_LOG: logPath }
+  });
+  assert.deepEqual(state.lastPlanner.usage, {
+    totalTokens: 10
+  });
+  assert.equal(state.harnessSessions.planner["codex-partial"].codexTokenUsageTotal.totalTokens, 110);
+  assert.equal(state.harnessSessions.planner["codex-partial"].codexTokenUsageTotal.inputTokens, 50);
+
+  const rendered = run(["status", "--state", statePath]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| codex-partial \| planner \| 1 \| 1 \| 0 \| n\/a \| n\/a \| n\/a \| n\/a \| 10 \| n\/a \|/);
+  const log = fs.readFileSync(logPath, "utf8");
+  assert.match(log, /thread\/resume:old-thread\nturn\/start:old-thread/);
 });
 
 test("codex app-server requests receive an unsupported-method response", () => {
@@ -1229,8 +3253,28 @@ function handle(message) {
     return;
   }
   if (message.method === "turn/start") {
-    write({ id: message.id, result: { turn: turn() } });
-    process.exit(7);
+    const turnId = "turn-1";
+    write({ id: message.id, result: { turn: turn(turnId) } });
+    write({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        tokenUsage: {
+          last: {
+            inputTokens: 31,
+            outputTokens: 5,
+            totalTokens: 36
+          },
+          total: {
+            inputTokens: 31,
+            outputTokens: 5,
+            totalTokens: 36
+          }
+        }
+      }
+    });
+    setTimeout(() => process.exit(7), 10);
   }
 }
 let buffer = "";
@@ -1273,6 +3317,11 @@ process.stdin.on("data", (chunk) => {
   assert.equal(response.ok, true);
   assert.equal(response.sessionContextAvailable, false);
   assert.equal(response.parsed.recommendation, "model flag accepted");
+  assert.deepEqual(state.harnessSessions.juror["codex-exit"].codexTokenUsageTotal, {
+    inputTokens: 31,
+    outputTokens: 5,
+    totalTokens: 36
+  });
 });
 
 test("codex app-server RPC timeout falls back to exec", () => {
