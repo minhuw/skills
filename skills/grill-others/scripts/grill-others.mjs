@@ -3668,10 +3668,6 @@ function formatUsageNumber(value, reported) {
   return reported ? formatNumber(value) : "n/a";
 }
 
-function formatCost(value, reported) {
-  return reported ? `$${value.toFixed(4)}` : "n/a";
-}
-
 function formatDuration(ms) {
   const seconds = Math.round(Number(ms ?? 0) / 1000);
   if (seconds < 60) {
@@ -3690,11 +3686,10 @@ function renderAgentUsageSummary(lines, state) {
   lines.push("## Agent Usage Summary");
   lines.push("");
   lines.push(
-    "| Agent | Roles | Calls | OK | Failed | Input | Cached input | Output | Reasoning output | Total | Reported cost | Prompt chars | Approx prompt tokens | Wall time |"
+    "| Agent | Roles | Calls | OK | Failed | Input | Cached input | Output | Reasoning output | Total | Wall time |"
   );
-  lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+  lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
   for (const row of rows) {
-    const approxPromptTokens = Math.ceil(row.promptChars / 4);
     const roles = ["planner", "juror", "mediator"].filter((role) => row.roles.has(role)).join(", ");
     lines.push(
       `| ${row.agent} | ${roles} | ${row.calls} | ${row.ok} | ${row.failed} | ${formatUsageNumber(
@@ -3706,14 +3701,12 @@ function renderAgentUsageSummary(lines, state) {
       )} | ${formatUsageNumber(row.reasoningOutputTokens, row.reportedReasoningOutputTokenCalls > 0)} | ${formatUsageNumber(
         row.totalTokens,
         row.reportedTotalTokenCalls > 0 || row.reportedTokenUsageCalls > 0
-      )} | ${formatCost(row.costUsd, row.reportedCostCalls > 0)} | ${formatNumber(row.promptChars)} | ${formatNumber(
-        approxPromptTokens
       )} | ${formatDuration(row.durationMs)} |`
     );
   }
   lines.push("");
   lines.push(
-    "Token and reported cost columns are populated only when a harness emits that usage metadata. Total falls back to the sum of reported token fields when no total is emitted. Approx prompt tokens use chars/4 and are not billing data."
+    "Token columns are populated only when a harness emits that usage metadata. Total falls back to the sum of reported token fields when no total is emitted."
   );
   lines.push("");
 }

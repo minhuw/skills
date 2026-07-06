@@ -196,7 +196,7 @@ Each focused decision is synthesized by a mediator pass, not by picking the most
 
 The final sequential recommendation aggregates the resolved focused decisions. It does not ask another mediator to re-litigate every decision; it records what was resolved question by question and surfaces unresolved disagreements and risks.
 
-During a non-JSON run, the script streams compact `Live Jury Q&A` blocks to stderr as each focused question resolves. The final markdown includes an agent usage table covering planner, juror, and mediator calls. Token and cost columns are populated only when the underlying harness reports usage metadata; otherwise the table shows prompt character counts, approximate prompt tokens, and wall time.
+During a non-JSON run, the script streams compact `Live Jury Q&A` blocks to stderr as each focused question resolves. The final markdown includes an agent usage table covering planner, juror, and mediator calls. Token columns show input, cached input, output, reasoning output, and total tokens when the underlying harness reports usage metadata; the table always includes call counts, failures, and wall time.
 
 ## Testing
 

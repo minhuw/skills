@@ -155,7 +155,11 @@ console.log(JSON.stringify({
   assert.equal(rendered.status, 0, rendered.stderr);
   assert.doesNotMatch(rendered.stdout, /## Questions And Juror Answers/);
   assert.doesNotMatch(rendered.stdout, /usage-agent: recommend; Use the usage-aware path/);
-  assert.match(rendered.stdout, /\| usage-agent \| juror \| 1 \| 1 \| 0 \| 12 \| n\/a \| 8 \| n\/a \| 20 \| \$0\.0123 \|/);
+  assert.match(
+    rendered.stdout,
+    /\| usage-agent \| juror \| 1 \| 1 \| 0 \| 12 \| n\/a \| 8 \| n\/a \| 20 \| [^|]+ \|/
+  );
+  assert.doesNotMatch(rendered.stdout, /Reported cost|Prompt chars|Approx prompt tokens|\$0\.0123/);
 });
 
 test("usage metadata is parsed from response.completed JSONL wrappers", () => {
@@ -212,7 +216,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| wrapped-usage-agent \| juror \| 1 \| 1 \| 0 \| 7 \| 3 \| 4 \| 2 \| 16 \| n\/a \|/);
+  assert.match(rendered.stdout, /\| wrapped-usage-agent \| juror \| 1 \| 1 \| 0 \| 7 \| 3 \| 4 \| 2 \| 16 \|/);
 });
 
 test("usage metadata parses prompt and completion token detail aliases", () => {
@@ -273,7 +277,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| prompt-completion-details-agent \| juror \| 1 \| 1 \| 0 \| 7 \| 3 \| 4 \| 2 \| 16 \| n\/a \|/);
+  assert.match(rendered.stdout, /\| prompt-completion-details-agent \| juror \| 1 \| 1 \| 0 \| 7 \| 3 \| 4 \| 2 \| 16 \|/);
 });
 
 test("usage metadata does not synthesize totals by double-counting detail aliases", () => {
@@ -333,7 +337,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| prompt-completion-subset-details-agent \| juror \| 1 \| 1 \| 0 \| 7 \| 3 \| 4 \| 2 \| 11 \| n\/a \|/);
+  assert.match(rendered.stdout, /\| prompt-completion-subset-details-agent \| juror \| 1 \| 1 \| 0 \| 7 \| 3 \| 4 \| 2 \| 11 \|/);
 });
 
 test("usage metadata includes explicit split fields in synthesized totals", () => {
@@ -389,7 +393,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| explicit-split-fields-agent \| juror \| 1 \| 1 \| 0 \| 11 \| 4 \| 7 \| 1 \| 23 \| n\/a \|/);
+  assert.match(rendered.stdout, /\| explicit-split-fields-agent \| juror \| 1 \| 1 \| 0 \| 11 \| 4 \| 7 \| 1 \| 23 \|/);
 });
 
 test("usage metadata is parsed from Codex JSON token-count events", () => {
@@ -453,7 +457,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| codex-json-usage-agent \| juror \| 1 \| 1 \| 0 \| 11 \| 4 \| 7 \| 1 \| 23 \| n\/a \|/);
+  assert.match(rendered.stdout, /\| codex-json-usage-agent \| juror \| 1 \| 1 \| 0 \| 11 \| 4 \| 7 \| 1 \| 23 \|/);
 });
 
 test("tokenUsage wrappers preserve inherited cost metadata", () => {
@@ -505,7 +509,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| token-usage-cost-agent \| juror \| 1 \| 1 \| 0 \| 5 \| n\/a \| 6 \| n\/a \| 11 \| \$0\.2500 \|/);
+  assert.match(rendered.stdout, /\| token-usage-cost-agent \| juror \| 1 \| 1 \| 0 \| 5 \| n\/a \| 6 \| n\/a \| 11 \|/);
 });
 
 test("tokenUsage wrappers prefer cumulative totals over last request", () => {
@@ -566,7 +570,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| token-usage-total-agent \| juror \| 1 \| 1 \| 0 \| 50 \| 7 \| 60 \| 3 \| 120 \| n\/a \|/);
+  assert.match(rendered.stdout, /\| token-usage-total-agent \| juror \| 1 \| 1 \| 0 \| 50 \| 7 \| 60 \| 3 \| 120 \|/);
 });
 
 test("usage wrappers prefer nested cumulative totals over last request", () => {
@@ -629,7 +633,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| usage-total-agent \| juror \| 1 \| 1 \| 0 \| 50 \| 7 \| 60 \| 3 \| 120 \| \$0\.2500 \|/);
+  assert.match(rendered.stdout, /\| usage-total-agent \| juror \| 1 \| 1 \| 0 \| 50 \| 7 \| 60 \| 3 \| 120 \|/);
 });
 
 test("usage wrappers preserve sibling cost metadata", () => {
@@ -681,7 +685,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| usage-sibling-cost-agent \| juror \| 1 \| 1 \| 0 \| 10 \| n\/a \| 5 \| n\/a \| 15 \| \$0\.0100 \|/);
+  assert.match(rendered.stdout, /\| usage-sibling-cost-agent \| juror \| 1 \| 1 \| 0 \| 10 \| n\/a \| 5 \| n\/a \| 15 \|/);
 });
 
 test("pi usage aliases are rendered in split usage columns", () => {
@@ -739,7 +743,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| pi-style-usage-agent \| juror \| 1 \| 1 \| 0 \| 11 \| 36 \| 13 \| 23 \| 83 \| \$0\.0042 \|/);
+  assert.match(rendered.stdout, /\| pi-style-usage-agent \| juror \| 1 \| 1 \| 0 \| 11 \| 36 \| 13 \| 23 \| 83 \|/);
 });
 
 test("claude-style usage is not double counted from nested telemetry", () => {
@@ -818,7 +822,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", statePath]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| claude-style-usage-agent \| juror \| 1 \| 1 \| 0 \| 10 \| 50 \| 5 \| n\/a \| 65 \| \$0\.5000 \|/);
+  assert.match(rendered.stdout, /\| claude-style-usage-agent \| juror \| 1 \| 1 \| 0 \| 10 \| 50 \| 5 \| n\/a \| 65 \|/);
   assert.doesNotMatch(rendered.stdout, /\| claude-style-usage-agent \| juror \| 1 \| 1 \| 0 \| 10,000 \|/);
   assert.doesNotMatch(rendered.stdout, /\$9\.0000/);
 });
@@ -874,7 +878,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", statePath]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| legacy-inclusive-input-agent \| juror \| 1 \| 1 \| 0 \| 10 \| 50 \| 5 \| n\/a \| 65 \| \$0\.5000 \|/);
+  assert.match(rendered.stdout, /\| legacy-inclusive-input-agent \| juror \| 1 \| 1 \| 0 \| 10 \| 50 \| 5 \| n\/a \| 65 \|/);
   assert.doesNotMatch(rendered.stdout, /\| legacy-inclusive-input-agent \| juror \| 1 \| 1 \| 0 \| 60 \| 50 \|/);
 });
 
@@ -933,7 +937,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| model-usage-agent \| juror \| 1 \| 1 \| 0 \| 12 \| 30 \| 7 \| n\/a \| 49 \| \$0\.2500 \|/);
+  assert.match(rendered.stdout, /\| model-usage-agent \| juror \| 1 \| 1 \| 0 \| 12 \| 30 \| 7 \| n\/a \| 49 \|/);
 });
 
 test("modelUsage inherits cost from sibling usage when model tokens win", () => {
@@ -996,7 +1000,7 @@ console.log(JSON.stringify({
   assert.equal(rendered.status, 0, rendered.stderr);
   assert.match(
     rendered.stdout,
-    /\| model-usage-sibling-cost-agent \| juror \| 1 \| 1 \| 0 \| 10 \| 20 \| 5 \| 2 \| 37 \| \$0\.3300 \|/
+    /\| model-usage-sibling-cost-agent \| juror \| 1 \| 1 \| 0 \| 10 \| 20 \| 5 \| 2 \| 37 \|/
   );
 });
 
@@ -1051,7 +1055,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| model-cost-agent \| juror \| 1 \| 1 \| 0 \| 12 \| n\/a \| 8 \| n\/a \| 20 \| \$0\.0400 \|/);
+  assert.match(rendered.stdout, /\| model-cost-agent \| juror \| 1 \| 1 \| 0 \| 12 \| n\/a \| 8 \| n\/a \| 20 \|/);
 });
 
 test("modelUsage zero placeholders do not replace real usage tokens", () => {
@@ -1112,7 +1116,7 @@ console.log(JSON.stringify({
   assert.equal(rendered.status, 0, rendered.stderr);
   assert.match(
     rendered.stdout,
-    /\| model-zero-placeholder-agent \| juror \| 1 \| 1 \| 0 \| 12 \| n\/a \| 8 \| n\/a \| 20 \| \$0\.0400 \|/
+    /\| model-zero-placeholder-agent \| juror \| 1 \| 1 \| 0 \| 12 \| n\/a \| 8 \| n\/a \| 20 \|/
   );
 });
 
@@ -1165,7 +1169,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| flat-model-cost-agent \| juror \| 1 \| 1 \| 0 \| 12 \| n\/a \| 8 \| n\/a \| 20 \| \$0\.0400 \|/);
+  assert.match(rendered.stdout, /\| flat-model-cost-agent \| juror \| 1 \| 1 \| 0 \| 12 \| n\/a \| 8 \| n\/a \| 20 \|/);
 });
 
 test("agent usage summary preserves reported zero token values", () => {
@@ -1211,7 +1215,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| zero-usage-agent \| juror \| 1 \| 1 \| 0 \| 0 \| n\/a \| 0 \| n\/a \| 0 \| \$0\.0000 \|/);
+  assert.match(rendered.stdout, /\| zero-usage-agent \| juror \| 1 \| 1 \| 0 \| 0 \| n\/a \| 0 \| n\/a \| 0 \|/);
 });
 
 test("agent usage summary preserves stored total-only usage over raw zero placeholders", () => {
@@ -1259,7 +1263,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", statePath]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| total-only-usage-agent \| juror \| 1 \| 1 \| 0 \| n\/a \| n\/a \| n\/a \| n\/a \| 20 \| n\/a \|/);
+  assert.match(rendered.stdout, /\| total-only-usage-agent \| juror \| 1 \| 1 \| 0 \| n\/a \| n\/a \| n\/a \| n\/a \| 20 \|/);
 });
 
 test("agent usage summary preserves stored totals over partial raw details", () => {
@@ -1311,7 +1315,7 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", statePath]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| stored-usage-agent \| juror \| 1 \| 1 \| 0 \| 100 \| n\/a \| 50 \| n\/a \| 150 \| \$0\.2000 \|/);
+  assert.match(rendered.stdout, /\| stored-usage-agent \| juror \| 1 \| 1 \| 0 \| 100 \| n\/a \| 50 \| n\/a \| 150 \|/);
 });
 
 test("agent usage summary includes planner and mediator calls", () => {
@@ -1398,8 +1402,8 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| a \| planner, juror, mediator \| 3 \| 3 \| 0 \| 57 \| n\/a \| 3 \| n\/a \| 60 \| \$0\.0060 \|/);
-  assert.match(rendered.stdout, /\| b \| juror \| 1 \| 1 \| 0 \| 19 \| n\/a \| 1 \| n\/a \| 20 \| \$0\.0020 \|/);
+  assert.match(rendered.stdout, /\| a \| planner, juror, mediator \| 3 \| 3 \| 0 \| 57 \| n\/a \| 3 \| n\/a \| 60 \|/);
+  assert.match(rendered.stdout, /\| b \| juror \| 1 \| 1 \| 0 \| 19 \| n\/a \| 1 \| n\/a \| 20 \|/);
 });
 
 test("agent usage summary includes failed planner and mediator attempts", () => {
@@ -1485,8 +1489,8 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| a \| planner, juror, mediator \| 3 \| 1 \| 2 \| 33 \| n\/a \| 3 \| n\/a \| 36 \| \$0\.0036 \|/);
-  assert.match(rendered.stdout, /\| b \| planner, juror, mediator \| 3 \| 3 \| 0 \| 57 \| n\/a \| 3 \| n\/a \| 60 \| \$0\.0060 \|/);
+  assert.match(rendered.stdout, /\| a \| planner, juror, mediator \| 3 \| 1 \| 2 \| 33 \| n\/a \| 3 \| n\/a \| 36 \|/);
+  assert.match(rendered.stdout, /\| b \| planner, juror, mediator \| 3 \| 3 \| 0 \| 57 \| n\/a \| 3 \| n\/a \| 60 \|/);
 });
 
 test("agent usage summary preserves mediator usage before user answer", () => {
@@ -1564,9 +1568,9 @@ console.log(JSON.stringify({
 
   const rendered = run(["status", "--state", statePath]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| a \| juror, mediator \| 4 \| 4 \| 0 \| 76 \| n\/a \| 4 \| n\/a \| 80 \| \$0\.0080 \|/);
-  assert.match(rendered.stdout, /\| b \| juror \| 2 \| 2 \| 0 \| 38 \| n\/a \| 2 \| n\/a \| 40 \| \$0\.0040 \|/);
-  assert.match(rendered.stdout, /\| c \| juror \| 2 \| 2 \| 0 \| 38 \| n\/a \| 2 \| n\/a \| 40 \| \$0\.0040 \|/);
+  assert.match(rendered.stdout, /\| a \| juror, mediator \| 4 \| 4 \| 0 \| 76 \| n\/a \| 4 \| n\/a \| 80 \|/);
+  assert.match(rendered.stdout, /\| b \| juror \| 2 \| 2 \| 0 \| 38 \| n\/a \| 2 \| n\/a \| 40 \|/);
+  assert.match(rendered.stdout, /\| c \| juror \| 2 \| 2 \| 0 \| 38 \| n\/a \| 2 \| n\/a \| 40 \|/);
 });
 
 test("--question seeds only the first focused decision", () => {
@@ -2245,7 +2249,7 @@ process.stdin.on("end", () => {
   assert.equal(state.harnessSessions.juror["codex-app"].contextPrimed, true);
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| codex-app \| juror \| 1 \| 1 \| 0 \| 11 \| 22 \| 33 \| 4 \| 70 \| n\/a \|/);
+  assert.match(rendered.stdout, /\| codex-app \| juror \| 1 \| 1 \| 0 \| 11 \| 22 \| 33 \| 4 \| 70 \|/);
   const log = fs.readFileSync(logPath, "utf8");
   assert.match(log, /argv:--profile jury-profile -c features\.fake=true app-server/);
   assert.match(log, /thread\/start:gpt-5:read-only:never\nturn\/start:thread-1:object:full\nstdin\/end/);
@@ -2425,7 +2429,7 @@ process.stdin.on("data", (chunk) => {
 
   const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| codex-cumulative \| planner, juror \| 5 \| 5 \| 0 \| 50 \| 5 \| 10 \| 15 \| 80 \| n\/a \|/);
+  assert.match(rendered.stdout, /\| codex-cumulative \| planner, juror \| 5 \| 5 \| 0 \| 50 \| 5 \| 10 \| 15 \| 80 \|/);
   const log = fs.readFileSync(logPath, "utf8");
   assert.match(log, /thread\/start:thread-1\nturn\/start:thread-1:full\nthread\/start:thread-2\nturn\/start:thread-2:full/);
   assert.match(log, /turn\/start:thread-1:compact/);
@@ -3103,7 +3107,7 @@ process.stdin.on("data", (chunk) => {
 
   const rendered = run(["status", "--state", statePath]);
   assert.equal(rendered.status, 0, rendered.stderr);
-  assert.match(rendered.stdout, /\| codex-partial \| planner \| 1 \| 1 \| 0 \| n\/a \| n\/a \| n\/a \| n\/a \| 10 \| n\/a \|/);
+  assert.match(rendered.stdout, /\| codex-partial \| planner \| 1 \| 1 \| 0 \| n\/a \| n\/a \| n\/a \| n\/a \| 10 \|/);
   const log = fs.readFileSync(logPath, "utf8");
   assert.match(log, /thread\/resume:old-thread\nturn\/start:old-thread/);
 });
