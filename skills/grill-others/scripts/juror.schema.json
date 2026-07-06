@@ -43,6 +43,7 @@
     },
     "questions_for_other_jurors": {
       "type": "array",
+      "maxItems": 0,
       "items": {
         "type": "object",
         "additionalProperties": false,

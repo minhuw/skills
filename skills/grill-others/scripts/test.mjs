@@ -57,7 +57,7 @@ test("start creates a sequential v1 state and runs until the planner is done", (
   const { statePath, state, decisionSummaries } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "Should we cache results in memory?"]);
   assert.equal(state.version, 1);
   assert.equal(state.mode, "sequential");
-  assert.equal(state.maxGrillQuestions, 200);
+  assert.equal(state.maxGrillQuestions, 100);
   assert.equal(typeof state.grillSessionId, "string");
   assert.equal(statePath, path.join(tmp, ".grill-others", state.grillSessionId, "state.json"));
   assert.equal(state.decisions.length, 1);
@@ -215,21 +215,20 @@ test("start can run a second focused question before finalizing", () => {
   assert.equal(state.final.resolved_decisions, 2);
 });
 
-test("stance disagreement triggers a challenge round inside one decision", () => {
+test("stance disagreement resolves from a single jury round", () => {
   const { state, decisionSummaries } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "disagree-demo: architecture A or B"]);
   const decision = state.decisions[0];
-  assert.equal(decision.rounds.length, 2, "needs-evidence stances must trigger exactly one challenge round");
+  assert.equal(decision.rounds.length, 1);
   assert.ok(decision.final);
   assert.equal(decision.final.consensus, true);
   assert.match(decision.final.recommendation, /reversible/, "the 2-of-3 majority recommendation must win");
   assert.equal(decision.final.unresolved_disagreements.length, 0);
   assert.ok(decisionSummaries[0].roundSummaries[0].divergences.some((entry) => entry.type === "stance-split"));
-  assert.ok(decisionSummaries[0].roundSummaries[1].divergences.some((entry) => entry.type === "recommendation-split"));
 });
 
-test("routed juror questions trigger a challenge round inside one decision", () => {
+test("routed juror questions do not trigger another round", () => {
   const { state } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "route-demo: check the default"]);
-  assert.equal(state.decisions[0].rounds.length, 2);
+  assert.equal(state.decisions[0].rounds.length, 1);
   assert.ok(state.decisions[0].final);
 });
 
@@ -517,18 +516,17 @@ function handle(message) {
   }
   if (message.method === "turn/start") {
     const prompt = message.params.input?.[0]?.text || "";
-    const round = prompt.includes("Current round kind: challenge") ? "challenge" : "initial";
     const mode = prompt.includes("Original user plan or decision:") ? "full" : "compact";
-    fs.appendFileSync(logPath, "turn/start:" + message.params.threadId + ":" + (message.params.outputSchema?.type || "missing") + ":" + mode + ":" + round + "\\n");
+    fs.appendFileSync(logPath, "turn/start:" + message.params.threadId + ":" + (message.params.outputSchema?.type || "missing") + ":" + mode + "\\n");
     write({ id: message.id, result: { turn: turn() } });
     const text = JSON.stringify({
-      stance: round === "challenge" ? "recommend" : "needs-evidence",
-      recommendation: round === "challenge" ? "compact app-server prompt accepted" : "Run a challenge round to test compact app-server prompts.",
+      stance: "recommend",
+      recommendation: "app-server prompt accepted",
       rationale: "The fake app-server received the turn.",
       assumptions: [],
       risks: [],
       repo_findings: [],
-      questions_for_other_jurors: round === "challenge" ? [] : [{ to: "all", question: "Did the second app-server prompt stay compact?", why: "Exercise session-aware context feeding." }],
+      questions_for_other_jurors: [],
       confidence: 0.91
     });
     write({
@@ -591,16 +589,12 @@ process.stdin.on("end", () => {
     { env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, GRILL_TEST_CODEX_APP_LOG: logPath } }
   );
   assert.equal(state.decisions[0].rounds[0].responses["codex-app"].ok, true);
-  assert.equal(state.decisions[0].rounds[1].responses["codex-app"].ok, true);
   assert.equal(state.decisions[0].rounds[0].responses["codex-app"].promptMode, "full");
-  assert.equal(state.decisions[0].rounds[1].responses["codex-app"].promptMode, "compact");
-  assert.ok(state.decisions[0].rounds[1].responses["codex-app"].promptChars < state.decisions[0].rounds[0].responses["codex-app"].promptChars);
   assert.equal(state.harnessSessions.juror["codex-app"].codexThreadId, "thread-1");
   assert.equal(state.harnessSessions.juror["codex-app"].contextPrimed, true);
   const log = fs.readFileSync(logPath, "utf8");
   assert.match(log, /argv:--profile jury-profile -c features\.fake=true app-server/);
-  assert.match(log, /thread\/start:gpt-5:read-only:never\nturn\/start:thread-1:object:full:initial/);
-  assert.match(log, /turn\/start:thread-1:object:compact:challenge\nstdin\/end/);
+  assert.match(log, /thread\/start:gpt-5:read-only:never\nturn\/start:thread-1:object:full\nstdin\/end/);
   assert.doesNotMatch(log, /thread\/resume/);
 });
 
@@ -879,7 +873,6 @@ if (argv[0] !== "app-server") {
   console.error("unexpected codex argv " + JSON.stringify(argv));
   process.exit(2);
 }
-let turnCount = 0;
 function write(message) {
   process.stdout.write(JSON.stringify(message) + "\\n");
 }
@@ -899,21 +892,40 @@ function handle(message) {
     return;
   }
   if (message.method === "turn/start") {
-    turnCount += 1;
     const prompt = message.params.input?.[0]?.text || "";
     const mode = prompt.includes("Original user plan or decision:") ? "full" : "compact";
-    fs.appendFileSync(logPath, "app:" + turnCount + ":" + mode + "\\n");
-    write({ id: message.id, result: { turn: turn("turn-" + turnCount) } });
-    if (turnCount === 1) {
+    const role = prompt.includes("acting as the planner") || prompt.includes("continuing as planner") ? "planner" : "juror";
+    fs.appendFileSync(logPath, "app:" + role + ":" + mode + "\\n");
+    write({ id: message.id, result: { turn: turn("turn-1") } });
+    if (role === "planner") {
       const text = JSON.stringify({
-        stance: "needs-evidence",
-        recommendation: "Run a challenge round before finalizing.",
-        rationale: "The second turn should use compact app-server context first.",
+        done: false,
+        question: "Does compact fallback rebuild full context for the next focused question?",
+        rationale: "The second decision exercises a compact juror turn.",
+        confidence: 0.8
+      });
+      write({
+        method: "item/completed",
+        params: {
+          threadId: message.params.threadId,
+          turnId: "turn-1",
+          item: { type: "agentMessage", id: "item-1", text, phase: null, memoryCitation: null },
+          completedAtMs: Date.now()
+        }
+      });
+      write({ method: "turn/completed", params: { threadId: message.params.threadId, turn: turn("turn-1", "completed") } });
+      return;
+    }
+    if (mode === "full") {
+      const text = JSON.stringify({
+        stance: "recommend",
+        recommendation: "Prime app-server session context.",
+        rationale: "The first decision should prime the persistent juror thread.",
         assumptions: [],
         risks: [],
         repo_findings: [],
-        questions_for_other_jurors: [{ to: "all", question: "Can compact fallback rebuild full context?", why: "Exercise fallback prompting." }],
-        confidence: 0.7
+        questions_for_other_jurors: [],
+        confidence: 0.8
       });
       write({
         method: "item/completed",
@@ -958,7 +970,7 @@ process.stdin.on("data", (chunk) => {
       "--agents",
       "codex-compact-fallback",
       "--max-grill-questions",
-      "1",
+      "2",
       "--question",
       "Does compact fallback rebuild a full prompt?",
       "--prompt",
@@ -966,12 +978,17 @@ process.stdin.on("data", (chunk) => {
     ],
     { env: { PATH: `${bin}${path.delimiter}${process.env.PATH}`, GRILL_TEST_CODEX_COMPACT_FALLBACK_LOG: logPath } }
   );
-  const response = state.decisions[0].rounds[1].responses["codex-compact-fallback"];
+  const response = state.decisions[1].rounds[0].responses["codex-compact-fallback"];
   assert.equal(response.ok, true);
   assert.equal(response.sessionContextAvailable, false);
   assert.equal(response.promptMode, "full");
   assert.equal(response.parsed.recommendation, "exec fallback received full prompt");
-  assert.deepEqual(fs.readFileSync(logPath, "utf8").trim().split("\n"), ["app:1:full", "app:2:compact", "exec:full"]);
+  assert.deepEqual(fs.readFileSync(logPath, "utf8").trim().split("\n"), [
+    "app:juror:full",
+    "app:planner:full",
+    "app:juror:compact",
+    "exec:full"
+  ]);
 });
 
 test("claude harness passes per-instance model to the CLI", () => {
@@ -1050,7 +1067,7 @@ console.log(${JUROR_JSON});
   assert.equal(state.decisions[0].rounds[0].responses["pi-openai"].ok, true);
 });
 
-test("claude and pi harnesses reuse juror session ids across rounds", () => {
+test("claude and pi harnesses reuse juror session ids across focused decisions", () => {
   const bin = fs.mkdtempSync(path.join(tmp, "fake-session-bin-"));
   const logPath = path.join(tmp, "harness-session.log");
   const script = `
@@ -1058,12 +1075,12 @@ const fs = require("node:fs");
 const command = require("node:path").basename(process.argv[1]);
 const argv = process.argv.slice(2);
 const prompt = argv.at(-1) || "";
-const round = prompt.includes("Current round kind: challenge") ? "challenge" : "initial";
 const mode = prompt.includes("Original user plan or decision:") ? "full" : "compact";
-const sessionFlag = command === "claude" && round === "challenge" ? "--resume" : "--session-id";
+const role = prompt.includes("acting as the planner") || prompt.includes("continuing as planner") ? "planner" : "juror";
+const sessionFlag = command === "claude" && mode === "compact" ? "--resume" : "--session-id";
 const wrongSessionFlag = sessionFlag === "--resume" ? "--session-id" : "--resume";
 if (argv.includes(wrongSessionFlag)) {
-  console.error("wrong session flag for " + command + " " + round + ": " + JSON.stringify(argv));
+  console.error("wrong session flag for " + command + " " + role + " " + mode + ": " + JSON.stringify(argv));
   process.exit(2);
 }
 const sessionIndex = argv.indexOf(sessionFlag);
@@ -1071,24 +1088,34 @@ if (sessionIndex === -1 || !argv[sessionIndex + 1]) {
   console.error(JSON.stringify(argv));
   process.exit(3);
 }
-if (round === "initial" && mode !== "full") {
-  console.error("initial prompt should include full context");
+if (role === "planner") {
+  console.log(JSON.stringify({
+    done: false,
+    question: "Does the next focused decision reuse the juror session?",
+    rationale: "The second focused question exercises compact juror prompts.",
+    confidence: 0.8
+  }));
+  process.exit(0);
+}
+const focusedQuestion = /Current focused grill question: ([^\\n]+)/.exec(prompt)?.[1] || "";
+const decision = focusedQuestion.includes("next focused") ? "second" : "first";
+if (decision === "first" && mode !== "full") {
+  console.error("first decision prompt should include full context");
   process.exit(4);
 }
-if (round === "challenge" && mode !== "compact") {
-  console.error("challenge prompt should be compact");
+if (decision === "second" && mode !== "compact") {
+  console.error("second decision prompt should be compact");
   process.exit(5);
 }
-fs.appendFileSync(process.env.GRILL_TEST_SESSION_LOG, command + ":" + sessionFlag + ":" + argv[sessionIndex + 1] + ":" + round + ":" + mode + "\\n");
-const challenge = round === "challenge";
+fs.appendFileSync(process.env.GRILL_TEST_SESSION_LOG, command + ":" + sessionFlag + ":" + argv[sessionIndex + 1] + ":" + role + ":" + mode + "\\n");
 console.log(JSON.stringify({
-  stance: challenge ? "recommend" : "needs-evidence",
-  recommendation: challenge ? "Stable session id was reused." : "Run a challenge round to test session reuse.",
+  stance: "recommend",
+  recommendation: "Stable session id was reused for " + decision + " decision.",
   rationale: "Fake harness session regression.",
   assumptions: [],
   risks: [],
   repo_findings: [],
-  questions_for_other_jurors: challenge ? [] : [{ to: "all", question: "Was the same session reused?", why: "Exercise challenge-round session continuity." }],
+  questions_for_other_jurors: [],
   confidence: 0.8
 }));
 `;
@@ -1109,7 +1136,7 @@ console.log(JSON.stringify({
         "--agents",
         name,
         "--max-grill-questions",
-        "1",
+        "2",
         "--question",
         `Does ${harness} reuse a session id?`,
         "--prompt",
@@ -1125,10 +1152,10 @@ console.log(JSON.stringify({
       .trim()
       .split("\n")
       .filter((line) => line.startsWith(`${harness}:`) && line.includes(sessionId));
-    const challengeFlag = harness === "claude" ? "--resume" : "--session-id";
+    const compactFlag = harness === "claude" ? "--resume" : "--session-id";
     assert.deepEqual(entries, [
-      `${harness}:--session-id:${sessionId}:initial:full`,
-      `${harness}:${challengeFlag}:${sessionId}:challenge:compact`
+      `${harness}:--session-id:${sessionId}:juror:full`,
+      `${harness}:${compactFlag}:${sessionId}:juror:compact`
     ]);
   }
 });
@@ -1396,16 +1423,26 @@ if (promptMode !== actualMode) {
   console.error("promptMode placeholder mismatch: " + promptMode + " vs " + actualMode);
   process.exit(2);
 }
-const challenge = prompt.includes("Current round kind: challenge");
-fs.appendFileSync(process.env.GRILL_TEST_COMMAND_STATELESS_SESSION_LOG, sessionId + ":" + (challenge ? "challenge" : "initial") + ":" + promptMode + "\\n");
+if (prompt.includes("acting as the planner")) {
+  console.log(JSON.stringify({
+    done: false,
+    question: "Does the stateless command stay on full prompts for another focused decision?",
+    rationale: "The next focused question exercises stateless command prompting.",
+    confidence: 0.8
+  }));
+  process.exit(0);
+}
+const focusedQuestion = /Current focused grill question: ([^\\n]+)/.exec(prompt)?.[1] || "";
+const decision = focusedQuestion.includes("another focused") ? "second" : "first";
+fs.appendFileSync(process.env.GRILL_TEST_COMMAND_STATELESS_SESSION_LOG, sessionId + ":" + decision + ":" + promptMode + "\\n");
 console.log(JSON.stringify({
-  stance: challenge ? "recommend" : "needs-evidence",
-  recommendation: challenge ? "Stateless command stayed on full prompts." : "Run a challenge round for the command harness.",
+  stance: "recommend",
+  recommendation: "Stateless command stayed on full prompts.",
   rationale: "Fake command harness stateless session test.",
   assumptions: [],
   risks: [],
   repo_findings: [],
-  questions_for_other_jurors: challenge ? [] : [{ to: "all", question: "Did the command harness stay stateless?", why: "Exercise legacy sessionId behavior." }],
+  questions_for_other_jurors: [],
   confidence: 0.8
 }));
 `
@@ -1433,7 +1470,7 @@ console.log(JSON.stringify({
       "--agents",
       "cmd-stateless",
       "--max-grill-questions",
-      "1",
+      "2",
       "--question",
       "Do legacy command session IDs stay stateless?",
       "--prompt",
@@ -1443,7 +1480,7 @@ console.log(JSON.stringify({
   );
   assert.equal(state.harnessSessions.juror?.["cmd-stateless"], undefined);
   assert.equal(state.decisions[0].rounds[0].responses["cmd-stateless"].promptMode, "full");
-  assert.equal(state.decisions[0].rounds[1].responses["cmd-stateless"].promptMode, "full");
+  assert.equal(state.decisions[1].rounds[0].responses["cmd-stateless"].promptMode, "full");
   const entries = fs.readFileSync(logPath, "utf8").trim().split("\n");
   const first = entries[0].split(":");
   const second = entries[1].split(":");
@@ -1451,8 +1488,8 @@ console.log(JSON.stringify({
   assert.deepEqual(
     entries.map((line) => line.split(":").slice(1)),
     [
-      ["initial", "full"],
-      ["challenge", "full"]
+      ["first", "full"],
+      ["second", "full"]
     ]
   );
 });
@@ -1474,16 +1511,26 @@ if (promptContextVersion !== "1") {
   console.error("unexpected prompt context version: " + promptContextVersion);
   process.exit(3);
 }
-const challenge = prompt.includes("Current round kind: challenge");
-fs.appendFileSync(process.env.GRILL_TEST_COMMAND_SESSION_LOG, sessionId + ":" + (challenge ? "challenge" : "initial") + ":" + promptMode + "\\n");
+if (prompt.includes("acting as the planner") || prompt.includes("continuing as planner")) {
+  console.log(JSON.stringify({
+    done: false,
+    question: "Can command harnesses use compact prompts on the next focused decision?",
+    rationale: "The next focused question exercises command session opt-in.",
+    confidence: 0.8
+  }));
+  process.exit(0);
+}
+const focusedQuestion = /Current focused grill question: ([^\\n]+)/.exec(prompt)?.[1] || "";
+const decision = focusedQuestion.includes("next focused") ? "second" : "first";
+fs.appendFileSync(process.env.GRILL_TEST_COMMAND_SESSION_LOG, sessionId + ":" + decision + ":" + promptMode + "\\n");
 console.log(JSON.stringify({
-  stance: challenge ? "recommend" : "needs-evidence",
-  recommendation: challenge ? "Command compact prompt accepted." : "Run a challenge round for the command harness.",
+  stance: "recommend",
+  recommendation: "Command compact prompt accepted.",
   rationale: "Fake command harness compact prompt test.",
   assumptions: [],
   risks: [],
   repo_findings: [],
-  questions_for_other_jurors: challenge ? [] : [{ to: "all", question: "Did the command harness receive a compact prompt?", why: "Exercise command session opt-in." }],
+  questions_for_other_jurors: [],
   confidence: 0.8
 }));
 `
@@ -1512,7 +1559,7 @@ console.log(JSON.stringify({
       "--agents",
       "cmd-session",
       "--max-grill-questions",
-      "1",
+      "2",
       "--question",
       "Can command harnesses use compact prompts?",
       "--prompt",
@@ -1523,10 +1570,10 @@ console.log(JSON.stringify({
   const sessionId = state.harnessSessions.juror["cmd-session"].sessionId;
   assert.equal(state.harnessSessions.juror["cmd-session"].contextPrimed, true);
   assert.equal(state.decisions[0].rounds[0].responses["cmd-session"].promptMode, "full");
-  assert.equal(state.decisions[0].rounds[1].responses["cmd-session"].promptMode, "compact");
+  assert.equal(state.decisions[1].rounds[0].responses["cmd-session"].promptMode, "compact");
   assert.deepEqual(
     fs.readFileSync(logPath, "utf8").trim().split("\n"),
-    [`${sessionId}:initial:full`, `${sessionId}:challenge:compact`]
+    [`${sessionId}:first:full`, `${sessionId}:second:compact`]
   );
 });
 
@@ -1798,29 +1845,14 @@ if (!fs.existsSync(markerPath)) {
   console.error("transient harness failure");
   process.exit(2);
 }
-if (prompt.includes("Current round kind: challenge")) {
-  console.log(JSON.stringify({
-    stance: "recommend",
-    recommendation: "Retry challenge round ran after harness recovery.",
-    rationale: "The failed infrastructure round did not consume the deliberation budget.",
-    assumptions: [],
-    risks: [],
-    repo_findings: [],
-    questions_for_other_jurors: [],
-    confidence: 0.8
-  }));
-  process.exit(0);
-}
 console.log(JSON.stringify({
-  stance: "needs-evidence",
+  stance: "recommend",
   recommendation: "Retry the same focused question after harness recovery.",
-  rationale: "The retry should still have budget for a challenge round.",
+  rationale: "The retry should resolve after one successful jury pass.",
   assumptions: [],
   risks: [],
   repo_findings: [],
-  questions_for_other_jurors: [
-    { to: "all", question: "Did the failed round consume budget?", why: "Exercise retry round counting." }
-  ],
+  questions_for_other_jurors: [],
   confidence: 0.8
 }));
 `
@@ -1846,8 +1878,8 @@ console.log(JSON.stringify({
   const continued = runJson(["continue", "--state", started.statePath]);
   assert.equal(continued.state.decisions.length, 1);
   assert.equal(continued.state.decisions[0].status, "resolved");
-  assert.equal(continued.state.decisions[0].rounds.length, 3);
-  assert.equal(continued.state.decisions[0].rounds[2].kind, "challenge");
+  assert.equal(continued.state.decisions[0].rounds.length, 2);
+  assert.equal(continued.state.decisions[0].rounds[1].kind, "initial");
   assert.equal(continued.state.decisions[0].final.all_jurors_failed, false);
   assert.ok(continued.state.final);
   assert.equal(continued.state.final.resolved_decisions, 1);
@@ -1958,7 +1990,7 @@ test("old all-failed resolved decisions are reopened as failed", () => {
   assert.deepEqual(state.harnessSessions, {});
 });
 
-test("failed juror diagnostics are bounded before challenge rounds", () => {
+test("failed juror diagnostics are bounded in the stored round", () => {
   const commandPath = writeFakeCommand(
     tmp,
     "noisy-agent.js",
@@ -1977,7 +2009,7 @@ if (prompt.includes("acting as the planner")) {
 if (prompt.includes("acting as the mediator")) {
   console.log(JSON.stringify({
     recommendation: "Use the bounded diagnostic response.",
-    rationale: "The challenge round stayed small enough to run.",
+    rationale: "The failed juror diagnostics stayed bounded in stored state.",
     consensus: true,
     requires_user: false,
     unresolved_disagreements: [],
@@ -1986,37 +2018,18 @@ if (prompt.includes("acting as the mediator")) {
   process.exit(0);
 }
 const agent = /Your juror id is ([^\\n.]+)/.exec(prompt)?.[1] || "unknown";
-if (prompt.includes("Current round kind: challenge")) {
-  if (prompt.length > 30000) {
-    console.error("challenge prompt too large: " + prompt.length);
-    process.exit(3);
-  }
-  console.log(JSON.stringify({
-    stance: "recommend",
-    recommendation: "Challenge prompt was bounded for " + agent,
-    rationale: "The prior failed stderr did not flood this prompt.",
-    assumptions: [],
-    risks: [],
-    repo_findings: [],
-    questions_for_other_jurors: [],
-    confidence: 0.8
-  }));
-  process.exit(0);
-}
 if (agent === "noisy") {
   console.error("x".repeat(100000));
   process.exit(2);
 }
 console.log(JSON.stringify({
-  stance: "needs-evidence",
-  recommendation: "Run a challenge round after a noisy juror failure.",
-  rationale: "This exercises failed-juror disagreement prompt construction.",
+  stance: "recommend",
+  recommendation: "Use the bounded diagnostic response.",
+  rationale: "This exercises failed-juror diagnostic truncation.",
   assumptions: [],
   risks: [],
   repo_findings: [],
-  questions_for_other_jurors: [
-    { to: "all", question: "Can the challenge prompt stay bounded?", why: "Guard against E2BIG regressions." }
-  ],
+  questions_for_other_jurors: [],
   confidence: 0.7
 }));
 `
@@ -2045,12 +2058,12 @@ console.log(JSON.stringify({
     "bounded diagnostics"
   ]);
   const decision = state.decisions[0];
-  assert.equal(decision.rounds.length, 2);
+  assert.equal(decision.rounds.length, 1);
   assert.equal(decision.rounds[0].responses.noisy.ok, false);
   assert.ok(decision.rounds[0].responses.noisy.stderr.length <= 20000);
   assert.ok(decision.rounds[0].responses.noisy.error.length <= 2000);
-  assert.equal(decision.rounds[1].responses.noisy.ok, true);
-  assert.equal(typeof decision.rounds[1].responses.noisy.durationMs, "number");
+  assert.equal(decision.rounds[0].responses.asker.ok, true);
+  assert.equal(typeof decision.rounds[0].responses.asker.durationMs, "number");
 });
 
 test("status summaries expose stale prior juror context for old v2 states", () => {
@@ -2124,6 +2137,12 @@ test("unknown options are rejected", () => {
   const result = run(["start", "--mock", "--bogus", "x", "--prompt", "hi"]);
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Unknown option --bogus/);
+});
+
+test("--rounds is rejected", () => {
+  const result = run(["start", "--mock", "--rounds", "2", "--prompt", "hi"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Unknown option --rounds/);
 });
 
 test("non-numeric --max-grill-questions is rejected", () => {

@@ -7,7 +7,7 @@ description: Run a multi-agent design jury before implementation. Use when the e
 
 Use this skill to replace a direct user grilling session with a sequential jury of other coding agents. The executor is whichever agent harness invoked this skill.
 
-The default jury is `codex,claude,pi`. A planner chooses one focused grill question at a time. Each juror answers that one question in the current repository with read-oriented tools and returns structured evidence, recommendations, risks, and questions for other jurors. Jurors do not ask the user new questions. A mediator summarizes the jurors' answers; if there is a clear consensus or majority answer, the run records that answer and automatically continues to the next focused question. If the jury cannot resolve the focused question, the script asks the user that original focused question once, with the participant positions attached. When all focused questions are resolved, the sequential run produces a final recommendation from the resolved decisions.
+The default jury is `codex,claude,pi`. A planner chooses one focused grill question at a time. Each juror answers that one question once in the current repository with read-oriented tools and returns structured evidence, recommendations, and risks. Jurors do not ask the user new questions or run follow-up rounds with other jurors. A mediator summarizes the jurors' answers; if there is a clear consensus or majority answer, the run records that answer and automatically continues to the next focused question. If the jury cannot resolve the focused question, the script asks the user that original focused question once, with the participant positions attached. When all focused questions are resolved, the sequential run produces a final recommendation from the resolved decisions.
 
 ## Workflow
 
@@ -44,9 +44,8 @@ If the output says `Jury Run Failed`, fix harness availability, credentials, net
 
 - `--agents codex,pi` — limit jurors for a run.
 - `--question TEXT` — seed the first focused grill question instead of asking the planner to choose it.
-- `--rounds N` — max jury rounds per focused question (default 2). A new phase starts after each user answer inside the active focused question, so jurors can deliberate again on the answer.
 - `--max-user-questions N` — max times the whole sequential run may pause to ask the user when the jury cannot resolve a focused question (default 3; 0 disables asking).
-- `--max-grill-questions N` — max focused grill questions per run (default 200).
+- `--max-grill-questions N` — max focused grill questions per run (default 100). Do not pass a smaller cap unless the user explicitly asks for a short run.
 - `--timeout-ms MS` — per-juror timeout (default 600000).
 - `--json` — machine-readable output (`{ statePath, state, decisionSummaries }` for sequential states; old v2 states still use `roundSummaries` on `status`).
 - `--mock` (or `GRILL_OTHERS_MOCK=1`) — deterministic canned jurors for testing; output is prominently marked `MOCK RUN`.
@@ -55,6 +54,7 @@ If the output says `Jury Run Failed`, fix harness availability, credentials, net
 
 - Do not implement the plan while the jury has pending user questions or while the sequential run has not produced `Final Recommendation`.
 - Let `start`, `continue`, and `answer` run automatically through resolved focused questions until the grill is finished or a user answer is required.
+- Let the default focused-question cap stand unless the user explicitly asks for a shorter run. Avoid small caps such as 5 or 8; the planner decides when the grill is complete.
 - Treat `Jury Run Failed` as an infrastructure stop, not a design recommendation. Fix the harness issue and use `continue` to retry the active focused question.
 - Prefer the jury's final recommendation unless the user explicitly overrides a user-owned preference.
 - Treat user questions as expensive. Jurors must answer the focused question rather than inventing new user questions; ask the user only when the output says `Questions For User`.
@@ -152,7 +152,7 @@ New runs write `version: 1` sequential state:
   "mode": "sequential",
   "grillSessionId": "2026-07-05T10-00-00-000Z-1234abcd",
   "activeDecisionIndex": 0,
-  "maxGrillQuestions": 200,
+  "maxGrillQuestions": 100,
   "decisions": [
     {
       "id": "d1",
