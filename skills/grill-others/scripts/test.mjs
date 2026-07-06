@@ -123,8 +123,6 @@ console.log(JSON.stringify({
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "usage-agent",
     "--max-grill-questions",
     "1",
     "--question",
@@ -177,8 +175,6 @@ console.log(JSON.stringify({
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "zero-usage-agent",
     "--max-grill-questions",
     "1",
     "--question",
@@ -260,8 +256,6 @@ console.log(JSON.stringify({
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "a,b",
     "--max-grill-questions",
     "1",
     "--prompt",
@@ -355,8 +349,6 @@ console.log(JSON.stringify({
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "a,b",
     "--max-grill-questions",
     "1",
     "--prompt",
@@ -431,8 +423,6 @@ console.log(JSON.stringify({
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "a,b,c",
     "--question",
     "Which option should ship?",
     "--max-grill-questions",
@@ -485,7 +475,8 @@ test("unresolved jury answers pause the active decision and answer resumes that 
   assert.equal(decision.pendingUserQuestions.length, 1, "the original focused question should be escalated once");
   assert.equal(decision.pendingUserQuestions[0].recommended_default, "");
   assert.equal(decision.pendingUserQuestions[0].opinions.length, 3);
-  const answered = runJson(["answer", "--mock", "--state", statePath, "--answer", "blue"]);
+  const answered = runJson(["answer", "--state", statePath, "--answer", "blue", "--timeout-ms", "1"]);
+  assert.equal(answered.state.mock, true);
   assert.equal(answered.state.decisions[0].status, "resolved");
   assert.equal(answered.state.decisions[0].userAnswers.length, 1);
   assert.equal(answered.state.decisions[0].userAnswers[0].questions.length, 1);
@@ -541,8 +532,6 @@ console.log(JSON.stringify({
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "a,b,c",
     "--question",
     "Which option should ship?",
     "--prompt",
@@ -603,7 +592,15 @@ test("routed juror questions do not trigger another round", () => {
 
 test("answer reuses custom agents persisted in sequential state", () => {
   const configPath = path.join(tmp, "agents.json");
-  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "example", command: "example-agent", args: ["{{prompt}}"] }] }));
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      agents: [
+        { name: "codex", harness: "codex" },
+        { name: "example", command: "example-agent", args: ["{{prompt}}"] }
+      ]
+    })
+  );
   const { statePath, state } = runJson([
     "start",
     "--mock",
@@ -611,8 +608,6 @@ test("answer reuses custom agents persisted in sequential state", () => {
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "codex,example",
     "--prompt",
     "no-majority-demo: choose"
   ]);
@@ -679,8 +674,6 @@ console.log(JSON.stringify({
       tmp,
       "--agent-config",
       firstConfig,
-      "--agents",
-      "a,b,c",
       "--max-grill-questions",
       "1",
       "--question",
@@ -701,8 +694,6 @@ console.log(JSON.stringify({
       statePath,
       "--agent-config",
       secondConfig,
-      "--agents",
-      "a,b,c",
       "--answer",
       "Use option B"
     ],
@@ -731,8 +722,6 @@ test("agent config supports multiple instances of one built-in harness", () => {
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "codex-gpt5,codex-o3",
     "--question",
     "Which configured model variant should review this?",
     "--prompt",
@@ -750,6 +739,39 @@ test("agent config supports multiple instances of one built-in harness", () => {
     decisionSummaries[0].roundSummaries[0].participants.map((participant) => participant.agent).sort(),
     ["codex-gpt5", "codex-o3"]
   );
+});
+
+test("real starts require an explicit agent config", () => {
+  const result = run(["start", "--cwd", tmp, "--prompt", "hi"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /require --agent-config/);
+  assert.match(result.stderr, /explicit/);
+});
+
+test("missing agent config paths stop before launching a jury", () => {
+  const result = run(["start", "--cwd", tmp, "--agent-config", "missing-agents.json", "--prompt", "hi"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Agent config not found/);
+  assert.match(result.stderr, /does not use an implicit default jury/);
+});
+
+test("--agents is rejected because the config file is the roster", () => {
+  const configPath = path.join(tmp, "single-configured-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "foo", command: "foo-agent" }] }));
+  const result = run([
+    "start",
+    "--mock",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--agents",
+    "foo",
+    "--prompt",
+    "hi"
+  ]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Unknown option --agents/);
 });
 
 test("duplicate agent names are rejected case-insensitively", () => {
@@ -770,8 +792,6 @@ test("duplicate agent names are rejected case-insensitively", () => {
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "codex-gpt5",
     "--prompt",
     "hi"
   ]);
@@ -803,8 +823,6 @@ console.log(${JUROR_JSON});
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      "codex-gpt5",
       "--question",
       "Does the Codex model flag propagate?",
       "--prompt",
@@ -946,8 +964,6 @@ process.stdin.on("end", () => {
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      "codex-app",
       "--max-grill-questions",
       "1",
       "--question",
@@ -1059,8 +1075,6 @@ process.stdin.on("data", (chunk) => {
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      "codex-request",
       "--max-grill-questions",
       "1",
       "--timeout-ms",
@@ -1143,8 +1157,6 @@ process.stdin.on("data", (chunk) => {
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      "codex-exit",
       "--max-grill-questions",
       "1",
       "--timeout-ms",
@@ -1189,8 +1201,6 @@ setInterval(() => {}, 1000);
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      "codex-timeout",
       "--max-grill-questions",
       "1",
       "--timeout-ms",
@@ -1336,8 +1346,6 @@ process.stdin.on("data", (chunk) => {
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      "codex-compact-fallback",
       "--max-grill-questions",
       "2",
       "--question",
@@ -1384,8 +1392,6 @@ console.log(${JUROR_JSON});
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      "claude-sonnet",
       "--question",
       "Does the Claude model flag propagate?",
       "--prompt",
@@ -1424,8 +1430,6 @@ console.log(${JUROR_JSON});
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      "pi-openai",
       "--question",
       "Does the Pi model flag propagate?",
       "--prompt",
@@ -1502,8 +1506,6 @@ console.log(JSON.stringify({
         tmp,
         "--agent-config",
         configPath,
-        "--agents",
-        name,
         "--max-grill-questions",
         "2",
         "--question",
@@ -1585,8 +1587,6 @@ console.log(JSON.stringify({
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      "claude-retry",
       "--question",
       "Can Claude retry after a full-turn failure?",
       "--prompt",
@@ -1626,8 +1626,6 @@ test("claude and pi configs cannot disable built-in session persistence", () => 
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      name,
       "--question",
       `Does ${harness} reject disabled persistence?`,
       "--prompt",
@@ -1711,8 +1709,6 @@ console.log(JSON.stringify({
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      "a,b",
       "--max-grill-questions",
       "3",
       "--prompt",
@@ -1768,8 +1764,6 @@ console.log(${JUROR_JSON});
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "cmd-model",
     "--question",
     "Do command placeholders propagate?",
     "--prompt",
@@ -1836,8 +1830,6 @@ console.log(JSON.stringify({
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      "cmd-stateless",
       "--max-grill-questions",
       "2",
       "--question",
@@ -1925,8 +1917,6 @@ console.log(JSON.stringify({
       tmp,
       "--agent-config",
       configPath,
-      "--agents",
-      "cmd-session",
       "--max-grill-questions",
       "2",
       "--question",
@@ -2024,8 +2014,6 @@ console.log(JSON.stringify({
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "a,b,c",
     "--question",
     "Which split recommendation should win?",
     "--prompt",
@@ -2090,8 +2078,6 @@ console.log(JSON.stringify({
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "a,b,c",
     "--question",
     "Which actionable split should win?",
     "--prompt",
@@ -2151,8 +2137,6 @@ console.log(JSON.stringify({
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "a,b,c",
     "--question",
     "Which long-prefix recommendation is correct?",
     "--prompt",
@@ -2176,8 +2160,6 @@ test("round summaries include failed jurors inside sequential decisions", () => 
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "bad",
     "--timeout-ms",
     "1000",
     "--prompt",
@@ -2234,8 +2216,6 @@ console.log(JSON.stringify({
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "flaky",
     "--question",
     "Can a failed decision be retried?",
     "--prompt",
@@ -2419,8 +2399,6 @@ console.log(JSON.stringify({
     tmp,
     "--agent-config",
     configPath,
-    "--agents",
-    "asker,noisy",
     "--question",
     "Can diagnostics stay bounded?",
     "--prompt",

@@ -50,7 +50,6 @@ const KNOWN_OPTIONS = new Set([
   "prompt",
   "prompt-file",
   "state",
-  "agents",
   "agent-config",
   "max-user-questions",
   "max-grill-questions",
@@ -65,13 +64,14 @@ const KNOWN_OPTIONS = new Set([
 function usage() {
   return [
     "Usage:",
-    "  grill-others.mjs start [--cwd DIR] [--prompt TEXT|--prompt-file FILE] [--state FILE] [--question TEXT] [--agents codex,claude,pi] [--agent-config FILE] [--max-user-questions N] [--max-grill-questions N] [--timeout-ms MS] [--json] [--mock]",
+    "  grill-others.mjs start --agent-config FILE [--cwd DIR] [--prompt TEXT|--prompt-file FILE] [--state FILE] [--question TEXT] [--max-user-questions N] [--max-grill-questions N] [--timeout-ms MS] [--json] [--mock]",
     "  grill-others.mjs continue --state FILE [--max-user-questions N] [--max-grill-questions N] [--timeout-ms MS] [--json] [--mock]",
     "  grill-others.mjs answer --state FILE --answer TEXT [--max-user-questions N] [--timeout-ms MS] [--json] [--mock]",
     "  grill-others.mjs status --state FILE [--json]",
     "",
     "Notes:",
     "  New runs are sequential: start/continue/answer run focused questions until the grill finishes or needs the user.",
+    "  Real start runs require --agent-config so the jury roster and harness costs are explicit; --mock is exempt.",
     "  --max-user-questions caps how many times the whole run may pause when the jury cannot resolve a focused question (default 3; 0 disables asking).",
     "  --max-grill-questions caps focused questions per run (default 100).",
     "",
@@ -116,6 +116,16 @@ function parseCount(value, name, fallback, minimum) {
     throw new Error(`${name} must be an integer >= ${minimum}.`);
   }
   return parsed;
+}
+
+function isMockRequested(options) {
+  return Boolean(options.mock || process.env.GRILL_OTHERS_MOCK === "1");
+}
+
+function inheritMockMode(options, state) {
+  if (state?.mock) {
+    options.mock = true;
+  }
 }
 
 function readPrompt(cwd, options) {
@@ -276,16 +286,6 @@ function harnessSessionFor(state, role, agent) {
   return session;
 }
 
-function normalizeAgentList(value) {
-  if (!value) {
-    return DEFAULT_AGENTS;
-  }
-  return String(value)
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 function isPlainObject(value) {
   return value != null && typeof value === "object" && !Array.isArray(value);
 }
@@ -407,34 +407,36 @@ function assertUniqueAgentNames(agents, source) {
 
 function readAgentConfig(cwd, options) {
   if (!options["agent-config"]) {
-    return {};
+    return { agents: {}, names: [], configPath: null };
   }
   const configPath = path.resolve(cwd, options["agent-config"]);
+  if (!fs.existsSync(configPath)) {
+    throw new Error(
+      `Agent config not found: ${configPath}. Write an agent config file and pass it with --agent-config; grill-others does not use an implicit default jury for real runs.`
+    );
+  }
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   const agents = {};
   const normalized = normalizeAgentSpecs(config.agents ?? [], configPath);
+  if (normalized.length === 0) {
+    throw new Error(`Agent config ${configPath} does not define any agents.`);
+  }
   for (const agent of normalized) {
     agents[agent.name] = agent;
   }
-  return agents;
+  return { agents, names: normalized.map((agent) => agent.name), configPath };
 }
 
 function buildAgentSpecs(cwd, options, knownAgents = []) {
-  const catalog = { ...BUILTIN_AGENT_SPECS };
-  for (const agent of knownAgents) {
-    const spec = normalizeAgentSpec(agent, "persisted state");
-    catalog[spec.name] = spec;
+  const configured = readAgentConfig(cwd, options);
+  const known = normalizeAgentSpecs(knownAgents, "persisted state");
+  if (configured.names.length > 0) {
+    return configured.names.map((name) => ({ ...configured.agents[name] }));
   }
-  Object.assign(catalog, readAgentConfig(cwd, options));
-  const selected = normalizeAgentList(options.agents).map((name) => {
-    const spec = catalog[name];
-    if (!spec) {
-      throw new Error(`Unknown agent "${name}". Define it with --agent-config.`);
-    }
-    return { ...spec };
-  });
-  assertUniqueAgentNames(selected, "--agents");
-  return selected;
+  if (known.length > 0) {
+    return known.map((agent) => ({ ...agent }));
+  }
+  return DEFAULT_AGENTS.map((name) => ({ ...BUILTIN_AGENT_SPECS[name] }));
 }
 
 function truncate(value, max) {
@@ -3398,6 +3400,11 @@ function shellQuote(value) {
 
 async function handleStart(options) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
+  if (!isMockRequested(options) && !options["agent-config"]) {
+    throw new Error(
+      "Real grill-others runs require --agent-config so the jury roster and harness costs are explicit. Write an agent config file and pass it with --agent-config, or use --mock for a test fixture."
+    );
+  }
   const { statePath, grillSessionId } = ensureStatePath(cwd, options.state);
   const prompt = readPrompt(cwd, options);
   const state = {
@@ -3434,7 +3441,7 @@ async function handleFlatAnswer(options, statePath, state) {
     state.maxUserQuestions ?? DEFAULT_MAX_USER_QUESTIONS,
     0
   );
-  if (options.agents || options["agent-config"]) {
+  if (options["agent-config"]) {
     state.agents = buildAgentSpecs(state.cwd, options, state.agents);
     resetHarnessSessions(state);
   }
@@ -3480,7 +3487,8 @@ async function handleAnswer(options) {
   }
   const statePath = path.resolve(options.state);
   const state = loadState(statePath);
-  if (options.agents || options["agent-config"]) {
+  inheritMockMode(options, state);
+  if (options["agent-config"]) {
     state.agents = buildAgentSpecs(state.cwd, options, state.agents);
     resetHarnessSessions(state);
   }
@@ -3496,6 +3504,7 @@ async function handleContinue(options) {
   }
   const statePath = path.resolve(options.state);
   const state = loadState(statePath);
+  inheritMockMode(options, state);
   if (!isSequentialState(state)) {
     throw new Error("continue only supports sequential state files.");
   }
