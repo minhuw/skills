@@ -11,8 +11,10 @@ const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "grill-ot
 let failures = 0;
 
 function run(args, { input, env: extraEnv } = {}) {
-  const env = { ...process.env, ...(extraEnv ?? {}) };
+  const env = { ...process.env };
   delete env.GRILL_OTHERS_MOCK;
+  delete env.GRILL_OTHERS_AGENT_CONFIG;
+  Object.assign(env, extraEnv ?? {});
   return spawnSync("node", [SCRIPT, ...args], { input, encoding: "utf8", env });
 }
 
@@ -67,6 +69,14 @@ test("start creates a sequential v1 state and runs until the planner is done", (
   assert.equal(decisionSummaries.length, 1);
   assert.equal(decisionSummaries[0].roundSummaries[0].stance_counts.recommend, 3);
   assert.equal(decisionSummaries[0].roundSummaries[0].participants.length, 3);
+});
+
+test("mock starts ignore stale agent config environment", () => {
+  const { state } = runJson(["start", "--mock", "--cwd", tmp, "--prompt", "Should mock ignore stale env config?"], {
+    env: { GRILL_OTHERS_AGENT_CONFIG: path.join(tmp, "missing-env-config.json") }
+  });
+  assert.equal(state.mock, true);
+  assert.deepEqual(state.agents.map((agent) => agent.name), ["codex", "claude", "pi"]);
 });
 
 test("separate starts use separate grill session directories", () => {
@@ -741,11 +751,102 @@ test("agent config supports multiple instances of one built-in harness", () => {
   );
 });
 
-test("real starts require an explicit agent config", () => {
-  const result = run(["start", "--cwd", tmp, "--prompt", "hi"]);
+test("real starts fail when no agent config can be discovered", () => {
+  const result = run(["start", "--cwd", tmp, "--prompt", "hi"], {
+    env: {
+      HOME: path.join(tmp, "missing-home"),
+      XDG_CONFIG_HOME: path.join(tmp, "missing-xdg")
+    }
+  });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /require --agent-config/);
-  assert.match(result.stderr, /explicit/);
+  assert.match(result.stderr, /Agent config not found/);
+  assert.match(result.stderr, /Checked:/);
+  assert.match(result.stderr, /GRILL_OTHERS_AGENT_CONFIG/);
+});
+
+test("real starts discover agent config from GRILL_OTHERS_AGENT_CONFIG", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "env-config-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use the env config roster.",
+  rationale: "The fake harness was loaded from GRILL_OTHERS_AGENT_CONFIG.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9
+}));
+`
+  );
+  const configPath = path.join(tmp, "env-agents.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "env-agent", command: commandPath }] }));
+  const { state } = runJson(
+    [
+      "start",
+      "--cwd",
+      tmp,
+      "--max-grill-questions",
+      "1",
+      "--question",
+      "Does env config discovery work?",
+      "--prompt",
+      "hi"
+    ],
+    {
+      env: {
+        GRILL_OTHERS_AGENT_CONFIG: configPath,
+        HOME: path.join(tmp, "env-home"),
+        XDG_CONFIG_HOME: path.join(tmp, "env-xdg")
+      }
+    }
+  );
+  assert.deepEqual(state.agents.map((agent) => agent.name), ["env-agent"]);
+});
+
+test("real starts discover the home agent config", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "home-config-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use the home config roster.",
+  rationale: "The fake harness was loaded from ~/.config/grill-others/agents.json.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9
+}));
+`
+  );
+  const home = path.join(tmp, "home-with-config");
+  const configPath = path.join(home, ".config", "grill-others", "agents.json");
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "home-agent", command: commandPath }] }));
+  const { state } = runJson(
+    [
+      "start",
+      "--cwd",
+      tmp,
+      "--max-grill-questions",
+      "1",
+      "--question",
+      "Does home config discovery work?",
+      "--prompt",
+      "hi"
+    ],
+    {
+      env: {
+        HOME: home,
+        XDG_CONFIG_HOME: path.join(tmp, "home-test-missing-xdg")
+      }
+    }
+  );
+  assert.deepEqual(state.agents.map((agent) => agent.name), ["home-agent"]);
 });
 
 test("missing agent config paths stop before launching a jury", () => {

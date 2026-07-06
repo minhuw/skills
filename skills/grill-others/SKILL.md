@@ -7,31 +7,33 @@ description: Run a multi-agent design jury before implementation. Use when the e
 
 Use this skill to replace a direct user grilling session with a sequential jury of explicitly configured coding agents. The executor is whichever agent harness invoked this skill.
 
-There is no implicit real-run jury. A real run requires an agent configuration file so the selected harnesses, models, and likely costs are explicit. If you cannot find or create the configuration file, do not start the grill; tell the user that `grill-others` needs an explicit agent config. A planner chooses one focused grill question at a time. Each juror answers that one question once in the current repository with read-oriented tools and returns structured evidence, recommendations, and risks. Jurors do not ask the user new questions or run follow-up rounds with other jurors. A mediator summarizes the jurors' answers; if there is a clear consensus or majority answer, the run records that answer and automatically continues to the next focused question. If the jury cannot resolve the focused question, the script asks the user that original focused question once, with the participant positions attached. When all focused questions are resolved, the sequential run produces a final recommendation from the resolved decisions.
+There is no implicit real-run jury. A real run requires an agent configuration file so the selected harnesses, models, and likely costs are explicit. The script discovers that config from `--agent-config`, `GRILL_OTHERS_AGENT_CONFIG`, `$XDG_CONFIG_HOME/grill-others/agents.json`, or `~/.config/grill-others/agents.json`. If the script cannot find or parse a valid config, do not invent a roster; notify the user with the script's error and ask them to create or point to a config file. A planner chooses one focused grill question at a time. Each juror answers that one question once in the current repository with read-oriented tools and returns structured evidence, recommendations, and risks. Jurors do not ask the user new questions or run follow-up rounds with other jurors. A mediator summarizes the jurors' answers; if there is a clear consensus or majority answer, the run records that answer and automatically continues to the next focused question. If the jury cannot resolve the focused question, the script asks the user that original focused question once, with the participant positions attached. When all focused questions are resolved, the sequential run produces a final recommendation from the resolved decisions.
 
 ## Workflow
 
-1. Locate the agent configuration file for this run. If none is available, stop and ask the user to provide one rather than falling back to a built-in jury.
-2. Write the user's plan, design question, or unresolved decision into a temporary prompt file.
-3. Run:
+1. Write the user's plan, design question, or unresolved decision into a temporary prompt file.
+2. Run:
 
 ```bash
-node /path/to/this/skill/scripts/grill-others.mjs start --cwd "$PWD" --agent-config /path/to/agents.json --prompt-file /path/to/prompt.txt
+node /path/to/this/skill/scripts/grill-others.mjs start --cwd "$PWD" --prompt-file /path/to/prompt.txt
 ```
 
 Resolve `/path/to/this/skill` to the directory containing this `SKILL.md`.
 
-4. Read the output:
+Use `--agent-config /path/to/agents.json` only when the user or repo provides a run-specific config. Otherwise let the script discover the user config from the standard paths.
+
+3. Read the output:
    - If `Questions For User` is present, relay the focused question to the user with the juror positions and any recommended default.
    - If `Final Recommendation` is present, use it as the pre-implementation decision record. The final output also includes `Agent Usage Summary`.
+   - If the script reports `Agent config not found` or an invalid config, notify the user and ask them to create or point to a config file.
    - If the output is marked `MOCK RUN`, it is a test fixture; never use it as design guidance.
-5. After the user answers, run (one combined answer covering all asked questions):
+4. After the user answers, run (one combined answer covering all asked questions):
 
 ```bash
 node /path/to/this/skill/scripts/grill-others.mjs answer --state /path/from/prior/output.json --answer "the user's answer"
 ```
 
-6. If a run was interrupted or an older state has resolved decisions but no final recommendation, continue the run:
+5. If a run was interrupted or an older state has resolved decisions but no final recommendation, continue the run:
 
 ```bash
 node /path/to/this/skill/scripts/grill-others.mjs continue --state /path/from/prior/output.json
@@ -39,11 +41,11 @@ node /path/to/this/skill/scripts/grill-others.mjs continue --state /path/from/pr
 
 If the output says `Jury Run Failed`, fix harness availability, credentials, network, or CLI flags first, then run the same `continue` command. The failed focused question is retried in place; it is not counted as a resolved design decision.
 
-7. Repeat `answer` only when the script asks `Questions For User`. The run pauses for the user at most `--max-user-questions` times across the whole sequential run (default 3); unresolved focused questions beyond that budget appear under `Open user questions` in the decision result or final output. Surface those to the user alongside the recommendation.
+6. Repeat `answer` only when the script asks `Questions For User`. The run pauses for the user at most `--max-user-questions` times across the whole sequential run (default 3); unresolved focused questions beyond that budget appear under `Open user questions` in the decision result or final output. Surface those to the user alongside the recommendation.
 
 ## Options
 
-- `--agent-config FILE` — required for real `start` runs; defines the complete explicit jury roster and harness settings. All agents in the config file run in file order.
+- `--agent-config FILE` — optional override for a run-specific config. Without it, the script checks `GRILL_OTHERS_AGENT_CONFIG`, `$XDG_CONFIG_HOME/grill-others/agents.json`, then `~/.config/grill-others/agents.json`.
 - `--question TEXT` — seed the first focused grill question instead of asking the planner to choose it.
 - `--max-user-questions N` — max times the whole sequential run may pause to ask the user when the jury cannot resolve a focused question (default 3; 0 disables asking).
 - `--max-grill-questions N` — max focused grill questions per run (default 100). Do not pass a smaller cap unless the user explicitly asks for a short run.
@@ -54,7 +56,7 @@ If the output says `Jury Run Failed`, fix harness availability, credentials, net
 ## Operating Rules
 
 - Do not implement the plan while the jury has pending user questions or while the sequential run has not produced `Final Recommendation`.
-- Do not start a real grill without an explicit agent config. Missing config is a user-visible stop, not a reason to fall back to `codex,claude,pi` or any other implicit roster.
+- Do not fall back to `codex,claude,pi` or any other implicit roster. If the script cannot discover a valid config, surface that error to the user.
 - Let `start`, `continue`, and `answer` run automatically through resolved focused questions until the grill is finished or a user answer is required.
 - Keep user-facing progress quiet. Do not repeatedly paste the launch command, prompt file contents, process listings, or generic polling messages. The script streams `Live Jury Q&A` blocks as focused questions resolve; relay only those newly resolved questions and juror answers during a long run.
 - At completion, relay the final recommendation plus the script's `Agent Usage Summary` table. Do not dump raw state JSON or raw harness transcripts unless the user explicitly asks.
@@ -68,7 +70,14 @@ If the output says `Jury Run Failed`, fix harness availability, credentials, net
 
 ## Agent Configuration
 
-Real runs must use `--agent-config`. The file is the source of truth for which harnesses are allowed to run. Built-in harnesses available to configs are:
+Real runs must use a discovered config file. The file is the source of truth for which harnesses are allowed to run. The script resolves the config in this order:
+
+1. `--agent-config FILE`
+2. `GRILL_OTHERS_AGENT_CONFIG`
+3. `$XDG_CONFIG_HOME/grill-others/agents.json`
+4. `~/.config/grill-others/agents.json`
+
+Built-in harnesses available to configs are:
 
 - `codex`: runs `codex app-server` in read-only mode with app-server threads persisted in the run state; if app-server is unavailable, it falls back to `codex exec` with the JSON schema enforced via `--output-schema`.
 - `claude`: runs `claude -p` with read-oriented tools and schema-validated structured output via `--json-schema`.
@@ -117,11 +126,17 @@ Then run:
 node /path/to/this/skill/scripts/grill-others.mjs start --cwd "$PWD" --agent-config agents.json --prompt-file prompt.txt
 ```
 
+When using the standard user config path, omit `--agent-config`:
+
+```bash
+node /path/to/this/skill/scripts/grill-others.mjs start --cwd "$PWD" --prompt-file prompt.txt
+```
+
 Names must be unique case-insensitively. Jurors do not route follow-up questions; they answer the current focused question once.
 
 Built-in harnesses support per-instance `model`, `args`, and `env`. Pi also supports `provider`. Model propagation uses the harness CLI or app-server model fields (`codex exec --model` fallback or app-server `model`, `claude --model`, `pi --model`) rather than process-global environment, so concurrent instances can use different models safely. Codex app-server is launched as `codex ...args app-server`, so Codex global args such as profiles and config overrides apply to the persistent session path as well as the exec fallback. Pi still honors `GRILL_OTHERS_PI_PROVIDER` and `GRILL_OTHERS_PI_MODEL` as fallbacks when a Pi instance does not set `provider` or `model`.
 
-To add future agents, pass `--agent-config path/to/agents.json` on `start`. The specs are persisted in the state file, so `answer` does not need the config again. The file may define command harnesses:
+To add future agents, edit the discovered config file or pass `--agent-config path/to/agents.json` on `start`. The specs are persisted in the state file, so `answer` does not need the config again. The file may define command harnesses:
 
 ```json
 {

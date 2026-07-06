@@ -2,6 +2,7 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -35,6 +36,7 @@ const CODEX_APP_SERVER_CAPABILITIES = {
     "item/reasoning/textDelta"
   ]
 };
+const AGENT_CONFIG_ENV_VAR = "GRILL_OTHERS_AGENT_CONFIG";
 const PROMPT_CONTEXT_VERSION = 1;
 const STANCES = ["recommend", "block", "needs-evidence"];
 const BUILTIN_AGENT_SPECS = {
@@ -64,18 +66,20 @@ const KNOWN_OPTIONS = new Set([
 function usage() {
   return [
     "Usage:",
-    "  grill-others.mjs start --agent-config FILE [--cwd DIR] [--prompt TEXT|--prompt-file FILE] [--state FILE] [--question TEXT] [--max-user-questions N] [--max-grill-questions N] [--timeout-ms MS] [--json] [--mock]",
+    "  grill-others.mjs start [--agent-config FILE] [--cwd DIR] [--prompt TEXT|--prompt-file FILE] [--state FILE] [--question TEXT] [--max-user-questions N] [--max-grill-questions N] [--timeout-ms MS] [--json] [--mock]",
     "  grill-others.mjs continue --state FILE [--max-user-questions N] [--max-grill-questions N] [--timeout-ms MS] [--json] [--mock]",
     "  grill-others.mjs answer --state FILE --answer TEXT [--max-user-questions N] [--timeout-ms MS] [--json] [--mock]",
     "  grill-others.mjs status --state FILE [--json]",
     "",
     "Notes:",
     "  New runs are sequential: start/continue/answer run focused questions until the grill finishes or needs the user.",
-    "  Real start runs require --agent-config so the jury roster and harness costs are explicit; --mock is exempt.",
+    "  Real start runs require a discovered agent config so the jury roster and harness costs are explicit; --mock is exempt.",
+    `  Agent config lookup: --agent-config, ${AGENT_CONFIG_ENV_VAR}, $XDG_CONFIG_HOME/grill-others/agents.json, ~/.config/grill-others/agents.json.`,
     "  --max-user-questions caps how many times the whole run may pause when the jury cannot resolve a focused question (default 3; 0 disables asking).",
     "  --max-grill-questions caps focused questions per run (default 100).",
     "",
     "Environment:",
+    `  ${AGENT_CONFIG_ENV_VAR}=FILE  Use FILE as the default explicit jury config.`,
     "  GRILL_OTHERS_MOCK=1  Return deterministic mock juror outputs without launching harnesses (output is marked MOCK RUN)."
   ].join("\n");
 }
@@ -405,15 +409,70 @@ function assertUniqueAgentNames(agents, source) {
   }
 }
 
-function readAgentConfig(cwd, options) {
-  if (!options["agent-config"]) {
-    return { agents: {}, names: [], configPath: null };
+function resolveConfigPath(cwd, rawPath) {
+  return path.resolve(cwd, String(rawPath));
+}
+
+function candidateAgentConfigPaths(cwd, options) {
+  if (options["agent-config"]) {
+    return [{ source: "--agent-config", path: resolveConfigPath(cwd, options["agent-config"]), required: true }];
   }
-  const configPath = path.resolve(cwd, options["agent-config"]);
-  if (!fs.existsSync(configPath)) {
-    throw new Error(
-      `Agent config not found: ${configPath}. Write an agent config file and pass it with --agent-config; grill-others does not use an implicit default jury for real runs.`
-    );
+
+  if (isMockRequested(options)) {
+    return [];
+  }
+
+  const envPath = String(process.env[AGENT_CONFIG_ENV_VAR] ?? "").trim();
+  if (envPath) {
+    return [{ source: AGENT_CONFIG_ENV_VAR, path: resolveConfigPath(cwd, envPath), required: true }];
+  }
+
+  const candidates = [];
+  const xdgConfigHome = String(process.env.XDG_CONFIG_HOME ?? "").trim();
+  if (xdgConfigHome) {
+    candidates.push({ source: "XDG_CONFIG_HOME", path: path.join(xdgConfigHome, "grill-others", "agents.json") });
+  }
+  const homeDir = os.homedir();
+  if (homeDir) {
+    candidates.push({ source: "home config", path: path.join(homeDir, ".config", "grill-others", "agents.json") });
+  }
+
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    const key = candidate.path;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function findAgentConfigPath(cwd, options, { allowMissing = false } = {}) {
+  const candidates = candidateAgentConfigPaths(cwd, options);
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate.path)) {
+      return candidate.path;
+    }
+    if (candidate.required) {
+      throw new Error(
+        `Agent config not found: ${candidate.path}. Check ${candidate.source} or provide a valid --agent-config path; grill-others does not use an implicit default jury for real runs.`
+      );
+    }
+  }
+  if (allowMissing) {
+    return null;
+  }
+  const checked = candidates.length > 0 ? candidates.map((candidate) => `- ${candidate.path}`).join("\n") : "- no config paths available";
+  throw new Error(
+    `Agent config not found. Checked:\n${checked}\nWrite an agent config file, pass --agent-config, or set ${AGENT_CONFIG_ENV_VAR}; grill-others does not use an implicit default jury for real runs.`
+  );
+}
+
+function readAgentConfig(cwd, options, lookupOptions = {}) {
+  const configPath = findAgentConfigPath(cwd, options, lookupOptions);
+  if (!configPath) {
+    return { agents: {}, names: [], configPath: null };
   }
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   const agents = {};
@@ -428,8 +487,8 @@ function readAgentConfig(cwd, options) {
 }
 
 function buildAgentSpecs(cwd, options, knownAgents = []) {
-  const configured = readAgentConfig(cwd, options);
   const known = normalizeAgentSpecs(knownAgents, "persisted state");
+  const configured = readAgentConfig(cwd, options, { allowMissing: known.length > 0 || isMockRequested(options) });
   if (configured.names.length > 0) {
     return configured.names.map((name) => ({ ...configured.agents[name] }));
   }
@@ -3400,11 +3459,7 @@ function shellQuote(value) {
 
 async function handleStart(options) {
   const cwd = path.resolve(options.cwd ?? process.cwd());
-  if (!isMockRequested(options) && !options["agent-config"]) {
-    throw new Error(
-      "Real grill-others runs require --agent-config so the jury roster and harness costs are explicit. Write an agent config file and pass it with --agent-config, or use --mock for a test fixture."
-    );
-  }
+  const agents = buildAgentSpecs(cwd, options);
   const { statePath, grillSessionId } = ensureStatePath(cwd, options.state);
   const prompt = readPrompt(cwd, options);
   const state = {
@@ -3419,7 +3474,7 @@ async function handleStart(options) {
     updatedAt: new Date().toISOString(),
     mock: false,
     harnessSessions: {},
-    agents: buildAgentSpecs(cwd, options),
+    agents,
     decisions: [],
     activeDecisionIndex: null,
     lastPlanner: null,
