@@ -83,11 +83,380 @@ test("markdown output is marked as a mock run and shows the final recommendation
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /MOCK RUN/);
   assert.match(result.stdout, /Mode: sequential/);
-  assert.match(result.stdout, /## Decision 1/);
-  assert.match(result.stdout, /## Jury Rounds/);
   assert.match(result.stdout, /## Final Recommendation/);
+  assert.match(result.stdout, /## Agent Usage Summary/);
+  assert.doesNotMatch(result.stdout, /## Decision 1/);
+  assert.doesNotMatch(result.stdout, /## Jury Rounds/);
+  assert.doesNotMatch(result.stdout, /## Questions And Juror Answers/);
+  assert.match(result.stderr, /## Live Jury Q&A/);
+  assert.match(result.stderr, /### Q1/);
+  assert.match(result.stderr, /- codex: recommend;/);
+  assert.doesNotMatch(result.stderr, /## Agent Usage Summary/);
   assert.doesNotMatch(result.stdout, /continue --state/);
   assert.doesNotMatch(result.stdout, /## Latest Jury Round/);
+});
+
+test("final markdown summarizes juror usage metadata when reported", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "usage-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use the usage-aware path.",
+  rationale: "The fake harness reports token usage and cost.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9,
+  usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 },
+  total_cost_usd: 0.0123
+}));
+`
+  );
+  const configPath = path.join(tmp, "usage-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "usage-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--agents",
+    "usage-agent",
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does usage metadata render?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["usage-agent"].usage, {
+    inputTokens: 12,
+    outputTokens: 8,
+    totalTokens: 20,
+    costUsd: 0.0123
+  });
+
+  const rendered = run([
+    "status",
+    "--state",
+    path.join(tmp, ".grill-others", state.grillSessionId, "state.json")
+  ]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.doesNotMatch(rendered.stdout, /## Questions And Juror Answers/);
+  assert.doesNotMatch(rendered.stdout, /usage-agent: recommend; Use the usage-aware path/);
+  assert.match(rendered.stdout, /\| usage-agent \| juror \| 1 \| 1 \| 0 \| 20 \| \$0\.0123 \|/);
+});
+
+test("agent usage summary preserves reported zero token and cost values", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "zero-usage-agent.js",
+    `
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Use the zero-usage path.",
+  rationale: "The fake harness reports explicit zero usage.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.9,
+  usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+  total_cost_usd: 0
+}));
+`
+  );
+  const configPath = path.join(tmp, "zero-usage-agent.json");
+  fs.writeFileSync(configPath, JSON.stringify({ agents: [{ name: "zero-usage-agent", command: commandPath }] }));
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--agents",
+    "zero-usage-agent",
+    "--max-grill-questions",
+    "1",
+    "--question",
+    "Does zero usage render?",
+    "--prompt",
+    "hi"
+  ]);
+  assert.deepEqual(state.decisions[0].rounds[0].responses["zero-usage-agent"].usage, {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    costUsd: 0
+  });
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| zero-usage-agent \| juror \| 1 \| 1 \| 0 \| 0 \| \$0\.0000 \|/);
+});
+
+test("agent usage summary includes planner and mediator calls", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "role-usage-agent.js",
+    `
+const fs = require("node:fs");
+const prompt = fs.readFileSync(0, "utf8");
+const agent = /Your juror id is ([^\\n.]+)/.exec(prompt)?.[1] || "a";
+function usage(total, cost) {
+  return { usage: { input_tokens: total - 1, output_tokens: 1, total_tokens: total }, total_cost_usd: cost };
+}
+if (prompt.includes("acting as the planner")) {
+  console.log(JSON.stringify({
+    done: false,
+    question: "Does role usage count all harness calls?",
+    rationale: "Exercise planner usage accounting.",
+    confidence: 0.8,
+    ...usage(10, 0.001)
+  }));
+  process.exit(0);
+}
+if (prompt.includes("acting as the mediator")) {
+  console.log(JSON.stringify({
+    recommendation: "Count planner, juror, and mediator usage.",
+    rationale: "The fake mediator resolves the split.",
+    consensus: true,
+    requires_user: false,
+    unresolved_disagreements: [],
+    confidence: 0.8,
+    ...usage(30, 0.003)
+  }));
+  process.exit(0);
+}
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Juror " + agent + " supports counting all role usage.",
+  rationale: "Fake juror usage accounting.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.8,
+  ...usage(20, 0.002)
+}));
+`
+  );
+  const configPath = path.join(tmp, "role-usage-agent.json");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      agents: [
+        { name: "a", command: commandPath },
+        { name: "b", command: commandPath }
+      ]
+    })
+  );
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--agents",
+    "a,b",
+    "--max-grill-questions",
+    "1",
+    "--prompt",
+    "count role usage"
+  ]);
+  assert.deepEqual(state.decisions[0].planner.usage, {
+    inputTokens: 9,
+    outputTokens: 1,
+    totalTokens: 10,
+    costUsd: 0.001
+  });
+  assert.equal(typeof state.decisions[0].planner.durationMs, "number");
+  assert.deepEqual(state.decisions[0].mediation.usage, {
+    inputTokens: 29,
+    outputTokens: 1,
+    totalTokens: 30,
+    costUsd: 0.003
+  });
+  assert.equal(typeof state.decisions[0].mediation.durationMs, "number");
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| a \| planner, juror, mediator \| 3 \| 3 \| 0 \| 60 \| \$0\.0060 \|/);
+  assert.match(rendered.stdout, /\| b \| juror \| 1 \| 1 \| 0 \| 20 \| \$0\.0020 \|/);
+});
+
+test("agent usage summary includes failed planner and mediator attempts", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "role-usage-retry-agent.js",
+    `
+const [agent, prompt] = process.argv.slice(2);
+function usage(total, cost) {
+  return { usage: { input_tokens: total - 1, output_tokens: 1, total_tokens: total }, total_cost_usd: cost };
+}
+function fail(total, cost) {
+  console.log(JSON.stringify(usage(total, cost)));
+  console.error("intentional " + agent + " role failure");
+  process.exit(2);
+}
+if (prompt.includes("acting as the planner")) {
+  if (agent === "a") fail(7, 0.0007);
+  console.log(JSON.stringify({
+    done: false,
+    question: "Does retry usage count failed attempts?",
+    rationale: "Exercise failed planner attempt accounting.",
+    confidence: 0.8,
+    ...usage(10, 0.001)
+  }));
+  process.exit(0);
+}
+if (prompt.includes("acting as the mediator")) {
+  if (agent === "a") fail(9, 0.0009);
+  console.log(JSON.stringify({
+    recommendation: "Count failed planner and mediator attempts.",
+    rationale: "The fake mediator resolves after one failed candidate.",
+    consensus: true,
+    requires_user: false,
+    unresolved_disagreements: [],
+    confidence: 0.8,
+    ...usage(30, 0.003)
+  }));
+  process.exit(0);
+}
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Juror " + agent + " supports counting failed role attempts.",
+  rationale: "Fake juror retry usage accounting.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.8,
+  ...usage(20, 0.002)
+}));
+`
+  );
+  const configPath = path.join(tmp, "role-usage-retry-agent.json");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      agents: [
+        { name: "a", command: commandPath, args: ["{{agentName}}", "{{prompt}}"] },
+        { name: "b", command: commandPath, args: ["{{agentName}}", "{{prompt}}"] }
+      ]
+    })
+  );
+  const { state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--agents",
+    "a,b",
+    "--max-grill-questions",
+    "1",
+    "--prompt",
+    "count failed role usage"
+  ]);
+  assert.equal(state.decisions[0].planner.attempts.length, 2);
+  assert.equal(state.decisions[0].planner.attempts[0].ok, false);
+  assert.equal(state.decisions[0].planner.attempts[1].ok, true);
+  assert.equal(typeof state.decisions[0].planner.attempts[0].durationMs, "number");
+  assert.equal(state.decisions[0].mediation.attempts.length, 2);
+  assert.equal(state.decisions[0].mediation.attempts[0].ok, false);
+  assert.equal(state.decisions[0].mediation.attempts[1].ok, true);
+  assert.equal(typeof state.decisions[0].mediation.attempts[0].durationMs, "number");
+
+  const rendered = run(["status", "--state", path.join(tmp, ".grill-others", state.grillSessionId, "state.json")]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| a \| planner, juror, mediator \| 3 \| 1 \| 2 \| 36 \| \$0\.0036 \|/);
+  assert.match(rendered.stdout, /\| b \| planner, juror, mediator \| 3 \| 3 \| 0 \| 60 \| \$0\.0060 \|/);
+});
+
+test("agent usage summary preserves mediator usage before user answer", () => {
+  const commandPath = writeFakeCommand(
+    tmp,
+    "role-usage-user-answer-agent.js",
+    `
+const fs = require("node:fs");
+const prompt = fs.readFileSync(0, "utf8");
+const agent = /Your juror id is ([^\\n.]+)/.exec(prompt)?.[1] || "a";
+function usage(total, cost) {
+  return { usage: { input_tokens: total - 1, output_tokens: 1, total_tokens: total }, total_cost_usd: cost };
+}
+if (prompt.includes("acting as the mediator")) {
+  const answered = prompt.includes("User Q&A transcript") || prompt.includes("Latest user answer delta");
+  console.log(JSON.stringify({
+    recommendation: answered ? "Use the user's selected option." : "Jurors remain split.",
+    rationale: answered ? "The user resolved the split." : "The fake mediator requires user input first.",
+    consensus: answered,
+    requires_user: !answered,
+    unresolved_disagreements: answered ? [] : ["No clear majority."],
+    confidence: answered ? 0.8 : 0.4,
+    ...usage(answered ? 30 : 10, answered ? 0.003 : 0.001)
+  }));
+  process.exit(0);
+}
+console.log(JSON.stringify({
+  stance: "recommend",
+  recommendation: "Recommendation from " + agent,
+  rationale: "Distinct fake juror position.",
+  assumptions: [],
+  risks: [],
+  repo_findings: [],
+  questions_for_other_jurors: [],
+  confidence: 0.7,
+  ...usage(20, 0.002)
+}));
+`
+  );
+  const configPath = path.join(tmp, "role-usage-user-answer-agent.json");
+  fs.writeFileSync(
+    configPath,
+    JSON.stringify({
+      agents: [
+        { name: "a", command: commandPath },
+        { name: "b", command: commandPath },
+        { name: "c", command: commandPath }
+      ]
+    })
+  );
+  const { statePath, state } = runJson([
+    "start",
+    "--cwd",
+    tmp,
+    "--agent-config",
+    configPath,
+    "--agents",
+    "a,b,c",
+    "--question",
+    "Which option should ship?",
+    "--max-grill-questions",
+    "1",
+    "--prompt",
+    "choose"
+  ]);
+  assert.equal(state.decisions[0].status, "needs-user");
+  assert.equal(state.decisions[0].mediationHistory.length, 1);
+  assert.equal(state.decisions[0].mediationHistory[0].usage.totalTokens, 10);
+
+  const answered = runJson(["answer", "--state", statePath, "--answer", "Ship option B"]);
+  const decision = answered.state.decisions[0];
+  assert.equal(decision.status, "resolved");
+  assert.deepEqual(
+    decision.mediationHistory.map((record) => record.usage.totalTokens),
+    [10, 30]
+  );
+
+  const rendered = run(["status", "--state", statePath]);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /\| a \| juror, mediator \| 4 \| 4 \| 0 \| 80 \| \$0\.0080 \|/);
+  assert.match(rendered.stdout, /\| b \| juror \| 2 \| 2 \| 0 \| 40 \| \$0\.0040 \|/);
+  assert.match(rendered.stdout, /\| c \| juror \| 2 \| 2 \| 0 \| 40 \| \$0\.0040 \|/);
 });
 
 test("--question seeds only the first focused decision", () => {

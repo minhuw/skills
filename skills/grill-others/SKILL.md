@@ -22,7 +22,7 @@ Resolve `/path/to/this/skill` to the directory containing this `SKILL.md`.
 
 3. Read the output:
    - If `Questions For User` is present, relay the focused question to the user with the juror positions and any recommended default.
-   - If `Final Recommendation` is present, use it as the pre-implementation decision record.
+   - If `Final Recommendation` is present, use it as the pre-implementation decision record. The final output also includes `Agent Usage Summary`.
    - If the output is marked `MOCK RUN`, it is a test fixture; never use it as design guidance.
 4. After the user answers, run (one combined answer covering all asked questions):
 
@@ -54,6 +54,8 @@ If the output says `Jury Run Failed`, fix harness availability, credentials, net
 
 - Do not implement the plan while the jury has pending user questions or while the sequential run has not produced `Final Recommendation`.
 - Let `start`, `continue`, and `answer` run automatically through resolved focused questions until the grill is finished or a user answer is required.
+- Keep user-facing progress quiet. Do not repeatedly paste the launch command, prompt file contents, process listings, or generic polling messages. The script streams `Live Jury Q&A` blocks as focused questions resolve; relay only those newly resolved questions and juror answers during a long run.
+- At completion, relay the final recommendation plus the script's `Agent Usage Summary` table. Do not dump raw state JSON or raw harness transcripts unless the user explicitly asks.
 - Let the default focused-question cap stand unless the user explicitly asks for a shorter run. Avoid small caps such as 5 or 8; the planner decides when the grill is complete.
 - Treat `Jury Run Failed` as an infrastructure stop, not a design recommendation. Fix the harness issue and use `continue` to retry the active focused question.
 - Prefer the jury's final recommendation unless the user explicitly overrides a user-owned preference.
@@ -72,7 +74,7 @@ The default agents are:
 
 Built-in harness sessions are persisted per role and agent in the state file. Claude Code starts the first turn with a stable `--session-id` and resumes later compact turns with `--resume <session-id>`, Pi receives a stable `--session-id` for each `(role, agent)` pair, and Codex reuses an app-server thread for each `(role, agent)` pair.
 
-Prompt feeding is session-aware. The first valid turn for each `(role, agent)` pair sends the full bootstrap context: original plan, role rules, repository cwd, roster, prior transcript, and schema guidance. Later turns in a primed persistent session send compact deltas: the current focused question, latest user answer, routed juror questions or disagreement summary, resolved-decision summary when relevant, and schema guidance. If a persistent session is unavailable, Codex falls back to `codex exec`, Codex app-server cannot resume a stored thread, or a compact turn fails, the next turn falls back to full context.
+Prompt feeding is session-aware. The first valid turn for each `(role, agent)` pair sends the full bootstrap context: original plan, role rules, repository cwd, roster, prior transcript, and schema guidance. Later turns in a primed persistent session send compact deltas: the current focused question, latest user answer, resolved-decision summary when relevant, and schema guidance. If a persistent session is unavailable, Codex falls back to `codex exec`, Codex app-server cannot resume a stored thread, or a compact turn fails, the next turn falls back to full context.
 
 Built-in Claude Code and Pi harnesses require session persistence. Do not configure Claude Code with `--no-session-persistence` or Pi with `--no-session`; those flags are rejected because compact prompting depends on persisted harness context. Use a custom `command` harness for intentionally stateless integrations.
 
@@ -80,7 +82,7 @@ Codex app-server processes are per CLI run, not long-lived daemons owned by the 
 
 Harness credentials and provider settings are inherited from the launcher environment. Configure them before running the skill with the harness's normal login flow, shell exports, `direnv`, or another external environment manager.
 
-Agent `name` is the unique juror instance id used for state, routing, resume data, and result maps. `harness` selects the underlying launcher. To run the same launcher more than once, define multiple uniquely named instances with the same `harness` and different `model` or harness-specific options, then select those instance names with `--agents`:
+Agent `name` is the unique juror instance id used for state, resume data, and result maps. `harness` selects the underlying launcher. To run the same launcher more than once, define multiple uniquely named instances with the same `harness` and different `model` or harness-specific options, then select those instance names with `--agents`:
 
 ```json
 {
@@ -113,7 +115,7 @@ Then run:
 node /path/to/this/skill/scripts/grill-others.mjs start --cwd "$PWD" --agent-config agents.json --agents codex-gpt5,codex-o3,claude-sonnet --prompt-file prompt.txt
 ```
 
-Names must be unique case-insensitively. Jurors route questions to `all` or to an exact juror instance name, not to a harness name.
+Names must be unique case-insensitively. Jurors do not route follow-up questions; they answer the current focused question once.
 
 Built-in harnesses support per-instance `model`, `args`, and `env`. Pi also supports `provider`. Model propagation uses the harness CLI or app-server model fields (`codex exec --model` fallback or app-server `model`, `claude --model`, `pi --model`) rather than process-global environment, so concurrent instances can use different models safely. Codex app-server is launched as `codex ...args app-server`, so Codex global args such as profiles and config overrides apply to the persistent session path as well as the exec fallback. Pi still honors `GRILL_OTHERS_PI_PROVIDER` and `GRILL_OTHERS_PI_MODEL` as fallbacks when a Pi instance does not set `provider` or `model`.
 
@@ -176,6 +178,8 @@ Old version 2 state files remain readable through `status` and `answer`, but new
 Each focused decision is synthesized by a mediator pass, not by picking the most confident juror. The mediator (one of the available harnesses) reads each juror's most recent successful position for that focused question, weighs majority/minority splits, and reports whether the jury has a usable answer or requires the user to choose. If the mediator itself fails, the script falls back to an exact recommendation majority when one exists; otherwise it asks the user the original focused question with the juror positions attached. A focused decision where only one juror succeeded is labeled `single-juror` and never claims consensus. A focused decision where no juror produced a usable response is marked `failed` and stops the sequential run until `continue` can retry it after the harness issue is fixed.
 
 The final sequential recommendation aggregates the resolved focused decisions. It does not ask another mediator to re-litigate every decision; it records what was resolved question by question and surfaces unresolved disagreements and risks.
+
+During a non-JSON run, the script streams compact `Live Jury Q&A` blocks to stderr as each focused question resolves. The final markdown includes an agent usage table covering planner, juror, and mediator calls. Token and cost columns are populated only when the underlying harness reports usage metadata; otherwise the table shows prompt character counts, approximate prompt tokens, and wall time.
 
 ## Testing
 

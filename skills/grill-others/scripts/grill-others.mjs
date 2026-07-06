@@ -197,6 +197,7 @@ function normalizeSequentialState(state) {
     );
     decision.pendingUserQuestions ??= null;
     decision.mediation ??= null;
+    decision.mediationHistory ??= [];
     decision.final ??= null;
     decision.status ??= decision.pendingUserQuestions?.length ? "needs-user" : decision.final ? "resolved" : "active";
   }
@@ -448,6 +449,118 @@ function responseTiming(startedAtMs) {
     completedAt: new Date(completedAtMs).toISOString(),
     durationMs: completedAtMs - startedAtMs
   };
+}
+
+function numberValue(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function firstNumberDeep(value, keys, seen = new Set()) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  if (seen.has(value)) {
+    return null;
+  }
+  seen.add(value);
+  for (const key of keys) {
+    if (Object.hasOwn(value, key)) {
+      const number = numberValue(value[key]);
+      if (number != null) {
+        return number;
+      }
+    }
+  }
+  for (const nested of Object.values(value)) {
+    const number = firstNumberDeep(nested, keys, seen);
+    if (number != null) {
+      return number;
+    }
+  }
+  return null;
+}
+
+function sumNumbersDeep(value, keys, seen = new Set()) {
+  if (!value || typeof value !== "object") {
+    return 0;
+  }
+  if (seen.has(value)) {
+    return 0;
+  }
+  seen.add(value);
+  let sum = 0;
+  for (const key of keys) {
+    if (Object.hasOwn(value, key)) {
+      sum += numberValue(value[key]) ?? 0;
+    }
+  }
+  for (const nested of Object.values(value)) {
+    sum += sumNumbersDeep(nested, keys, seen);
+  }
+  return sum;
+}
+
+function normalizeUsage(value) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const directInput = firstNumberDeep(value, ["input_tokens", "inputTokens", "prompt_tokens", "promptTokens"]);
+  const cachedInput =
+    sumNumbersDeep(value, ["cache_creation_input_tokens", "cacheCreationInputTokens"]) +
+    sumNumbersDeep(value, ["cache_read_input_tokens", "cacheReadInputTokens"]);
+  const inputTokens = directInput != null || cachedInput > 0 ? (directInput ?? 0) + cachedInput : null;
+  const outputTokens = firstNumberDeep(value, ["output_tokens", "outputTokens", "completion_tokens", "completionTokens"]);
+  const totalTokens =
+    firstNumberDeep(value, ["total_tokens", "totalTokens"]) ??
+    (inputTokens != null || outputTokens != null ? (inputTokens ?? 0) + (outputTokens ?? 0) : null);
+  const costUsd = firstNumberDeep(value, ["total_cost_usd", "totalCostUsd", "cost_usd", "costUsd"]);
+  const usage = { inputTokens, outputTokens, totalTokens, costUsd };
+  return Object.values(usage).some((entry) => entry != null) ? usage : null;
+}
+
+function betterUsage(left, right) {
+  if (!left) {
+    return right;
+  }
+  if (!right) {
+    return left;
+  }
+  const score = (usage) => Object.values(usage).filter((entry) => entry != null).length;
+  if (score(right) > score(left)) {
+    return right;
+  }
+  if ((right.totalTokens ?? 0) > (left.totalTokens ?? 0)) {
+    return right;
+  }
+  if ((right.costUsd ?? 0) > (left.costUsd ?? 0)) {
+    return right;
+  }
+  return left;
+}
+
+function usageFromRaw(raw) {
+  let usage = null;
+  for (const line of String(raw ?? "").split(/\r?\n/)) {
+    if (!line.trim().startsWith("{")) {
+      continue;
+    }
+    try {
+      usage = betterUsage(usage, normalizeUsage(JSON.parse(line)));
+    } catch {
+      // Ignore non-JSONL lines.
+    }
+  }
+  try {
+    usage = betterUsage(usage, normalizeUsage(JSON.parse(raw)));
+  } catch {
+    // Raw output may already be model text.
+  }
+  return usage;
+}
+
+function usageFromResult(result, raw) {
+  return betterUsage(normalizeUsage(result?.usage), usageFromRaw(raw));
 }
 
 function simplifyText(value) {
@@ -1261,7 +1374,8 @@ async function captureCodexAppServerTurn(client, threadId, agent, prompt, option
       resolveCompletion({
         status: turn?.status === "completed" ? 0 : 1,
         stdout: lastAgentMessage,
-        stderr: codexTurnError(turn)
+        stderr: codexTurnError(turn),
+        usage: normalizeUsage(turn)
       });
     }
   });
@@ -1281,7 +1395,8 @@ async function captureCodexAppServerTurn(client, threadId, agent, prompt, option
       return {
         status: response.turn.status === "completed" ? 0 : 1,
         stdout: lastAgentMessage,
-        stderr: codexTurnError(response.turn)
+        stderr: codexTurnError(response.turn),
+        usage: normalizeUsage(response.turn)
       };
     }
     client.trackTurn(threadId, turnId, (error) => {
@@ -1945,6 +2060,7 @@ async function runRound(state, kind, options) {
       const promptFields = promptMeta(promptContext, prompt, result);
       const raw = `${result.stdout || ""}`.trim();
       const stderr = String(result.stderr || "").trim();
+      const usage = usageFromResult(result, raw);
       try {
         if (result.status !== 0) {
           throw new Error(`${agent.name} exited ${result.status}: ${stderr}`);
@@ -1953,6 +2069,7 @@ async function runRound(state, kind, options) {
           ...timing,
           ...promptFields,
           ok: true,
+          ...(usage ? { usage } : {}),
           raw: truncate(raw, MAX_STORED_RAW_CHARS),
           parsed: parseJurorOutput(raw)
         };
@@ -1963,6 +2080,7 @@ async function runRound(state, kind, options) {
           ...timing,
           ...promptFields,
           ok: false,
+          ...(usage ? { usage } : {}),
           raw: truncate(raw, MAX_STORED_RAW_CHARS),
           stderr: truncate(stderr, MAX_STORED_STDERR_CHARS),
           error: truncate(error.message, MAX_STORED_ERROR_CHARS)
@@ -1998,8 +2116,10 @@ async function runMediator(state, options, successes) {
       (latest?.responses?.[right.name]?.ok ? 1 : 0) - (latest?.responses?.[left.name]?.ok ? 1 : 0)
   );
   const errors = [];
+  const attempts = [];
   for (const agent of ordered.slice(0, 2)) {
     const session = supportsSessionContext(agent) ? harnessSessionFor(state, "mediator", agent) : null;
+    const responseStartedAtMs = Date.now();
     const promptContext = await preparePromptContext(state, agent, { ...options, schemaPath: MEDIATOR_SCHEMA_PATH }, session);
     const prompt = buildMediatorPrompt(state, agent, successes, promptContext);
     const fullPrompt =
@@ -2016,20 +2136,33 @@ async function runMediator(state, options, successes) {
       fullPrompt,
       codexAppServerUnavailable: promptContext.codexAppServerUnavailable
     });
+    const timing = responseTiming(responseStartedAtMs);
     const promptFields = promptMeta(promptContext, prompt, result);
+    const raw = `${result.stdout || ""}`.trim();
+    const usage = usageFromResult(result, raw);
     try {
       if (result.status !== 0) {
         throw new Error(`exited ${result.status}: ${truncate(String(result.stderr || "").trim(), 300)}`);
       }
-      const parsed = parseMediatorOutput(`${result.stdout || ""}`.trim());
+      const parsed = parseMediatorOutput(raw);
       markPromptContextResult(agent, session, promptContext, result, true);
-      return { agent: agent.name, ok: true, ...promptFields, parsed };
+      const attempt = { agent: agent.name, ok: true, ...timing, ...promptFields, ...(usage ? { usage } : {}), parsed };
+      attempts.push(attempt);
+      return { ...attempt, attempts };
     } catch (error) {
       markPromptContextResult(agent, session, promptContext, result, false);
+      attempts.push({
+        agent: agent.name,
+        ok: false,
+        ...timing,
+        ...promptFields,
+        ...(usage ? { usage } : {}),
+        error: error.message
+      });
       errors.push(`${agent.name}: ${error.message}`);
     }
   }
-  return { agent: null, ok: false, error: errors.join(" | ") || "no agents available" };
+  return { agent: null, ok: false, attempts, error: errors.join(" | ") || "no agents available" };
 }
 
 async function runPlanner(state, options) {
@@ -2038,8 +2171,10 @@ async function runPlanner(state, options) {
     return { agent: "mock", ok: true, parsed: mockPlanner(state) };
   }
   const errors = [];
+  const attempts = [];
   for (const agent of state.agents.slice(0, 2)) {
     const session = supportsSessionContext(agent) ? harnessSessionFor(state, "planner", agent) : null;
+    const responseStartedAtMs = Date.now();
     const promptContext = await preparePromptContext(state, agent, { ...options, schemaPath: PLANNER_SCHEMA_PATH }, session);
     const prompt = buildPlannerPrompt(state, agent, promptContext);
     const fullPrompt = promptContext.mode === "compact" ? buildPlannerPrompt(state, agent, { mode: "full" }) : prompt;
@@ -2055,20 +2190,33 @@ async function runPlanner(state, options) {
       fullPrompt,
       codexAppServerUnavailable: promptContext.codexAppServerUnavailable
     });
+    const timing = responseTiming(responseStartedAtMs);
     const promptFields = promptMeta(promptContext, prompt, result);
+    const raw = `${result.stdout || ""}`.trim();
+    const usage = usageFromResult(result, raw);
     try {
       if (result.status !== 0) {
         throw new Error(`exited ${result.status}: ${truncate(String(result.stderr || "").trim(), 300)}`);
       }
-      const parsed = parsePlannerOutput(`${result.stdout || ""}`.trim());
+      const parsed = parsePlannerOutput(raw);
       markPromptContextResult(agent, session, promptContext, result, true);
-      return { agent: agent.name, ok: true, ...promptFields, parsed };
+      const attempt = { agent: agent.name, ok: true, ...timing, ...promptFields, ...(usage ? { usage } : {}), parsed };
+      attempts.push(attempt);
+      return { ...attempt, attempts };
     } catch (error) {
       markPromptContextResult(agent, session, promptContext, result, false);
+      attempts.push({
+        agent: agent.name,
+        ok: false,
+        ...timing,
+        ...promptFields,
+        ...(usage ? { usage } : {}),
+        error: error.message
+      });
       errors.push(`${agent.name}: ${error.message}`);
     }
   }
-  return { agent: null, ok: false, error: errors.join(" | ") || "no agents available" };
+  return { agent: null, ok: false, attempts, error: errors.join(" | ") || "no agents available" };
 }
 
 function majorityFallback(perAgent) {
@@ -2345,15 +2493,38 @@ function flatStateForDecision(state, decision) {
     rounds: decision.rounds ?? [],
     userAnswers: decision.userAnswers ?? [],
     pendingUserQuestions: decision.pendingUserQuestions ?? null,
+    mediationHistory: decision.mediationHistory ?? [],
     mediation: decision.mediation ?? null,
     final: decision.final ?? null
   };
+}
+
+function roleRecordTelemetryKeys(role, record) {
+  if (Array.isArray(record?.attempts) && record.attempts.length > 0) {
+    return record.attempts.filter(hasUsageTelemetry).map((attempt) => usageRecordKey(role, attempt));
+  }
+  return hasUsageTelemetry(record) ? [usageRecordKey(role, record)] : [];
+}
+
+function appendUniqueRoleRecord(history, role, record) {
+  const next = Array.isArray(history) ? [...history] : [];
+  const keys = roleRecordTelemetryKeys(role, record);
+  if (keys.length === 0) {
+    return next;
+  }
+  const existing = new Set(next.flatMap((entry) => roleRecordTelemetryKeys(role, entry)));
+  if (!keys.every((key) => existing.has(key))) {
+    next.push(record);
+  }
+  return next;
 }
 
 function copyDecisionFromFlat(state, decision, flat) {
   decision.rounds = flat.rounds;
   decision.userAnswers = flat.userAnswers;
   decision.pendingUserQuestions = flat.pendingUserQuestions;
+  decision.mediationHistory = appendUniqueRoleRecord(decision.mediationHistory, "mediator", decision.mediation);
+  decision.mediationHistory = appendUniqueRoleRecord(decision.mediationHistory, "mediator", flat.mediation);
   decision.mediation = flat.mediation;
   decision.final = flat.final;
   decision.status = flat.pendingUserQuestions?.length
@@ -2375,6 +2546,7 @@ function createDecision(state, question, planner = null) {
     id: `d${index}`,
     question,
     source: planner?.agent ? `planner:${planner.agent}` : "user",
+    planner,
     planner_rationale: planner?.parsed?.rationale ?? "",
     planner_confidence: planner?.parsed?.confidence ?? null,
     status: "active",
@@ -2383,6 +2555,7 @@ function createDecision(state, question, planner = null) {
     rounds: [],
     userAnswers: [],
     pendingUserQuestions: null,
+    mediationHistory: [],
     mediation: null,
     final: null
   };
@@ -2656,7 +2829,11 @@ async function chooseNextQuestion(state, options) {
     return {
       done: false,
       question: "What is the safest implementation path for this request?",
-      planner: { agent: "fallback", parsed: { rationale: planner.error ?? "Planner did not provide a question.", confidence: 0 } }
+      planner: {
+        agent: "fallback",
+        attempts: planner.attempts ?? [],
+        parsed: { rationale: planner.error ?? "Planner did not provide a question.", confidence: 0 }
+      }
     };
   }
   return {
@@ -2673,7 +2850,9 @@ async function runSequentialDecision(state, statePath, decision, initialRoundKin
   await driveFlatUntilPause(flat, options);
   copyDecisionFromFlat(state, decision, flat);
   state.activeDecisionIndex = state.decisions.indexOf(decision);
-  return saveState(statePath, state);
+  const saved = saveState(statePath, state);
+  emitLiveDecisionProgress(saved, saved.decisions[saved.activeDecisionIndex], options);
+  return saved;
 }
 
 async function driveSequentialUntilPause(state, statePath, options) {
@@ -2862,6 +3041,217 @@ function renderFinalBlock(lines, final, heading = "## Final Recommendation") {
   }
 }
 
+function appendDecisionQuestionAnswerLines(lines, state, decision, index) {
+  if (!decision?.rounds?.length) {
+    return;
+  }
+  lines.push(`### Q${index + 1}`);
+  lines.push(decision.question);
+  const latestRound = decision.rounds.at(-1);
+  for (const agent of responseAgentNames(state, latestRound)) {
+    const response = latestRound.responses?.[agent];
+    if (!response) {
+      continue;
+    }
+    if (!response.ok) {
+      lines.push(`- ${agent}: failed; ${truncate(response.error ?? "no usable response", 220)}`);
+      continue;
+    }
+    const parsed = response.parsed;
+    lines.push(`- ${agent}: ${parsed.stance}; ${truncate(parsed.recommendation, 300)} (confidence ${parsed.confidence})`);
+  }
+  if (decision.final?.recommendation) {
+    lines.push(`- resolved: ${truncate(decision.final.recommendation, 300)}`);
+  }
+}
+
+function emitLiveDecisionProgress(state, decision, options) {
+  if (options.json || !decision?.rounds?.length) {
+    return;
+  }
+  const index = Math.max(0, (state.decisions ?? []).findIndex((entry) => entry.id === decision.id));
+  const lines = ["", "## Live Jury Q&A"];
+  appendDecisionQuestionAnswerLines(lines, state, decision, index);
+  if (decision.pendingUserQuestions?.length) {
+    lines.push("- status: needs user answer");
+  } else {
+    lines.push(`- status: ${decision.status}`);
+  }
+  lines.push("");
+  process.stderr.write(`${lines.join("\n")}\n`);
+}
+
+function addUsageTotals(target, response, role) {
+  target.calls += 1;
+  target.roles.add(role);
+  if (response.ok) {
+    target.ok += 1;
+  } else {
+    target.failed += 1;
+  }
+  target.durationMs += Number(response.durationMs ?? 0);
+  target.promptChars += Number(response.promptChars ?? 0);
+  const usage = response.usage ?? {};
+  const hasTokenUsage = usage.inputTokens != null || usage.outputTokens != null || usage.totalTokens != null;
+  const hasCost = usage.costUsd != null;
+  target.inputTokens += Number(usage.inputTokens ?? 0);
+  target.outputTokens += Number(usage.outputTokens ?? 0);
+  target.totalTokens += Number(
+    usage.totalTokens ?? (hasTokenUsage ? Number(usage.inputTokens ?? 0) + Number(usage.outputTokens ?? 0) : 0)
+  );
+  target.costUsd += Number(usage.costUsd ?? 0);
+  if (hasTokenUsage) {
+    target.reportedTokenUsageCalls += 1;
+  }
+  if (hasCost) {
+    target.reportedCostCalls += 1;
+  }
+  if (hasTokenUsage || hasCost) {
+    target.reportedUsageCalls += 1;
+  }
+}
+
+function hasUsageTelemetry(response) {
+  return Boolean(
+    response &&
+      (response.promptChars != null ||
+        response.durationMs != null ||
+        response.usage?.inputTokens != null ||
+        response.usage?.outputTokens != null ||
+        response.usage?.totalTokens != null ||
+        response.usage?.costUsd != null)
+  );
+}
+
+function emptyUsageRow(agent) {
+  return {
+    agent,
+    roles: new Set(),
+    calls: 0,
+    ok: 0,
+    failed: 0,
+    durationMs: 0,
+    promptChars: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    costUsd: 0,
+    reportedTokenUsageCalls: 0,
+    reportedCostCalls: 0,
+    reportedUsageCalls: 0
+  };
+}
+
+function usageRecordKey(role, record) {
+  return [
+    role,
+    record?.agent ?? "",
+    record?.startedAt ?? "",
+    record?.completedAt ?? "",
+    record?.promptMode ?? "",
+    record?.promptChars ?? "",
+    record?.ok === false ? "failed" : "ok",
+    record?.error ?? "",
+    record?.parsed?.question ?? "",
+    record?.parsed?.recommendation ?? "",
+    record?.parsed?.rationale ?? ""
+  ].join("\u0000");
+}
+
+function collectAgentUsageRows(state) {
+  const rows = new Map();
+  const countedRecords = new Set();
+  const addRecord = (agent, role, response) => {
+    if (!agent || !hasUsageTelemetry(response)) {
+      return;
+    }
+    const key = usageRecordKey(role, response);
+    if (countedRecords.has(key)) {
+      return;
+    }
+    countedRecords.add(key);
+    const row = rows.get(agent) ?? emptyUsageRow(agent);
+    addUsageTotals(row, response, role);
+    rows.set(agent, row);
+  };
+  const addRoleRecord = (role, record) => {
+    if (Array.isArray(record?.attempts) && record.attempts.length > 0) {
+      for (const attempt of record.attempts) {
+        addRecord(attempt.agent, role, attempt);
+      }
+      return;
+    }
+    addRecord(record?.agent, role, record);
+  };
+
+  for (const decision of state.decisions ?? []) {
+    addRoleRecord("planner", decision.planner);
+    for (const round of decision.rounds ?? []) {
+      for (const [agent, response] of Object.entries(round.responses ?? {})) {
+        addRecord(agent, "juror", response);
+      }
+    }
+    for (const mediation of decision.mediationHistory ?? []) {
+      addRoleRecord("mediator", mediation);
+    }
+    addRoleRecord("mediator", decision.mediation);
+  }
+  addRoleRecord("planner", state.lastPlanner);
+  return [...rows.values()].sort((left, right) => left.agent.localeCompare(right.agent));
+}
+
+function formatNumber(value) {
+  return Number.isFinite(value) ? Math.round(value).toLocaleString("en-US") : "n/a";
+}
+
+function formatUsageNumber(value, reported) {
+  return reported ? formatNumber(value) : "n/a";
+}
+
+function formatCost(value, reported) {
+  return reported ? `$${value.toFixed(4)}` : "n/a";
+}
+
+function formatDuration(ms) {
+  const seconds = Math.round(Number(ms ?? 0) / 1000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}m ${remainder}s`;
+}
+
+function renderAgentUsageSummary(lines, state) {
+  const rows = collectAgentUsageRows(state);
+  if (rows.length === 0) {
+    return;
+  }
+  lines.push("## Agent Usage Summary");
+  lines.push("");
+  lines.push("| Agent | Roles | Calls | OK | Failed | Reported tokens | Reported cost | Prompt chars | Approx prompt tokens | Wall time |");
+  lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+  for (const row of rows) {
+    const hasTokenUsage = row.reportedTokenUsageCalls > 0;
+    const hasCost = row.reportedCostCalls > 0;
+    const approxPromptTokens = Math.ceil(row.promptChars / 4);
+    const roles = ["planner", "juror", "mediator"].filter((role) => row.roles.has(role)).join(", ");
+    lines.push(
+      `| ${row.agent} | ${roles} | ${row.calls} | ${row.ok} | ${row.failed} | ${formatUsageNumber(
+        row.totalTokens,
+        hasTokenUsage
+      )} | ${formatCost(row.costUsd, hasCost)} | ${formatNumber(row.promptChars)} | ${formatNumber(
+        approxPromptTokens
+      )} | ${formatDuration(row.durationMs)} |`
+    );
+  }
+  lines.push("");
+  lines.push(
+    "Reported token/cost columns are populated only when a harness emits usage metadata. Approx prompt tokens use chars/4 and are not billing data."
+  );
+  lines.push("");
+}
+
 function renderSequentialMarkdown(state, statePath) {
   const lines = [];
   lines.push("# Grill Others Result");
@@ -2875,6 +3265,13 @@ function renderSequentialMarkdown(state, statePath) {
   lines.push(`Decisions: ${state.decisions.length}/${state.maxGrillQuestions}`);
   lines.push(`Agents: ${state.agents.map((agent) => agent.name).join(", ")}`);
   lines.push("");
+
+  if (state.final) {
+    renderFinalBlock(lines, state.final);
+    lines.push("");
+    renderAgentUsageSummary(lines, state);
+    return `${lines.join("\n")}\n`;
+  }
 
   const earlier = state.decisions.slice(0, -1);
   if (earlier.length > 0) {
@@ -2935,11 +3332,6 @@ function renderSequentialMarkdown(state, statePath) {
       }
       lines.push("");
     }
-  }
-
-  if (state.final) {
-    renderFinalBlock(lines, state.final);
-    return `${lines.join("\n")}\n`;
   }
 
   if (!latest) {
