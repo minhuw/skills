@@ -5,9 +5,9 @@ description: Initialize, validate, inspect, and manage Herder Markdown plan back
 
 # Herder Plans
 
-Manage the declarative plan backlog. Keep plan parsing and lifecycle state here; leave worktrees, agents, reviews, rescue, and integration to Fire.
+Manage the declarative plan backlog and its canonical content contract. Keep plan parsing and lifecycle state here; let Grill and Improve produce plans, and leave worktrees, agents, reviews, rescue, and integration to Fire.
 
-Read [references/plan-format.md](references/plan-format.md) before creating or repairing plan files.
+Read [references/plan-format.md](references/plan-format.md) and [references/plan-template.md](references/plan-template.md) before creating or repairing plan files.
 
 ## Invocation
 
@@ -40,9 +40,9 @@ node <skill-dir>/scripts/herder-plans.mjs <command> <remaining arguments> --pret
 
 Treat a nonzero script exit as a failed operation. Never rewrite a malformed backlog speculatively; report the exact validation error and repair only what the user requested or what is mechanically unambiguous.
 
-## Coordinator Operations
+## Producer and Coordinator Operations
 
-Improve and Fire use the same manager directly:
+Grill, Improve, and Fire use the same manager directly:
 
 ```text
 herder-plans ready [<plan-dir>]
@@ -50,7 +50,9 @@ herder-plans snapshot <plan-id> [<plan-dir>]
 herder-plans transition <plan-id> <status> [<plan-dir>] [--detail <text>]
 ```
 
-- Improve must run `init` before writing and `validate` after writing.
+- Every plan producer must run `init` before writing, follow the shared format and template, reread each draft from disk and pass the template's semantic Producer self-review, then run `validate` for mechanical contract and graph checks.
+- Grill produces plans from confirmed user intent and may refine an explicitly selected plan.
+- Improve produces plans from verified repository findings and may refine plans during reconciliation.
 - Fire must use `ready` for scheduling, `snapshot` to inline complete plan text into worker prompts, and `transition` as the only status writer.
 - Only the root Fire coordinator may transition statuses during execution. Implementers, reviewers, and savers report outcomes; they never edit the index.
 - Status details are allowed only for `BLOCKED` and `REJECTED`.

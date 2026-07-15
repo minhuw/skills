@@ -20,7 +20,7 @@ herder:fire status [<plan-dir>] [--integration-branch <branch>]
 ```
 
 - Default command: `fire`.
-- Default plan directory: `herder-plans/`. If absent, stop and direct the user to `$herder:plans init` or `$herder:improve`.
+- Default plan directory: `herder-plans/`. If absent, stop and direct a user-defined change to `$herder:grill <change>`, a repository audit to `$herder:improve`, or backlog setup to `$herder:plans init`.
 - Default concurrency: the host's available worker capacity. Never exceed `--max-parallel`.
 - Default integration branch: `plan-herder/integration-<UTC timestamp>`.
 - `resume`: use the named integration branch. Without one, auto-select only when exactly one local `plan-herder/integration-*` branch exists.

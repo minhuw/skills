@@ -187,7 +187,7 @@ function writeGrillPlan(project) {
 
 None.
 
-## Findings considered and rejected
+## Considered and rejected
 
 None.
 `)
@@ -295,6 +295,22 @@ function main() {
     for (const skill of expectedSkills) {
       assert.equal(fs.existsSync(path.join(installedPath, "skills", skill, "SKILL.md")), true, `missing installed skill ${skill}`)
     }
+    const sharedTemplate = path.join(installedPath, "skills", "plans", "references", "plan-template.md")
+    assert.equal(fs.existsSync(sharedTemplate), true, "missing shared plan template")
+    assert.equal(fs.existsSync(path.join(installedPath, "skills", "improve", "references", "plan-template.md")), false, "Improve still owns a private plan template")
+    const sharedTemplateText = fs.readFileSync(sharedTemplate, "utf8")
+    assert.match(sharedTemplateText, /### Accepted decisions/)
+    assert.match(sharedTemplateText, /CONTEXT\.md/)
+    assert.match(sharedTemplateText, /Producer self-review/)
+    assert.match(sharedTemplateText, /Mechanical validation complements self-review/)
+    assert.doesNotMatch(sharedTemplateText, /\*\*Issue\*\*/)
+    const grillText = fs.readFileSync(path.join(installedPath, "skills", "grill", "SKILL.md"), "utf8")
+    const improveText = fs.readFileSync(path.join(installedPath, "skills", "improve", "SKILL.md"), "utf8")
+    assert.match(grillText, /herder:grill <change-description>/)
+    assert.match(grillText, /Producer self-review/)
+    assert.match(grillText, /resume the one-question interview/)
+    assert.match(improveText, /Route user intent to .*herder:grill/)
+    assert.match(improveText, /Producer self-review/)
 
     const manager = path.join(installedPath, "skills", "plans", "scripts", "herder-plans.mjs")
     const initialized = parseJson(run("node", [manager, "init", "herder-plans", "--pretty"], { cwd: project }).stdout, "plans init")
@@ -315,25 +331,31 @@ function main() {
       const context = { project, env, transcripts }
 
       if (options.live) {
-        const improveMessage = runCodex("01-improve", `Use $herder:improve plan to add a --version flag to this tiny CLI. Write exactly one self-contained plan under herder-plans/, do not modify source code, do not ask questions, and validate the backlog before finishing.`, context).message
-        assert.match(improveMessage, /herder-plans|plan/i)
+        const opened = runCodex("01-grill-intake", `Use $herder:grill to plan a --version flag for this tiny CLI. Print only the package version followed by one newline, preserve the no-argument output, and add no dependencies. Use your recommendations for any remaining decisions. Follow the skill exactly: inspect the repository, summarize the shared understanding, ask for final confirmation, and do not edit yet.`, context, { ephemeral: false })
+        assert.match(opened.message, /confirm|shared understanding|write|plan/i)
+
+        const emptyBeforeConfirmation = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "pre-confirmation validation")
+        assert.equal(emptyBeforeConfirmation.counts.total, 0)
+
+        const confirmed = resumeCodex("02-grill-confirm", opened.threadId, `Yes. That summary is accurate. Create exactly one plan and validate the backlog.`, context)
+        assert.match(confirmed.message, /herder-plans|valid|created|plan 001/i)
 
         const graph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "generated validation")
         assert.equal(graph.counts.total, 1)
         assert.deepEqual(graph.ready, ["001"])
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
 
-        const plansMessage = runCodex("02-plans-status", `Use $herder:plans status herder-plans. Stay read-only and report the ready plan IDs.`, context).message
+        const plansMessage = runCodex("03-plans-status", `Use $herder:plans status herder-plans. Stay read-only and report the ready plan IDs.`, context).message
         assert.match(plansMessage, /001/)
 
-        const fireMessage = runCodex("03-fire-status", `Use $herder:fire status herder-plans. Stay read-only, do not spawn workers, and report the ready plan IDs.`, context).message
+        const fireMessage = runCodex("04-fire-status", `Use $herder:fire status herder-plans. Stay read-only, do not spawn workers, and report the ready plan IDs.`, context).message
         assert.match(fireMessage, /001/)
       } else {
         const plan = writeGrillPlan(project)
         parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "grill fixture validation")
         const before = fs.readFileSync(plan, "utf8")
 
-        const opened = runCodex("01-grill-question", `Use $herder:grill 001. The only intentional unresolved decision is the marked output format. Follow the skill exactly: ask one question, wait, and do not edit the plan yet.`, context, { ephemeral: false })
+        const opened = runCodex("01-grill-question", `Use $herder:grill --plan 001. The only intentional unresolved decision is the marked output format. Follow the skill exactly: ask one question, wait, and do not edit the plan yet.`, context, { ephemeral: false })
         assert.match(opened.message, /plain|json|format|output/i)
         assert.equal(fs.readFileSync(plan, "utf8"), before, "Grill edited before receiving an answer")
 

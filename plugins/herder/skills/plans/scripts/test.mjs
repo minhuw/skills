@@ -106,6 +106,7 @@ try {
   assert.equal(initialized.createdReadme, true)
   assert.equal(initialized.tracking, "local")
   assert.equal(buildGraph(initialized.planDir).complete, true)
+  assert.match(fs.readFileSync(path.join(initialized.planDir, "README.md"), "utf8"), /## Considered and rejected/)
   const excludeFile = git(repo, "rev-parse", "--git-path", "info/exclude")
   const resolvedExclude = path.isAbsolute(excludeFile) ? excludeFile : path.join(repo, excludeFile)
   assert.match(fs.readFileSync(resolvedExclude, "utf8"), /^\/herder-plans\/$/m)

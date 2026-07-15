@@ -35,9 +35,9 @@ The temporary directory is deleted after success and preserved after failure.
 
 ## Live Codex compatibility test
 
-This additionally starts three fresh Codex sessions against the fixture:
+This additionally exercises the full pipeline against the fixture:
 
-1. `$herder:improve plan` creates one plan without changing source code.
+1. `$herder:grill <change>` investigates user intent, pauses for final confirmation, and creates one plan without changing source code.
 2. `$herder:plans status` reads the generated backlog and reports plan `001` ready.
 3. `$herder:fire status` consumes the same backlog without spawning workers or changing files.
 
@@ -60,7 +60,7 @@ node plugins/herder/scripts/smoke-test.mjs \
 
 ## Live Grill interaction test
 
-This targeted mode creates one valid plan with a single unresolved decision, then resumes one Codex session across three turns. It verifies that `$herder:grill` asks one question without editing, records the answer without editing, and changes the plan only after explicit confirmation. It then validates the refined backlog and confirms the source checkout stayed clean.
+This targeted mode creates one valid plan with a single unresolved decision, then resumes one Codex session across three turns. It verifies that `$herder:grill --plan 001` asks one question without editing, records the answer without editing, and changes the plan only after explicit confirmation. It then validates the refined backlog and confirms the source checkout stayed clean.
 
 ```bash
 node plugins/herder/scripts/smoke-test.mjs --live-grill --keep

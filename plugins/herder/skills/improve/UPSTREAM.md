@@ -7,7 +7,8 @@ The upstream work is Copyright (c) 2026 shadcn and licensed under the MIT Licens
 Herder-specific modifications:
 
 - package Improve as the `herder:improve` skill;
-- write plans to `herder-plans/` through the shared Herder Plans protocol;
+- produce plans only from verified repository findings and route user-defined new features to Grill;
+- write plans to `herder-plans/` through the shared Herder Plans protocol and template;
 - validate generated plans with the Herder plan manager;
 - delegate execution to Herder Fire instead of maintaining a second scheduler;
 - adapt reconciliation and status ownership to Herder Plans; and

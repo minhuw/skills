@@ -402,9 +402,9 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED — <reason> | REJECTED — <
 
 Add one line for each non-obvious dependency.
 
-## Findings considered and rejected
+## Considered and rejected
 
-Record rejected findings here so later audits do not rediscover them.
+Record rejected requests, alternatives, or findings here so later planning does not repeat them.
 `
 }
 

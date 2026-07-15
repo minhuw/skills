@@ -1,6 +1,6 @@
 # Closing the Loop in Herder
 
-Improve produces and maintains plans. Herder Plans owns their format and lifecycle state. Herder Fire owns execution. Do not recreate Improve's upstream one-off executor inside this skill.
+Improve produces and maintains plans from repository findings. Grill produces plans from confirmed user intent. Herder Plans owns their shared format and lifecycle state. Herder Fire owns execution. Do not recreate Improve's upstream one-off executor inside this skill.
 
 ## `execute [<plan>]` — hand off to Fire
 
