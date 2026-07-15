@@ -1,17 +1,8 @@
 # Herder Plan Protocol
 
-## Contents
+## 1. Truth and Ownership
 
-1. Directory and ownership
-2. Index contract
-3. Plan-file contract
-4. Status lifecycle
-5. Tracking and worktree behavior
-6. Execution usage
-
-## 1. Directory and ownership
-
-Store the backlog at the repository root:
+Store plan truth at the repository root:
 
 ```text
 herder-plans/
@@ -21,17 +12,13 @@ herder-plans/
   .herder/                 # optional runtime artifacts; never plan truth
 ```
 
-`README.md` and the numbered Markdown files are the plan truth. Do not require YAML execution configuration, a database, or `.herder/state.json`. Fire may recover execution evidence from the index plus its Git branches and completion-marker commits.
+Do not require YAML execution configuration, a database, or `.herder/state.json`. Plans owns format, parsing, validation, and transitions; Grill and Improve produce the same format; Fire owns execution. Provenance must not alter what Fire receives or require hidden session context.
 
-Plans owns the canonical plan contract, parsing, validation, and status transitions. Grill produces plans from confirmed user intent and repository facts. Improve produces plans from verified repository findings. Fire owns execution side effects.
+Before manager validation, reread every draft and complete [plan-template.md](plan-template.md)'s semantic Producer self-review. Validation checks structure and graph integrity, not intent or evidence quality.
 
-Both producers write the same format. Plan provenance must not change what Fire receives or require Fire to recover hidden session context.
+## 2. Index
 
-Before manager validation, the producer must reread each draft from disk and perform the semantic Producer self-review in [plan-template.md](plan-template.md). Manager validation checks structure and graph integrity; it does not prove that a plan captures confirmed intent, cites sufficient evidence, or is executable without hidden context.
-
-## 2. Index contract
-
-`README.md` must contain one Markdown table with these headers; additional columns are allowed:
+`README.md` contains one plan table with these headers; extra columns are allowed:
 
 ```markdown
 | Plan | Title | Priority | Effort | Depends on | Status |
@@ -40,18 +27,15 @@ Before manager validation, the producer must reread each draft from disk and per
 | [002](002-second.md) | Refactor safely | P1 | M | 001 | TODO |
 ```
 
-Requirements:
+- Use unique numeric IDs and filenames padded to at least three digits.
+- Link each Plan cell to its `NNN-*.md`, unless exactly one matching file makes the target unambiguous.
+- Use numeric dependency IDs and `—` or `none` for no dependencies.
+- Keep every numbered file indexed, every entry present, and index/file dependencies identical.
+- Keep the dependency graph acyclic.
 
-- Use a unique numeric ID per plan. Format filenames with at least three digits.
-- Link each Plan cell to its local `NNN-*.md` file, or omit the link only when exactly one matching file exists.
-- Express dependencies as numeric IDs. Use `—` or `none` for no dependencies.
-- Keep every numbered plan file indexed and every indexed plan file present.
-- Keep the dependency list in the index identical to the plan file's `Depends on` metadata.
-- Keep the graph acyclic.
+## 3. Plan File
 
-## 3. Plan-file contract
-
-Every plan must be self-contained and include:
+Every plan follows the shared template and begins with:
 
 ```markdown
 # Plan NNN: <imperative title>
@@ -66,15 +50,11 @@ Every plan must be self-contained and include:
 - **Planned at**: commit `<short SHA>`, <YYYY-MM-DD>
 ```
 
-Also include why the work matters, accepted decisions and explicit non-goals, current-state evidence, exact commands, in-scope and out-of-scope files, ordered implementation steps, a test plan, machine-checkable done criteria, specific STOP conditions, and maintenance notes. Use [plan-template.md](plan-template.md) as the shared producer template.
+Use [plan-template.md](plan-template.md) for all required evidence, decisions, scope, ordered work, tests, done criteria, STOP conditions, and maintenance guidance. When terminology or architecture decisions change, schedule the relevant `CONTEXT.md`, `CONTEXT-MAP.md`, or ADR update in scope, steps, and done criteria; keep implementation details out of glossaries.
 
-When an accepted decision changes project terminology or an architectural constraint, the plan must identify the relevant `CONTEXT.md`, `CONTEXT-MAP.md`, or ADR file, describe the required content, include the file in scope and ordered steps, and add a done criterion. Keep implementation details out of domain glossaries.
+The executor receives the repository and this plan, not the Grill interview, Improve audit, or necessarily sibling plan files. Inline every required fact and durable decision.
 
-The executor has the repository plus this one plan, but no Grill interview or Improve audit context and no guarantee that sibling plans are present in its worktree. Inline every required fact and durable decision.
-
-## 4. Status lifecycle
-
-Supported statuses:
+## 4. Status
 
 ```text
 TODO
@@ -84,28 +64,26 @@ BLOCKED — <one-line reason>
 REJECTED — <one-line rationale>
 ```
 
-Normal transitions:
+Allowed transitions:
 
 ```text
 TODO → IN PROGRESS | BLOCKED | REJECTED
 IN PROGRESS → TODO | DONE | BLOCKED | REJECTED
 BLOCKED → TODO | IN PROGRESS | REJECTED
-DONE → BLOCKED                 # verification later regressed
-REJECTED → TODO                # finding intentionally reopened
+DONE → BLOCKED
+REJECTED → TODO
 ```
 
-Only the root coordinator writes status during Fire. A DONE status is necessary but not sufficient for dependency execution: Fire must also verify the corresponding completion-marker commit is reachable from integration HEAD.
+Only the root coordinator writes status during Fire. Dependencies require both `DONE` and a reachable completion-marker commit. `ready` returns dependency-satisfied `TODO` plans; `IN PROGRESS` needs resume reconstruction and `BLOCKED` needs Saver recovery.
 
-The manager's `ready` set contains dependency-satisfied `TODO` plans only. `IN PROGRESS` plans require resume reconstruction, and `BLOCKED` plans require Saver recovery; neither is fresh implementer work.
+## 5. Tracking and Worktrees
 
-## 5. Tracking and worktree behavior
+Default initialization adds `/herder-plans/` to `.git/info/exclude` without changing project `.gitignore`; tracking is opt-in. When tracked, ignore `.herder/` because runtime artifacts change frequently.
 
-Default initialization adds `/herder-plans/` to `.git/info/exclude`, making the backlog local without changing repository policy. Tracking is opt-in. When tracked, keep `.herder/` ignored because logs and runtime artifacts may change frequently.
+An ignored backlog is absent from new worktrees. Fire uses manager `snapshot` and inlines `planText` in implementer, reviewer, and saver prompts; never copy the whole backlog into execution branches.
 
-An ignored backlog is absent from newly created Git worktrees. Fire must obtain each plan through the manager's `snapshot` command and inline `planText` into implementer, reviewer, and saver prompts. Do not copy the entire backlog into candidate or integration branches.
+## 6. Execution Usage
 
-## 6. Execution usage
+The manager may generate `README.md`'s `## Execution usage` section with summaries and one row per attempt. Only the root Fire coordinator writes it through `record-usage`; workers return usage envelopes.
 
-`README.md` may contain a manager-generated `## Execution usage` section with summaries by plan, role, and model/effort plus one row per agent attempt. Only the root Fire coordinator writes this section through `herder-plans record-usage`; workers return their usage envelope instead of editing the shared README.
-
-Record model, effort, outcome, and an idempotent attempt ID for every implementer, reviewer, saver, and run-wide agent attempt. Copy token fields only from host telemetry. Keep unavailable values as `unknown`; never estimate tokens from transcript length. Input-plus-output token subtotals do not add cached-input or reasoning detail again, and incomplete coverage must remain visible.
+Record model, effort, outcome, and an idempotent attempt ID for every implementer, reviewer, saver, and run-wide attempt. Copy only host telemetry; keep unavailable fields `unknown` and never estimate. Input-plus-output subtotals do not add cached-input or reasoning details again, and incomplete coverage must remain visible.
