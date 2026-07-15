@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "profile_set": "herder",
+  "hosts": {
+    "codex": {
+      "mode": "copy",
+      "files": [
+        {
+          "source": "agent-profiles/codex/plan_implementer.toml",
+          "target": "plan_implementer.toml",
+          "sha256": "730924c0da756e6fde82046a3c2d0bb86de4004c64fa897d505e1295aeae5035"
+        },
+        {
+          "source": "agent-profiles/codex/plan_reviewer.toml",
+          "target": "plan_reviewer.toml",
+          "sha256": "e96b21389c66413ce57a91e49a495382b8039693985f18263145aef5f91c8df0"
+        },
+        {
+          "source": "agent-profiles/codex/plan_saver.toml",
+          "target": "plan_saver.toml",
+          "sha256": "04dfe1a53b44b693317d50c94ff341d1ec0484d02d8720dfa8ee50ebe12ae81b"
+        }
+      ]
+    },
+    "claude": {
+      "mode": "bundled",
+      "files": [
+        {
+          "source": "agents/plan-implementer.md",
+          "identifier": "herder:plan-implementer",
+          "sha256": "01b308964974a6d00f01793610a28a00639cb32e3abe906225fdc9fdc85c5a95"
+        },
+        {
+          "source": "agents/plan-reviewer.md",
+          "identifier": "herder:plan-reviewer",
+          "sha256": "2c179fa748de7ce4934ba8419a69f0b32636d45e2c693221141bbc8909b11f2e"
+        },
+        {
+          "source": "agents/plan-saver.md",
+          "identifier": "herder:plan-saver",
+          "sha256": "235338a269405ac72da99b72840dd51c69d4326a0378d16becca2411382d1af8"
+        }
+      ]
+    }
+  }
+}

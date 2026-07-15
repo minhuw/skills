@@ -1,0 +1,24 @@
+{
+  "name": "herder",
+  "version": "0.1.0",
+  "description": "Execute dependency-aware implementation-plan backlogs with isolated implementer, reviewer, and rescue agents.",
+  "author": {
+    "name": "minhuw",
+    "url": "https://github.com/minhuw"
+  },
+  "repository": "https://github.com/minhuw/skills",
+  "keywords": ["plans", "orchestration", "subagents", "worktrees"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Herder",
+    "shortDescription": "Execute plan backlogs with specialized agents.",
+    "longDescription": "Herder schedules dependency-aware implementation plans, independently reviews candidates, rescues failures, and integrates verified work transactionally.",
+    "developerName": "minhuw",
+    "category": "Developer Tools",
+    "capabilities": ["Write"],
+    "defaultPrompt": [
+      "Install Herder's agent roles for this project.",
+      "Fire the implementation plans in this repository."
+    ]
+  }
+}

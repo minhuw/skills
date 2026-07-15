@@ -1,0 +1,4 @@
+interface:
+  display_name: "Herder Install"
+  short_description: "Install Plan Herder agent roles safely"
+  default_prompt: "Use $herder:install to install or verify Herder agent roles for this project."

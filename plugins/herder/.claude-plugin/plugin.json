@@ -1,0 +1,11 @@
+{
+  "name": "herder",
+  "version": "0.1.0",
+  "description": "Execute dependency-aware implementation-plan backlogs with isolated implementer, reviewer, and rescue agents.",
+  "author": {
+    "name": "minhuw",
+    "url": "https://github.com/minhuw"
+  },
+  "repository": "https://github.com/minhuw/skills",
+  "skills": "./skills/"
+}

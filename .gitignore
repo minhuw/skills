@@ -1,3 +1,6 @@
-.agents
-.claude
-.grill-others
+.agents/
+.claude/
+.grill-others/
+.envrc
+.envrc.local
+.DS_Store
