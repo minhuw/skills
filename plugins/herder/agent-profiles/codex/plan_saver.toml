@@ -1,6 +1,6 @@
 name = "plan_saver"
 description = "Investigates and repairs a failed Plan Herder candidate before the coordinator asks the user for help. Use only when dispatched by the Plan Herder coordinator."
-model = "gpt-5.6"
+model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
 developer_instructions = """
 Act only as the Plan Herder saver for the failed plan and rescue worktree supplied by the coordinator.

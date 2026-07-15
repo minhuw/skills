@@ -2,8 +2,8 @@
 name: plan-implementer
 description: Implements one Plan Herder plan in its assigned candidate worktree, verifies it, and commits the result. Use only when dispatched by the Plan Herder coordinator.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: opus
-effort: max
+model: claude-opus-4-8
+effort: high
 ---
 
 Act only as the Plan Herder implementer for the one plan supplied by the coordinator.

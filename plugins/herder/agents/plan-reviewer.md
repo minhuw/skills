@@ -2,7 +2,7 @@
 name: plan-reviewer
 description: Independently reviews one staged Plan Herder candidate for correctness, scope, and verification evidence. Use only when dispatched by the Plan Herder coordinator.
 tools: Read, Bash, Grep, Glob
-model: opus
+model: claude-opus-4-8
 effort: xhigh
 ---
 

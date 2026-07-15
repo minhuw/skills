@@ -2,7 +2,7 @@
 name: plan-saver
 description: Investigates and repairs a failed Plan Herder candidate before the coordinator asks the user for help. Use only when dispatched by the Plan Herder coordinator.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: opus
+model: claude-opus-4-8
 effort: xhigh
 ---
 
