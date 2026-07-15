@@ -199,7 +199,12 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 ## Considered and rejected
 
 - <request, alternative, or finding>: rejected because <one line>.
+
+<!-- Preserve the manager-generated "## Execution usage" section and its
+marker comments verbatim below this point. Plan producers never write usage rows. -->
 ```
+
+After `herder-plans init`, edit the descriptive and plan-index sections in place instead of replacing the entire README. Preserve the manager-generated execution-usage block so Fire can append attempt records and Plans can regenerate its plan/role/model summaries safely.
 
 ## Producer self-review — required before validation
 

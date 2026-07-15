@@ -19,6 +19,7 @@ function fail(message) {
 function parseArgs(argv) {
   const options = {
     live: false,
+    liveFire: false,
     liveGrill: false,
     keep: false,
     workspace: "",
@@ -27,6 +28,7 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === "--live") options.live = true
+    else if (argument === "--live-fire") options.liveFire = true
     else if (argument === "--live-grill") options.liveGrill = true
     else if (argument === "--keep") options.keep = true
     else if (["--workspace", "--auth-file"].includes(argument)) {
@@ -34,11 +36,13 @@ function parseArgs(argv) {
       const key = argument === "--workspace" ? "workspace" : "authFile"
       options[key] = path.resolve(argv[++index])
     } else if (["-h", "--help"].includes(argument)) {
-      process.stdout.write(`Usage: node smoke-test.mjs [--live | --live-grill] [--keep] [--workspace <empty-dir>] [--auth-file <file>]\n`)
+      process.stdout.write(`Usage: node smoke-test.mjs [--live | --live-fire | --live-grill] [--keep] [--workspace <empty-dir>] [--auth-file <file>]\n`)
       process.exit(0)
     } else fail(`Unknown argument: ${argument}`)
   }
-  if (options.live && options.liveGrill) fail("--live and --live-grill are separate test modes")
+  if ([options.live, options.liveFire, options.liveGrill].filter(Boolean).length > 1) {
+    fail("--live, --live-fire, and --live-grill are separate test modes")
+  }
   if (options.workspace) options.keep = true
   return options
 }
@@ -110,6 +114,27 @@ test("prints the application name", () => {
   run("git", ["commit", "-q", "-m", "test: add smoke fixture"], { cwd: project })
 }
 
+function writeCodexConfig(codexHome, project, fireRoot) {
+  const tomlString = (value) => JSON.stringify(value)
+  fs.writeFileSync(path.join(codexHome, "config.toml"), `model = "gpt-5.6-sol"
+model_reasoning_effort = "max"
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[features.multi_agent_v2]
+enabled = true
+hide_spawn_agent_metadata = false
+max_concurrent_threads_per_session = 4
+tool_namespace = "herder_agents"
+
+[agents]
+max_depth = 1
+
+[sandbox_workspace_write]
+writable_roots = [${tomlString(path.join(project, ".git"))}, ${tomlString(fireRoot)}]
+`)
+}
+
 function finalAgentMessage(jsonl) {
   let message = ""
   for (const line of jsonl.split(/\r?\n/)) {
@@ -152,13 +177,85 @@ function finishCodexStep(name, result, context) {
 function runCodex(name, prompt, context, { ephemeral = true } = {}) {
   const args = [
     "exec",
-    "--sandbox", "workspace-write",
     "--json",
     "-C", context.project,
     prompt,
   ]
   if (ephemeral) args.splice(1, 0, "--ephemeral")
   return finishCodexStep(name, run("codex", args, { cwd: context.project, env: context.env, allowFailure: true }), context)
+}
+
+function jsonlFiles(directory) {
+  if (!fs.existsSync(directory)) return []
+  const files = []
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = path.join(directory, entry.name)
+    if (entry.isDirectory()) files.push(...jsonlFiles(entryPath))
+    else if (entry.isFile() && entry.name.endsWith(".jsonl")) files.push(entryPath)
+  }
+  return files
+}
+
+function nativeAgentEvidence(codexHome, evidenceReader) {
+  const evidence = []
+  for (const file of jsonlFiles(path.join(codexHome, "sessions"))) {
+    const firstLine = fs.readFileSync(file, "utf8").split(/\r?\n/, 1)[0]
+    let meta
+    try {
+      const event = JSON.parse(firstLine)
+      if (event.type !== "session_meta") continue
+      meta = event.payload || {}
+    } catch {
+      continue
+    }
+    const role = meta.agent_role || meta.source?.subagent?.thread_spawn?.agent_role
+    if (!role?.startsWith("plan_")) continue
+    const agentId = meta.id || meta.session_id
+    const result = run("node", [evidenceReader, "--agent-id", agentId, "--codex-home", codexHome], { cwd: codexHome })
+    evidence.push(parseJson(result.stdout, `agent evidence ${agentId}`))
+  }
+  return evidence
+}
+
+function nativeSpawnEvidence(codexHome) {
+  const evidence = []
+  for (const file of jsonlFiles(path.join(codexHome, "sessions"))) {
+    let context = null
+    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+      if (!line.trim().startsWith("{")) continue
+      let event
+      try {
+        event = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (event.type === "turn_context") context = event.payload || null
+      if (event.type !== "response_item" || event.payload?.type !== "function_call") continue
+      if (event.payload.name !== "spawn_agent" || event.payload.namespace !== "herder_agents") continue
+      const parsedArguments = JSON.parse(event.payload.arguments)
+      const { message, ...routingArguments } = parsedArguments
+      evidence.push({
+        transcript: file,
+        namespace: event.payload.namespace,
+        arguments: routingArguments,
+        encryptedMessagePresent: typeof message === "string" && message.length > 0,
+        coordinatorModel: context?.model || null,
+        coordinatorEffort: context?.effort || null,
+        multiAgentVersion: context?.multi_agent_version || null,
+      })
+    }
+  }
+  return evidence
+}
+
+function worktreeForBranch(repo, branch) {
+  const lines = run("git", ["worktree", "list", "--porcelain"], { cwd: repo }).stdout.split(/\r?\n/)
+  let current = ""
+  for (const line of lines) {
+    if (line.startsWith("worktree ")) current = line.slice("worktree ".length)
+    if (line === `branch refs/heads/${branch}`) return current
+  }
+  fail(`No worktree found for ${branch}`)
 }
 
 function resumeCodex(name, threadId, prompt, context) {
@@ -175,7 +272,12 @@ function writeGrillPlan(project) {
   const planDir = path.join(project, "herder-plans")
   const plannedAt = run("git", ["rev-parse", "--short", "HEAD"], { cwd: project }).stdout.trim()
   const plannedDate = new Date().toISOString().slice(0, 10)
-  fs.writeFileSync(path.join(planDir, "README.md"), `# Herder Plans
+  const readme = path.join(planDir, "README.md")
+  const currentReadme = fs.readFileSync(readme, "utf8")
+  const usageStart = currentReadme.indexOf("<!-- herder-usage:start -->")
+  if (usageStart === -1) fail("Initialized Grill fixture has no usage ledger")
+  const usageSection = currentReadme.slice(usageStart).trim()
+  fs.writeFileSync(readme, `# Herder Plans
 
 ## Execution order & status
 
@@ -190,6 +292,8 @@ None.
 ## Considered and rejected
 
 None.
+
+${usageSection}
 `)
   const plan = path.join(planDir, "001-add-version-flag.md")
   fs.writeFileSync(plan, `# Plan 001: Add a --version flag
@@ -282,8 +386,11 @@ function main() {
   const project = path.join(root, "project")
   const codexHome = path.join(root, "codex-home")
   const transcripts = path.join(root, "transcripts")
+  const reports = path.join(root, "reports")
+  const fireRoot = path.join(root, "fire-worktrees")
   fs.mkdirSync(project, { recursive: true })
   fs.mkdirSync(codexHome, { recursive: true })
+  writeCodexConfig(codexHome, project, fireRoot)
 
   let succeeded = false
   let createdAuthLink = ""
@@ -311,6 +418,8 @@ function main() {
     assert.match(grillText, /resume the one-question interview/)
     assert.match(improveText, /Route user intent to .*herder:grill/)
     assert.match(improveText, /Producer self-review/)
+    const evidenceReader = path.join(installedPath, "skills", "fire", "scripts", "read-codex-agent-evidence.mjs")
+    assert.equal(fs.existsSync(evidenceReader), true, "missing installed Codex Multi-Agent V2 evidence reader")
 
     const manager = path.join(installedPath, "skills", "plans", "scripts", "herder-plans.mjs")
     const initialized = parseJson(run("node", [manager, "init", "herder-plans", "--pretty"], { cwd: project }).stdout, "plans init")
@@ -318,10 +427,25 @@ function main() {
     assert.equal(run("git", ["check-ignore", "-q", "herder-plans/README.md"], { cwd: project, allowFailure: true }).status, 0)
     const emptyGraph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "empty validation")
     assert.equal(emptyGraph.counts.total, 0)
+    const recordedUsage = parseJson(run("node", [
+      manager,
+      "record-usage", "RUN", "plan-reviewer", "herder-plans",
+      "--attempt", "smoke-run-reviewer-1",
+      "--model", "gpt-5.6-sol",
+      "--effort", "xhigh",
+      "--outcome", "AVAILABLE",
+      "--source", "unknown",
+      "--pretty",
+    ], { cwd: project }).stdout, "usage recording")
+    assert.equal(recordedUsage.recorded, true)
+    const usage = parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "usage report")
+    assert.equal(usage.attempts, 1)
+    assert.equal(usage.byRole[0].key, "plan-reviewer")
+    assert.equal(usage.byRole[0].tokenAttempts, 0)
 
     run("npm", ["test"], { cwd: project })
 
-    if (options.live || options.liveGrill) {
+    if (options.live || options.liveFire || options.liveGrill) {
       if (!fs.existsSync(options.authFile)) fail(`Codex auth file not found: ${options.authFile}`)
       const authTarget = path.join(codexHome, "auth.json")
       if (!fs.existsSync(authTarget)) {
@@ -329,6 +453,13 @@ function main() {
         createdAuthLink = authTarget
       }
       const context = { project, env, transcripts }
+
+      const installMessage = runCodex("00-install", `Use $herder:install --host codex --scope user. Install the native Herder profiles into this isolated Codex home, verify Multi-Agent V2, and do not change repository source.`, context).message
+      assert.match(installMessage, /multi.agent.v2|multi_agent_v2|enabled/i)
+      for (const profile of ["plan_implementer", "plan_reviewer", "plan_saver"]) {
+        assert.equal(fs.existsSync(path.join(codexHome, "agents", `${profile}.toml`)), true, `missing installed profile ${profile}`)
+      }
+      assert.match(fs.readFileSync(path.join(codexHome, "agents", "plan_reviewer.toml"), "utf8"), /sandbox_mode = "read-only"/)
 
       if (options.live) {
         const opened = runCodex("01-grill-intake", `Use $herder:grill to plan a --version flag for this tiny CLI. Print only the package version followed by one newline, preserve the no-argument output, and add no dependencies. Use your recommendations for any remaining decisions. Follow the skill exactly: inspect the repository, summarize the shared understanding, ask for final confirmation, and do not edit yet.`, context, { ephemeral: false })
@@ -343,6 +474,7 @@ function main() {
         const graph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "generated validation")
         assert.equal(graph.counts.total, 1)
         assert.deepEqual(graph.ready, ["001"])
+        assert.equal(parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "preserved usage report").attempts, 1)
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
 
         const plansMessage = runCodex("03-plans-status", `Use $herder:plans status herder-plans. Stay read-only and report the ready plan IDs.`, context).message
@@ -350,6 +482,70 @@ function main() {
 
         const fireMessage = runCodex("04-fire-status", `Use $herder:fire status herder-plans. Stay read-only, do not spawn workers, and report the ready plan IDs.`, context).message
         assert.match(fireMessage, /001/)
+      } else if (options.liveFire) {
+        const improveMessage = runCodex("01-improve", `Use $herder:improve plan to add a --version flag to this tiny CLI. Write exactly one self-contained plan under herder-plans/, do not modify source code, do not ask questions, and validate the backlog before finishing.`, context).message
+        assert.match(improveMessage, /herder-plans|plan/i)
+
+        const graph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "generated validation")
+        assert.equal(graph.counts.total, 1)
+        assert.deepEqual(graph.ready, ["001"])
+        assert.equal(parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "preserved usage report").attempts, 1)
+        assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
+
+        const originalHead = run("git", ["rev-parse", "HEAD"], { cwd: project }).stdout.trim()
+        const fireMessage = runCodex("02-fire-run", `Use $herder:fire herder-plans --max-parallel 1. Execute the validated backlog end to end in this disposable repository. Use ${fireRoot} as the worktree root. Do not push or merge into the current branch. Follow the skill exactly and report the integration branch, verification, and token usage.`, context, {
+          ephemeral: false,
+        }).message
+        assert.match(fireMessage, /completed|done|integration/i)
+        fs.mkdirSync(reports, { recursive: true })
+        fs.writeFileSync(path.join(reports, "final-fire-report.md"), `${fireMessage.trim()}\n`)
+
+        const completedGraph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "completed validation")
+        assert.equal(completedGraph.complete, true)
+        assert.equal(completedGraph.counts.done, 1)
+        const completedUsage = parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "completed usage report")
+        const fireAttempts = completedUsage.records.filter((record) => record.attempt !== "smoke-run-reviewer-1")
+        assert.equal(fireAttempts.length >= 3, true)
+        assert.equal(fireAttempts.every((record) => Number.isSafeInteger(record.inputTokens)), true)
+        assert.equal(fireAttempts.every((record) => Number.isSafeInteger(record.outputTokens)), true)
+        assert.equal(fireAttempts.every((record) => record.source === "codex-multi-agent-v2-transcript"), true)
+        assert.equal(fireAttempts.some((record) => record.model === "gpt-5.6-luna" && record.effort === "max"), true)
+        assert.equal(fireAttempts.some((record) => record.model === "gpt-5.6-sol" && record.effort === "xhigh"), true)
+
+        const agentEvidence = nativeAgentEvidence(codexHome, evidenceReader)
+        assert.equal(agentEvidence.length >= 3, true, "expected native implementer and reviewer sessions")
+        assert.equal(agentEvidence.every((item) => item.multiAgentVersion === "v2"), true)
+        assert.equal(agentEvidence.every((item) => item.userMessageCount === 0 && item.taskMessageCount === 1), true, "child context was not isolated")
+        assert.equal(agentEvidence.every((item) => item.cwd === project), true, "child session did not inherit the intended repository context")
+        assert.equal(agentEvidence.every((item) => item.executionWorkdirs.length > 0 && item.executionWorkdirs.every((workdir) => workdir.startsWith(fireRoot))), true, "child command escaped the disposable Fire worktree root")
+        assert.equal(agentEvidence.every((item) => item.usage && Number.isSafeInteger(item.usage.inputTokens)), true)
+        const implementers = agentEvidence.filter((item) => item.agentRole === "plan_implementer")
+        const reviewers = agentEvidence.filter((item) => item.agentRole === "plan_reviewer")
+        assert.equal(implementers.length >= 1, true)
+        assert.equal(reviewers.length >= 2, true)
+        assert.equal(implementers.every((item) => item.model === "gpt-5.6-luna" && item.effort === "max" && item.sandbox === "workspace-write"), true)
+        assert.equal(reviewers.every((item) => item.model === "gpt-5.6-sol" && item.effort === "xhigh" && item.sandbox === "workspace-write"), true)
+        fs.writeFileSync(path.join(reports, "native-agent-evidence.json"), `${JSON.stringify(agentEvidence, null, 2)}\n`)
+
+        const spawnEvidence = nativeSpawnEvidence(codexHome)
+        assert.equal(spawnEvidence.length >= 3, true)
+        assert.equal(spawnEvidence.every((item) => item.namespace === "herder_agents"), true)
+        assert.equal(spawnEvidence.every((item) => item.encryptedMessagePresent), true)
+        assert.equal(spawnEvidence.every((item) => item.arguments.fork_turns === "none"), true)
+        assert.equal(spawnEvidence.every((item) => ["plan_implementer", "plan_reviewer", "plan_saver"].includes(item.arguments.agent_type)), true)
+        assert.equal(spawnEvidence.every((item) => !("model" in item.arguments) && !("reasoning_effort" in item.arguments) && !("service_tier" in item.arguments)), true)
+        assert.equal(spawnEvidence.every((item) => item.coordinatorModel === "gpt-5.6-sol" && item.coordinatorEffort === "max" && item.multiAgentVersion === "v2"), true)
+        fs.writeFileSync(path.join(reports, "native-spawn-evidence.json"), `${JSON.stringify(spawnEvidence, null, 2)}\n`)
+
+        const fireTranscript = fs.readFileSync(path.join(transcripts, "02-fire-run.jsonl"), "utf8")
+        assert.doesNotMatch(fireTranscript, /run-codex-worker\.mjs/)
+
+        const integrationBranches = run("git", ["branch", "--list", "plan-herder/integration-*", "--format=%(refname:short)"], { cwd: project }).stdout.trim().split(/\r?\n/).filter(Boolean)
+        assert.equal(integrationBranches.length, 1)
+        const integrationWorktree = worktreeForBranch(project, integrationBranches[0])
+        run("npm", ["test"], { cwd: integrationWorktree })
+        assert.equal(run("git", ["rev-parse", "HEAD"], { cwd: project }).stdout.trim(), originalHead)
+        assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
       } else {
         const plan = writeGrillPlan(project)
         parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "grill fixture validation")
@@ -378,7 +574,8 @@ function main() {
     process.stdout.write(`Herder smoke test passed\n`)
     process.stdout.write(`Plugin: ${installed.name}@${installed.version}\n`)
     process.stdout.write(`Fixture: ${options.keep ? project : "temporary (removed after success)"}\n`)
-    if (options.live || options.liveGrill) process.stdout.write(`Transcripts: ${transcripts}\n`)
+    if (options.live || options.liveFire || options.liveGrill) process.stdout.write(`Transcripts: ${transcripts}\n`)
+    if (options.liveFire) process.stdout.write(`Reports: ${reports}\n`)
   } finally {
     if (createdAuthLink) {
       try {

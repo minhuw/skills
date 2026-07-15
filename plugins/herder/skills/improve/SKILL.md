@@ -117,7 +117,7 @@ Write each plan **for the weakest plausible executor**. That means:
 - A maintenance note (what future changes will interact with this, what to watch in review).
 - Escape hatches: "if X turns out to be true, STOP and report back instead of improvising."
 
-Finish by writing `herder-plans/README.md` with the recommended execution order, dependencies, and status. Then reread every written plan from disk and perform the shared template's required **Producer self-review** before mechanical validation. Repair semantic defects supported by the vetted finding and repository evidence. If review reveals an unsupported assumption, unresolved product decision, material scope choice, or work that is not one coherent independently testable plan, do not invent the answer: reject or defer the finding, or route the unresolved intent through Grill and wait for confirmation.
+Finish by updating `herder-plans/README.md` with the recommended execution order, dependencies, and status. Preserve the manager-generated `## Execution usage` block and its marker comments verbatim; it belongs to Fire and Plans, not Improve. Then reread every written plan from disk and perform the shared template's required **Producer self-review** before mechanical validation. Repair semantic defects supported by the vetted finding and repository evidence. If review reveals an unsupported assumption, unresolved product decision, material scope choice, or work that is not one coherent independently testable plan, do not invent the answer: reject or defer the finding, or route the unresolved intent through Grill and wait for confirmation.
 
 Validate the result only after semantic self-review passes:
 

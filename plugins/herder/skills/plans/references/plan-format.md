@@ -7,6 +7,7 @@
 3. Plan-file contract
 4. Status lifecycle
 5. Tracking and worktree behavior
+6. Execution usage
 
 ## 1. Directory and ownership
 
@@ -102,3 +103,9 @@ The manager's `ready` set contains dependency-satisfied `TODO` plans only. `IN P
 Default initialization adds `/herder-plans/` to `.git/info/exclude`, making the backlog local without changing repository policy. Tracking is opt-in. When tracked, keep `.herder/` ignored because logs and runtime artifacts may change frequently.
 
 An ignored backlog is absent from newly created Git worktrees. Fire must obtain each plan through the manager's `snapshot` command and inline `planText` into implementer, reviewer, and saver prompts. Do not copy the entire backlog into candidate or integration branches.
+
+## 6. Execution usage
+
+`README.md` may contain a manager-generated `## Execution usage` section with summaries by plan, role, and model/effort plus one row per agent attempt. Only the root Fire coordinator writes this section through `herder-plans record-usage`; workers return their usage envelope instead of editing the shared README.
+
+Record model, effort, outcome, and an idempotent attempt ID for every implementer, reviewer, saver, and run-wide agent attempt. Copy token fields only from host telemetry. Keep unavailable values as `unknown`; never estimate tokens from transcript length. Input-plus-output token subtotals do not add cached-input or reasoning detail again, and incomplete coverage must remain visible.

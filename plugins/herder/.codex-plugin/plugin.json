@@ -1,7 +1,7 @@
 {
   "name": "herder",
-  "version": "0.3.0+codex.20260715074643",
-  "description": "Create plans from user intent or repository evidence, clarify decisions, and execute them with reviewed multi-agent integration.",
+  "version": "0.4.0+codex.20260715100026",
+  "description": "Create plans from user intent or repository evidence, clarify decisions, manage dependencies, and execute them with reviewed integration and token accounting.",
   "author": {
     "name": "minhuw",
     "url": "https://github.com/minhuw"
@@ -13,13 +13,14 @@
     "interview",
     "orchestration",
     "subagents",
-    "worktrees"
+    "worktrees",
+    "usage"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Herder",
     "shortDescription": "Clarify, create, and execute plans with specialized agents.",
-    "longDescription": "Herder grills requested changes into canonical plans, audits repositories for evidence-backed improvements, maintains a local dependency-aware backlog, reviews candidates, rescues failures, and integrates verified work transactionally.",
+    "longDescription": "Herder grills requested changes into canonical plans, audits repositories for evidence-backed improvements, manages a local dependency-aware backlog, reviews candidates, rescues failures, integrates verified work transactionally, and records per-attempt token usage with honest coverage.",
     "developerName": "minhuw",
     "category": "Developer Tools",
     "capabilities": [

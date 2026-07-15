@@ -9,6 +9,7 @@ From the marketplace repository root:
 ```bash
 node plugins/herder/skills/plans/scripts/test.mjs
 node plugins/herder/skills/install/scripts/test.mjs
+node plugins/herder/skills/fire/scripts/test.mjs
 
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/plans
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/grill
@@ -25,7 +26,7 @@ Use `uv run --with pyyaml python ...` when the validation scripts' Python enviro
 
 ## Local installation smoke test
 
-This creates a real temporary Git repository and isolated `CODEX_HOME`, installs the current marketplace checkout through `codex plugin`, verifies all five skills are cached, initializes an ignored `herder-plans/` backlog through the installed manager, validates it, and runs the fixture's tests:
+This creates a real temporary Git repository and isolated `CODEX_HOME`, installs the current marketplace checkout through `codex plugin`, verifies all five skills are cached, initializes an ignored `herder-plans/` backlog through the installed manager, records and aggregates a usage attempt, validates the backlog, and runs the fixture's tests:
 
 ```bash
 node plugins/herder/scripts/smoke-test.mjs
@@ -35,9 +36,9 @@ The temporary directory is deleted after success and preserved after failure.
 
 ## Live Codex compatibility test
 
-This additionally exercises the full pipeline against the fixture:
+This first installs the three native profiles in an isolated user-scoped Codex home, verifies that Multi-Agent V2 is enabled, and then exercises the full intent-to-plan pipeline against the fixture:
 
-1. `$herder:grill <change>` investigates user intent, pauses for final confirmation, and creates one plan without changing source code.
+1. `$herder:grill <change>` investigates user intent, pauses for final confirmation, and creates one plan without changing source code or replacing the manager-generated usage ledger.
 2. `$herder:plans status` reads the generated backlog and reports plan `001` ready.
 3. `$herder:fire status` consumes the same backlog without spawning workers or changing files.
 
@@ -66,8 +67,26 @@ This targeted mode creates one valid plan with a single unresolved decision, the
 node plugins/herder/scripts/smoke-test.mjs --live-grill --keep
 ```
 
-Use `--workspace` and `--auth-file` exactly as in the general live test. The transcript files are `01-grill-question.jsonl`, `02-grill-answer.jsonl`, and `03-grill-confirm.jsonl`.
+Use `--workspace` and `--auth-file` exactly as in the general live test. The transcript files include `00-install.jsonl`, `01-grill-question.jsonl`, `02-grill-answer.jsonl`, and `03-grill-confirm.jsonl`.
+
+## Live Fire execution test
+
+This high-cost mode creates a plan with Improve and executes it through native Codex Multi-Agent V2. The isolated Codex configuration pins the main scheduler to Sol/max, enables `multi_agent_v2`, and gives the coordinator only the workspace-write roots needed for disposable worktrees and Git metadata. The test installs the native profiles in a fresh session, then verifies:
+
+- Fire dispatches `agent_type` with `fork_turns: "none"` and never invokes the removed `codex exec` worker adapter.
+- Implementers run Luna/max and reviewers run Sol/xhigh. The installed reviewer profile requests read-only; the transcript also records whether the coordinator's inherited runtime permission override superseded it, while Fire proves the reviewer left the staged tree unchanged.
+- Every child transcript reports Multi-Agent V2 with one `NEW_TASK` envelope and no user-history messages, proving coordinator history was not forked. Its command evidence must stay under the disposable candidate, staging, or integration worktree root.
+- Exact native per-child transcript telemetry is recorded as numeric `codex-multi-agent-v2-transcript` usage rows.
+- The integration branch passes tests while the source branch and checkout remain unchanged.
+
+```bash
+node plugins/herder/scripts/smoke-test.mjs \
+  --live-fire \
+  --workspace /tmp/herder-live-fire
+```
+
+The transcript files are `00-install.jsonl`, `01-improve.jsonl`, and `02-fire-run.jsonl`. The retained `reports/final-fire-report.md` contains Fire's user-facing result. `reports/native-spawn-evidence.json` records redacted namespaced routing arguments and coordinator configuration; it records only that an encrypted task payload existed, never the payload itself. `reports/native-agent-evidence.json` records the effective child role, model, effort, sandbox, repository context, execution workdirs, and token telemetry extracted from persisted Codex sessions. Inspect those reports together with the fixture, integration worktree, and `herder-plans/README.md`, then delete the workspace when finished.
 
 ## Release confidence
 
-Before publishing, require all deterministic checks and the local installation smoke test. Run the general live test after changes to Improve output, the Plans protocol, or Fire's consumption of plan state. Run the targeted Grill test after changes to its interview, confirmation, or plan-editing contract. A Fire execution run with real implementer/reviewer/saver agents is a separate higher-cost integration test and should be performed when scheduling, worktree, review, or rescue behavior changes materially.
+Before publishing, require all deterministic checks and the local installation smoke test. Run the general live test after changes to Improve output, the Plans protocol, or Fire's consumption of plan state. Run the targeted Grill test after changes to its interview, confirmation, or plan-editing contract. Run the high-cost Fire execution mode when scheduling, worktree, model routing, usage capture, review, or rescue behavior changes materially.

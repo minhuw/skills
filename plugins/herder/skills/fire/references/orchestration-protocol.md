@@ -10,8 +10,9 @@ Use this protocol for every `fire` and `resume` run. The coordinator owns schedu
 4. Dispatch ready plans
 5. Transactional integration
 6. Rescue before escalation
-7. Resume semantics
-8. Completion
+7. Usage accounting
+8. Resume semantics
+9. Completion
 
 ## 1. Establish the Run
 
@@ -20,10 +21,12 @@ Resolve:
 - `repo_root`: absolute repository root.
 - `plan_dir`: absolute Herder plan directory, normally `<repo_root>/herder-plans`.
 - `plan_manager`: absolute path to `skills/plans/scripts/herder-plans.mjs` inside the installed plugin.
+- `codex_evidence_reader`: on Codex, the absolute path to `skills/fire/scripts/read-codex-agent-evidence.mjs` inside the installed plugin.
 - `base_commit`: current `HEAD` for a new run, or current integration HEAD for a resumed run.
 - `run_id`: a filesystem- and branch-safe UTC timestamp or the suffix of the resumed integration branch.
 - `integration_branch`: explicit argument or `plan-herder/integration-<run_id>`.
 - `worktree_root`: a temporary directory outside the user's checkout.
+- `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume.
 
 Read applicable repository instructions before dispatch. Inspect the user's checkout but do not clean, stash, reset, stage, or commit it.
 
@@ -38,13 +41,13 @@ Complete all checks before creating branches or worktrees:
 1. Confirm `git rev-parse --show-toplevel` and `git worktree list` succeed.
 2. Run `node <plan_manager> validate <plan_dir> --pretty` and reject graph errors.
 3. Confirm every indexed non-rejected plan file exists and is readable.
-4. Resolve or probe the three logical roles. On Codex use `plan_implementer`, `plan_reviewer`, and `plan_saver`; on Claude Code use `herder:plan-implementer`, `herder:plan-reviewer`, and `herder:plan-saver`. A probe may only ask the mapped role to return `AVAILABLE`; do not give it repository work.
+4. Resolve the three logical roles and their configured model/effort values. On Codex, require a live Multi-Agent V2 spawn schema in the `herder_agents` namespace containing both `agent_type` and `fork_turns`, and inspect the installed `plan_implementer`, `plan_reviewer`, and `plan_saver` definitions. Each must pin its expected model and effort. Never use a task name as a substitute for `agent_type`, and never perform a speculative model call during preflight. On Claude Code probe `herder:plan-implementer`, `herder:plan-reviewer`, and `herder:plan-saver`; a probe may only return `AVAILABLE`, is a usage-bearing `RUN` attempt, and must be recorded even when preflight later fails. Retain the configured values for usage attribution and replace them with host-reported effective values only when available.
 5. Determine the repository-wide verification commands from repository instructions, CI configuration, and plan command tables. Do not guess commands when the plans specify them.
 6. Check that branch names and intended worktree locations do not collide.
 
 Also confirm that the host permission profile permits writes to Git metadata before mutation. Some Codex `workspace-write` profiles protect `.git`, which prevents `git worktree add` even when ordinary repository files are writable. In a controlled disposable environment, select an adequate permission profile before launching the run; otherwise stop at preflight and report the required permission rather than partially creating the run.
 
-If a role probe cannot run, report the missing logical role and expected host identifier. Role configuration—including its model and reasoning effort—is the user's responsibility; generic fallback selection is forbidden.
+If the Codex V2 interface, a Codex custom profile, or a Claude role probe is unavailable, report the missing feature, logical role, model, effort, or host identifier. On Codex direct the user to `$herder:install`; do not fall back to nested `codex exec` or a generic agent.
 
 ## 3. Branch and Worktree Layout
 
@@ -57,6 +60,15 @@ plan-herder/<run-id>/<plan-id>-stage-<attempt>
 ```
 
 The coordinator creates branches and worktrees. When the host can spawn directly into a supplied isolated worktree, use that facility. Otherwise create the Git worktree first and pass its absolute path to the agent.
+
+For a Codex attempt, call the native Multi-Agent V2 spawn tool with:
+
+- a unique, stable `task_name` based on the run, plan, role, and ordinal;
+- `agent_type` equal to `plan_implementer`, `plan_reviewer`, or `plan_saver`;
+- `fork_turns: "none"` so unrelated coordinator history is not copied;
+- one self-contained initial message containing the complete role prompt and immutable plan snapshot.
+
+Omit `model`, `reasoning_effort`, and `service_tier`. The custom agent definition owns those values. Use the returned canonical task name for follow-up, wait, interrupt, and final-result handling. Treat spawn failure, terminal failure, silence, or a missing response envelope as an attempt failure. Preserve the native child transcript as execution evidence when the host exposes it.
 
 Keep the coordinator shell anchored in the user's stable original checkout or another stable directory. Execute every Git command with `git -C <absolute-worktree>` and every non-Git command with an explicit tool workdir or scoped `(cd <absolute-worktree> && ...)` subshell. Never depend on an ambient `cwd`, and never remove or recreate the directory containing the coordinator process.
 
@@ -80,7 +92,7 @@ Do not serialize independent plans unnecessarily. Do not dispatch a dependent me
 
 ### Implementer prompt contract
 
-Give the resolved implementer role (`plan_implementer` on Codex or `herder:plan-implementer` on Claude Code):
+Give the resolved implementer role (`plan_implementer` through Codex Multi-Agent V2 or `herder:plan-implementer` on Claude Code):
 
 - its role and the prohibition on spawning agents;
 - the absolute candidate worktree path and branch;
@@ -88,6 +100,7 @@ Give the resolved implementer role (`plan_implementer` on Codex or `herder:plan-
 - the complete `planText` returned by `plan_manager snapshot`, always inlined;
 - applicable repository instructions;
 - an instruction never to edit `herder-plans/README.md` or any plan status;
+- the stable attempt ID and resolved model/effort attribution;
 - a requirement to stay in scope, honor STOP conditions, run every gate, and commit all intended changes;
 - this exact response shape:
 
@@ -98,9 +111,10 @@ CHECKS: <command — result, one per line>
 FILES CHANGED: <paths>
 STOPPED BECAUSE: <only when not COMPLETE>
 NOTES: <material facts only>
+USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Treat missing commits, dirty intended changes, unverifiable checks, STOPPED, tool errors, or silence as failure and enter rescue.
+Tell the worker to use `unknown` for values not explicitly exposed by the host and never estimate from transcript length. Structured host telemetry wins over the worker-authored `USAGE` line. Treat missing commits, dirty intended changes, unverifiable checks, STOPPED, tool errors, or silence as failure and enter rescue. Record the attempt through Plans even when no response or usage envelope returns.
 
 ## 5. Transactional Integration
 
@@ -116,17 +130,18 @@ For each candidate:
 4. Confirm the diff is limited to the plan's scope, except generated artifacts explicitly caused by its gates.
 5. Run every plan done criterion and the applicable project-wide gates in the staging worktree.
 6. Create an empty coordinator completion-marker commit with `git commit --allow-empty -m "plan-herder(<id>): mark plan done"`.
-7. Dispatch `plan-reviewer` against the complete staging diff from the pre-plan integration SHA to staging HEAD.
+7. Record the staging worktree's clean status and tree SHA, dispatch `plan-reviewer` against the complete staging diff from the pre-plan integration SHA to staging HEAD, and prove both are unchanged after review. Any reviewer mutation is a failed review even if its verdict says APPROVE.
 
 ### Reviewer prompt contract
 
-Give the resolved reviewer role (`plan_reviewer` on Codex or `herder:plan-reviewer` on Claude Code):
+Give the resolved reviewer role (`plan_reviewer` through Codex Multi-Agent V2 or `herder:plan-reviewer` on Claude Code):
 
 - its role and the prohibition on editing or spawning agents;
 - the absolute staging worktree path and branch;
 - the complete plan text;
 - the base and staged HEAD SHAs;
 - the actual checks run and their results;
+- the stable attempt ID and resolved model/effort attribution;
 - instructions to inspect the diff, trace every hunk to the plan, verify scope and behavior, and run additional read-only or verification commands as needed;
 - this exact response shape:
 
@@ -136,9 +151,10 @@ FINDINGS: <ordered findings with file:line evidence, or none>
 SCOPE: PASS | FAIL
 CHECKS: <independently verified commands/results>
 RATIONALE: <concise>
+USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Only `APPROVE` with `SCOPE: PASS` can integrate. Verify the integration branch still points to the staging base SHA, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD and review again. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
+Tell the reviewer never to estimate unavailable usage. Prefer structured host telemetry over the reviewer-authored `USAGE` line. Only `APPROVE` with `SCOPE: PASS` can integrate. Verify the integration branch still points to the staging base SHA, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD and review again. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
 
 If any merge, check, review, or compare-and-advance step fails, leave integration HEAD unchanged and enter rescue.
 
@@ -146,7 +162,7 @@ If any merge, check, review, or compare-and-advance step fails, leave integratio
 
 Prepare the rescue environment; do not ask `plan-saver` to reconstruct missing candidate changes from a different checkout. Reuse the candidate branch/worktree when it safely contains the failed work. For integration-only failures, create a rescue branch/worktree from the latest integration HEAD and combine the candidate there first.
 
-Give the resolved saver role (`plan_saver` on Codex or `herder:plan-saver` on Claude Code) only:
+Give the resolved saver role (`plan_saver` through Codex Multi-Agent V2 or `herder:plan-saver` on Claude Code) only:
 
 - the absolute rescue worktree path;
 - branch name;
@@ -154,6 +170,7 @@ Give the resolved saver role (`plan_saver` on Codex or `herder:plan-saver` on Cl
 - the statement that the previous attempt failed;
 - the expected outcome: inspect Git/repository state, reproduce relevant gates, repair and commit if possible, or classify the blocker;
 - the user's answer when resuming after `NEEDS_INPUT`.
+- the stable attempt ID and resolved model/effort attribution.
 
 Do not pass implementer or reviewer theories by default. Let the saver inspect status, log, diff, repository instructions, and tests independently. Add the exact failing command/output only when the failure is integration-only or cannot be reproduced from the rescue worktree.
 
@@ -166,7 +183,10 @@ CHECKS: <command — result, one per line>
 QUESTION: <one focused question only for NEEDS_INPUT>
 REPLAN: <specific corrected assumption/plan text only for REPLAN>
 EVIDENCE: <concise repository/tool evidence>
+USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
+
+Tell the saver never to estimate unavailable usage. Prefer structured host telemetry over the saver-authored `USAGE` line. Record each saver round separately, including a round that ends in `NEEDS_INPUT`, `REPLAN`, or `TERMINAL`.
 
 Handle outcomes:
 
@@ -177,7 +197,15 @@ Handle outcomes:
 
 Bound recovery to two autonomous saver repair rounds and two user clarification cycles per plan. After a bound is exhausted, transition the plan to `BLOCKED`, preserve the rescue branch, and report the evidence. A new explicit `resume` invocation may authorize another bounded cycle.
 
-## 7. Resume Semantics
+## 7. Usage Accounting
+
+The root coordinator is the only usage-ledger writer. After every agent attempt reaches a terminal host state, call `plan_manager record-usage` before taking the next lifecycle action. Use an idempotent attempt ID such as `<run-id>-<plan-id>-<role>-<ordinal>`; use plan `RUN` for a final cross-plan reviewer or integration-rescue agent.
+
+Attribute the configured model and effort resolved before dispatch. Prefer host-reported effective model/effort and structured usage over configured values and the worker's envelope when those fields are exposed. On Codex, after a child reaches a terminal state, run `node <codex_evidence_reader> --agent <returned-canonical-task-name> --pretty`. Require its `agentRole` to match the requested custom profile and its `multiAgentVersion` to be `v2`; a mismatch is a routing failure. When its `usage` is present, copy the exact fields and source `codex-multi-agent-v2-transcript`. If no uniquely attributable terminal usage exists, record every token field as `unknown` with source `unknown`. On Claude, copy structured host telemetry when available and otherwise use `unknown`. Never tokenize transcripts, subtract coordinator totals, or infer hidden reasoning.
+
+Use `plan_manager usage <plan_dir> --pretty` for reporting. Its token subtotal is input plus output for attempts where both are known; cached-input and reasoning columns are details, not additional tokens. Always report coverage beside subtotals. The README ledger covers recorded Herder attempts, not unobservable coordinator, platform, or retry overhead.
+
+## 8. Resume Semantics
 
 Reconstruct state from:
 
@@ -185,12 +213,13 @@ Reconstruct state from:
 - completion commits containing `plan-herder(<id>):`;
 - candidate and staging branch names;
 - branch ancestry and worktree cleanliness.
+- the manager-generated usage ledger and existing attempt IDs.
 
 For `IN PROGRESS`, inspect its candidate branch. If it contains committed work, stage and review it; if it has no usable work, dispatch a fresh implementer. For `BLOCKED`, start with a saver when a rescue branch exists; otherwise create a fresh candidate from integration HEAD and let the saver investigate the plan and repository.
 
-Never trust a `DONE` row alone. Verify its completion marker is reachable from integration HEAD and re-run cheap done criteria when resuming. If a marker is missing or verification fails, transition it to `BLOCKED` through Plans and enter rescue before allowing dependents to start. Conversely, if a reachable marker exists while the index is not DONE, reconcile that status before dispatching dependents.
+Never trust a `DONE` row alone. Verify its completion marker is reachable from integration HEAD and re-run cheap done criteria when resuming. If a marker is missing or verification fails, transition it to `BLOCKED` through Plans and enter rescue before allowing dependents to start. Conversely, if a reachable marker exists while the index is not DONE, reconcile that status before dispatching dependents. Continue role ordinals after the highest recorded attempt; never duplicate or rewrite a prior usage row.
 
-## 8. Completion
+## 9. Completion
 
 The run succeeds when every plan is `DONE` or `REJECTED`, all dependency markers are ancestors of integration HEAD, the final project-wide gates pass, and a final reviewer audit finds no cross-plan integration regression.
 
@@ -202,4 +231,5 @@ Do not merge, push, publish, deploy, or delete the preserved candidate/rescue ev
 - final commit SHA;
 - plans completed/rejected/blocked;
 - final verification commands and results;
+- usage subtotals and coverage by plan, role, and model/effort;
 - preserved branches needing attention.

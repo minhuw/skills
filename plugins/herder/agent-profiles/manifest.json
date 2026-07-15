@@ -8,17 +8,17 @@
         {
           "source": "agent-profiles/codex/plan_implementer.toml",
           "target": "plan_implementer.toml",
-          "sha256": "e933ec1be1592755a4af759af2fec1b943a38383028d0218d18d1b7daf2a96f9"
+          "sha256": "0a6689daeacd0dd8e42496030d55a2efb0567d8477d29616db1d2197e217a87a"
         },
         {
           "source": "agent-profiles/codex/plan_reviewer.toml",
           "target": "plan_reviewer.toml",
-          "sha256": "5ef7244532a229abe0d869a701213b7151d0dc0d02aff638ec0271e91f39f0bf"
+          "sha256": "aa232b26b8ba39b665ef02d9b9592a657a69e636f124c89344a16b2eae169ade"
         },
         {
           "source": "agent-profiles/codex/plan_saver.toml",
           "target": "plan_saver.toml",
-          "sha256": "a7a58f5c15da5251669c6c46d67b52ac89ec070742fb724db57c239b8c5b3a5f"
+          "sha256": "ca19d244d37f509742ddb060350abe503a2b41c0d5e95db5b279c9068e5bf162"
         }
       ]
     },
@@ -28,17 +28,17 @@
         {
           "source": "agents/plan-implementer.md",
           "identifier": "herder:plan-implementer",
-          "sha256": "2ec751eba052ab7c54f93d151c1a2717758f6fa1bd6dcae5459af9e792e4da40"
+          "sha256": "499216425ba64ba2c6e65d1069d029fcf6b64056d5a172da58cfaccf9cc8978f"
         },
         {
           "source": "agents/plan-reviewer.md",
           "identifier": "herder:plan-reviewer",
-          "sha256": "9cdf85fdd5c6dadf91e394279a2f0524970c31620b0458eb8adc73e1fe6df180"
+          "sha256": "76a84210bab2b0e00bbbbb2940e3cf42d1bbf60d4f3a780493eeda3a0caf7c4d"
         },
         {
           "source": "agents/plan-saver.md",
           "identifier": "herder:plan-saver",
-          "sha256": "c051a5c70a0d36314ab0d12e046aa483a07426e8d46f468bcd6528dc51651fb6"
+          "sha256": "1c926a3034cb86e0dfc1db675c8b4008760c0e98c270670c06c05c603731e8c6"
         }
       ]
     }

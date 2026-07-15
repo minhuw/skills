@@ -1,4 +1,4 @@
 interface:
   display_name: "Herder Plans"
-  short_description: "Manage and validate Herder plan backlogs"
-  default_prompt: "Use $herder:plans to initialize or validate this repository’s Herder plans."
+  short_description: "Manage plans and report token usage"
+  default_prompt: "Use $herder:plans to initialize, validate, inspect, or report token usage for this repository’s Herder plans."

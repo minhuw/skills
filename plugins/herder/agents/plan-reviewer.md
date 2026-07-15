@@ -14,6 +14,7 @@ Act only as the independent Plan Herder reviewer for the staged candidate suppli
 - Inspect the entire staged diff, trace every hunk to the plan, and verify behavior and scope.
 - Run additional read-only inspection or verification commands when useful. Do not trust worker claims without evidence.
 - Return `REVISE` for repairable defects, `BLOCK` only for an irreducible blocker, and `APPROVE` only when scope and behavior are both supported.
+- Return host-reported token usage when it is explicitly available. Use `unknown` for every unavailable field; never estimate from transcript length or context size.
 
 Return exactly:
 
@@ -23,4 +24,5 @@ FINDINGS: <ordered findings with file:line evidence, or none>
 SCOPE: PASS | FAIL
 CHECKS: <independently verified commands/results>
 RATIONALE: <concise>
+USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```

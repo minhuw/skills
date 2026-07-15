@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { access, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -13,19 +13,31 @@ const installer = path.join(scriptDir, "install-herder.mjs");
 const pluginRoot = path.resolve(scriptDir, "../../..");
 const fixtureRoot = await mkdtemp(path.join(tmpdir(), "herder-plugin-install-test-"));
 
+let fakeCodex = "";
+
 function run(...args) {
   return execFileSync(process.execPath, [installer, ...args], {
     encoding: "utf8",
+    env: { ...process.env, HERDER_CODEX_BIN: fakeCodex },
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
 
 try {
+  fakeCodex = path.join(fixtureRoot, "codex-enabled.mjs");
+  await writeFile(fakeCodex, `#!/usr/bin/env node
+if (process.argv.slice(2).join(" ") !== "features list") process.exit(2)
+process.stdout.write("multi_agent_v2                       under development  true\\n")
+`);
+  await chmod(fakeCodex, 0o700);
+
   const projectRoot = path.join(fixtureRoot, "project");
   const common = ["--host", "codex", "--project-root", projectRoot];
 
   const first = run(...common);
   assert.match(first, /Installed: .*plan_implementer\.toml/);
+  assert.match(first, /multi_agent_v2 is enabled/);
+  assert.match(first, /tool_namespace = "herder_agents"/);
   const installed = path.join(projectRoot, ".codex/agents/plan_implementer.toml");
   const source = path.join(pluginRoot, "agent-profiles/codex/plan_implementer.toml");
   assert.deepEqual(await readFile(installed), await readFile(source));
@@ -34,7 +46,10 @@ try {
   assert.match(second, /Unchanged: .*plan_implementer\.toml/);
 
   await writeFile(installed, "customized\n");
-  const conflict = spawnSync(process.execPath, [installer, ...common], { encoding: "utf8" });
+  const conflict = spawnSync(process.execPath, [installer, ...common], {
+    encoding: "utf8",
+    env: { ...process.env, HERDER_CODEX_BIN: fakeCodex },
+  });
   assert.equal(conflict.status, 3);
   assert.equal(await readFile(installed, "utf8"), "customized\n");
 
@@ -65,7 +80,24 @@ try {
   assert.match(dry, /Would install: .*plan_implementer\.toml/);
   await assert.rejects(access(path.join(dryProject, ".codex/agents")));
 
-  const badHost = spawnSync(process.execPath, [installer, "--host", "other"], { encoding: "utf8" });
+  const disabledCodex = path.join(fixtureRoot, "codex-disabled.mjs");
+  await writeFile(disabledCodex, `#!/usr/bin/env node
+if (process.argv.slice(2).join(" ") !== "features list") process.exit(2)
+process.stdout.write("multi_agent_v2                       under development  false\\n")
+`);
+  await chmod(disabledCodex, 0o700);
+  fakeCodex = disabledCodex;
+  const warningProject = path.join(fixtureRoot, "warning-project");
+  const warning = run("--host", "codex", "--project-root", warningProject);
+  assert.match(warning, /WARNING: Codex multi_agent_v2 is disabled/);
+  assert.match(warning, /codex features enable multi_agent_v2/);
+  assert.match(warning, /hide_spawn_agent_metadata = false/);
+  assert.match(warning, /start a new Codex session/);
+
+  const badHost = spawnSync(process.execPath, [installer, "--host", "other"], {
+    encoding: "utf8",
+    env: { ...process.env, HERDER_CODEX_BIN: fakeCodex },
+  });
   assert.equal(badHost.status, 2);
 
   console.log("herder plugin installer tests passed");
