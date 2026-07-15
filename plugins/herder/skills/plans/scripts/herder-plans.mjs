@@ -37,7 +37,6 @@ const USAGE_LEDGER_HEADERS = [
   "cached input",
   "output tokens",
   "reasoning tokens",
-  "cost usd",
   "source",
 ]
 const TRANSITIONS = new Map([
@@ -229,29 +228,6 @@ function optionalCount(value, label) {
   return count
 }
 
-function optionalCost(value) {
-  const normalized = String(value ?? "unknown").trim().toLowerCase()
-  if (normalized === "unknown") return null
-  if (!/^\d+(?:\.\d{1,6})?$/.test(normalized)) {
-    fail(`Cost USD must be a non-negative decimal with at most six places or "unknown"`)
-  }
-  const [whole, fraction = ""] = normalized.split(".")
-  const micros = (BigInt(whole) * 1_000_000n) + BigInt(fraction.padEnd(6, "0"))
-  return formatCost(micros)
-}
-
-function costMicros(value) {
-  if (value === null) return null
-  const [whole, fraction = ""] = value.split(".")
-  return (BigInt(whole) * 1_000_000n) + BigInt(fraction.padEnd(6, "0"))
-}
-
-function formatCost(micros) {
-  const whole = micros / 1_000_000n
-  const fraction = String(micros % 1_000_000n).padStart(6, "0").replace(/0+$/, "")
-  return fraction ? `${whole}.${fraction}` : String(whole)
-}
-
 function parseUsageRecords(markdown, readme) {
   const start = markdown.indexOf(USAGE_SECTION_START)
   const end = markdown.indexOf(USAGE_SECTION_END)
@@ -277,11 +253,10 @@ function parseUsageRecords(markdown, readme) {
       cachedInputTokens: optionalCount(row.cells[column["cached input"]], "Cached input tokens"),
       outputTokens: optionalCount(row.cells[column["output tokens"]], "Output tokens"),
       reasoningTokens: optionalCount(row.cells[column["reasoning tokens"]], "Reasoning tokens"),
-      costUsd: optionalCost(row.cells[column["cost usd"]]),
       source: usageCell(row.cells[column.source], "Source"),
     }
     if (record.source.toLowerCase() === "unknown"
-      && [record.inputTokens, record.cachedInputTokens, record.outputTokens, record.reasoningTokens, record.costUsd].some((value) => value !== null)) {
+      && [record.inputTokens, record.cachedInputTokens, record.outputTokens, record.reasoningTokens].some((value) => value !== null)) {
       fail(`Usage attempt ${record.attempt} has numeric usage but an unknown source`)
     }
     return record
@@ -306,16 +281,12 @@ function summarizeRecords(records, keyFor) {
     .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
     .map(([key, entries]) => {
       const tokenEntries = entries.filter((entry) => entry.inputTokens !== null && entry.outputTokens !== null)
-      const costEntries = entries.filter((entry) => entry.costUsd !== null)
       const knownTokens = tokenEntries.reduce((sum, entry) => sum + entry.inputTokens + entry.outputTokens, 0)
-      const knownCostMicros = costEntries.reduce((sum, entry) => sum + costMicros(entry.costUsd), 0n)
       return {
         key,
         attempts: entries.length,
         tokenAttempts: tokenEntries.length,
         knownTokens,
-        costAttempts: costEntries.length,
-        knownCostUsd: formatCost(knownCostMicros),
       }
     })
 }
@@ -332,20 +303,20 @@ function usageReport(records) {
 
 function renderSummary(title, dimension, rows) {
   const body = rows.length > 0
-    ? rows.map((row) => `| ${row.key} | ${row.attempts} | ${row.tokenAttempts}/${row.attempts} | ${row.knownTokens} | ${row.costAttempts}/${row.attempts} | ${row.knownCostUsd} |`).join("\n")
-    : "| — | 0 | 0/0 | 0 | 0/0 | 0 |"
-  return `### ${title}\n\n| ${dimension} | Attempts | Reported-token coverage | Reported input + output tokens | Reported-cost coverage | Reported cost subtotal (USD) |\n|---|---:|---:|---:|---:|---:|\n${body}`
+    ? rows.map((row) => `| ${row.key} | ${row.attempts} | ${row.tokenAttempts}/${row.attempts} | ${row.knownTokens} |`).join("\n")
+    : "| — | 0 | 0/0 | 0 |"
+  return `### ${title}\n\n| ${dimension} | Attempts | Reported-token coverage | Reported input + output tokens |\n|---|---:|---:|---:|\n${body}`
 }
 
 function renderUsageSection(records) {
   const report = usageReport(records)
   const ledger = records.length > 0
-    ? records.map((record) => `| ${record.attempt} | ${record.plan} | ${record.role} | ${record.model} | ${record.effort} | ${record.outcome} | ${record.inputTokens ?? "unknown"} | ${record.cachedInputTokens ?? "unknown"} | ${record.outputTokens ?? "unknown"} | ${record.reasoningTokens ?? "unknown"} | ${record.costUsd ?? "unknown"} | ${record.source} |`).join("\n")
+    ? records.map((record) => `| ${record.attempt} | ${record.plan} | ${record.role} | ${record.model} | ${record.effort} | ${record.outcome} | ${record.inputTokens ?? "unknown"} | ${record.cachedInputTokens ?? "unknown"} | ${record.outputTokens ?? "unknown"} | ${record.reasoningTokens ?? "unknown"} | ${record.source} |`).join("\n")
     : ""
   return `${USAGE_SECTION_START}
 ## Execution usage
 
-Herder records one row per agent attempt. Numeric values are copied only from host telemetry or billing data; unavailable values remain \`unknown\` and are never estimated. Token subtotals add input and output tokens only; cached-input and reasoning values are details and are not added again. These rows do not become an invoice total when coordinator or host overhead is unavailable.
+Herder records one row per agent attempt. Token values are copied only from host telemetry; unavailable values remain \`unknown\` and are never estimated. Token subtotals add input and output tokens only; cached-input and reasoning values are details and are not added again. Coverage excludes unobservable coordinator, platform, and retry overhead.
 
 ${renderSummary("By plan", "Plan", report.byPlan)}
 
@@ -355,8 +326,8 @@ ${renderSummary("By model and effort", "Model / effort", report.byModel)}
 
 ### Attempt ledger
 
-| Attempt | Plan | Role | Model | Effort | Outcome | Input tokens | Cached input | Output tokens | Reasoning tokens | Cost USD | Source |
-|---|---|---|---|---|---|---:|---:|---:|---:|---:|---|
+| Attempt | Plan | Role | Model | Effort | Outcome | Input tokens | Cached input | Output tokens | Reasoning tokens | Source |
+|---|---|---|---|---|---|---:|---:|---:|---:|---|
 ${ledger}
 ${USAGE_SECTION_END}`
 }
@@ -705,11 +676,10 @@ export function recordUsage(inputDir = DEFAULT_PLAN_DIR, input = {}) {
     cachedInputTokens: optionalCount(input.cachedInputTokens, "Cached input tokens"),
     outputTokens: optionalCount(input.outputTokens, "Output tokens"),
     reasoningTokens: optionalCount(input.reasoningTokens, "Reasoning tokens"),
-    costUsd: optionalCost(input.costUsd),
     source: usageCell(input.source ?? "unknown", "Source"),
   }
   if (record.source.toLowerCase() === "unknown"
-    && [record.inputTokens, record.cachedInputTokens, record.outputTokens, record.reasoningTokens, record.costUsd].some((value) => value !== null)) {
+    && [record.inputTokens, record.cachedInputTokens, record.outputTokens, record.reasoningTokens].some((value) => value !== null)) {
     fail(`Usage attempt ${record.attempt} has numeric usage but an unknown source`)
   }
 
@@ -747,7 +717,7 @@ function usage() {
     "  herder-plans ready [plan-dir] [--pretty]",
     "  herder-plans snapshot <plan-id> [plan-dir] [--pretty]",
     "  herder-plans transition <plan-id> <status> [plan-dir] [--detail <text>] [--pretty]",
-    "  herder-plans record-usage <plan-id|RUN> <role> [plan-dir] --attempt <id> --model <model> --effort <effort> --outcome <outcome> [--input-tokens <n|unknown>] [--cached-input-tokens <n|unknown>] [--output-tokens <n|unknown>] [--reasoning-tokens <n|unknown>] [--cost-usd <decimal|unknown>] [--source <host-source|unknown>] [--pretty]",
+    "  herder-plans record-usage <plan-id|RUN> <role> [plan-dir] --attempt <id> --model <model> --effort <effort> --outcome <outcome> [--input-tokens <n|unknown>] [--cached-input-tokens <n|unknown>] [--output-tokens <n|unknown>] [--reasoning-tokens <n|unknown>] [--source <host-source|unknown>] [--pretty]",
     "  herder-plans usage [plan-dir] [--pretty]",
     "  herder-plans track [plan-dir] [--pretty]",
     "  herder-plans untrack [plan-dir] [--pretty]",
@@ -781,7 +751,6 @@ function main(argv) {
     cachedInputTokens: takeFlag(args, "--cached-input-tokens"),
     outputTokens: takeFlag(args, "--output-tokens"),
     reasoningTokens: takeFlag(args, "--reasoning-tokens"),
-    costUsd: takeFlag(args, "--cost-usd"),
     source: takeFlag(args, "--source"),
   }
   const hasUsageOptions = Object.values(usageOptions).some((value) => value !== null)

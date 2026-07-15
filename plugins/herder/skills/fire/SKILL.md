@@ -1,6 +1,6 @@
 ---
 name: fire
-description: Execute a validated herder-plans/ backlog as a dependency-aware multi-agent run with per-attempt usage accounting. Use when the user asks to fire, run, resume, automatically complete Herder plans, or report a Fire run's token/cost coverage using isolated implementer, reviewer, saver, and transactional integration worktrees. Do not use to create plans, repair plan formatting, or implement one ordinary task directly.
+description: Execute a validated herder-plans/ backlog as a dependency-aware multi-agent run with per-attempt token accounting. Use when the user asks to fire, run, resume, automatically complete Herder plans, or report a Fire run's token coverage using isolated implementer, reviewer, saver, and transactional integration worktrees. Do not use to create plans, repair plan formatting, or implement one ordinary task directly.
 ---
 
 # Herder Fire
@@ -78,7 +78,7 @@ When a Codex role is missing, direct the user to `$herder:install`. Claude roles
 3. Create a dedicated integration branch and worktree from the selected base. Never copy or commit `herder-plans/` into execution branches.
 4. Ask Plans for the ready set. Transition each dispatched plan to `IN PROGRESS`, snapshot it, and create its candidate branch from the current integration HEAD.
 5. Dispatch ready plans in parallel up to capacity. Inline the plan snapshot and require committed, scoped work plus tool-backed check results.
-6. After every role probe or worker attempt returns, fails, or goes silent, record exactly one usage row through Plans before retrying, reviewing, rescuing, or integrating. Attribute probes and cross-plan agents to `RUN`. Copy numeric values only from host telemetry; otherwise record `unknown`. Never estimate tokens or USD cost.
+6. After every role probe or worker attempt returns, fails, or goes silent, record exactly one usage row through Plans before retrying, reviewing, rescuing, or integrating. Attribute probes and cross-plan agents to `RUN`. Copy token values only from host telemetry; otherwise record `unknown`. Never estimate tokens.
 7. Stage each candidate on the latest integration HEAD, run all gates, create an empty completion-marker commit with `git commit --allow-empty` and subject `plan-herder(<plan-id>): mark plan done`, and obtain independent reviewer approval.
 8. Fast-forward integration only after checks pass and the reviewer returns `APPROVE` with scope passing. Then transition the plan to `DONE` through Plans.
 9. Route every implementation, staging, verification, review, or status-reconciliation failure through `plan-saver` before asking the user. A repair repeats staging, checks, marker creation, and review.

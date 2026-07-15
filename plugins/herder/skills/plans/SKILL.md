@@ -1,6 +1,6 @@
 ---
 name: plans
-description: Initialize, validate, inspect, and manage Herder Markdown plan backlogs and execution-usage ledgers. Use when creating or repairing herder-plans/, checking plan dependencies and readiness, changing plan tracking policy, inspecting execution status, reporting token/cost coverage, or preparing plans for $herder:fire. Do not use to implement plans or orchestrate subagents.
+description: Initialize, validate, inspect, and manage Herder Markdown plan backlogs and execution-token ledgers. Use when creating or repairing herder-plans/, checking plan dependencies and readiness, changing plan tracking policy, inspecting execution status, reporting token coverage, or preparing plans for $herder:fire. Do not use to implement plans or orchestrate subagents.
 ---
 
 # Herder Plans
@@ -65,4 +65,4 @@ Because the backlog is local by default, never assume it exists in a Git worktre
 
 Keep the generated `## Execution usage` section of `README.md` coordinator-owned. Workers return a usage envelope; they never edit the README themselves. The manager appends an idempotent attempt row and regenerates summaries by plan, role, and model/effort.
 
-Use a stable attempt ID such as `<run-id>-<plan-id>-<role>-<ordinal>`. Pass token fields with `--input-tokens`, `--cached-input-tokens`, `--output-tokens`, and `--reasoning-tokens`; pass `--cost-usd` only when the host or an authoritative billing source directly reports it. Use `unknown` for unavailable fields and `--source unknown` when every numeric field is unavailable. Never infer tokens from transcript length or derive local subscription cost from API list prices.
+Use a stable attempt ID such as `<run-id>-<plan-id>-<role>-<ordinal>`. Pass token fields with `--input-tokens`, `--cached-input-tokens`, `--output-tokens`, and `--reasoning-tokens`. Use `unknown` for unavailable fields and `--source unknown` when every token field is unavailable. Never infer tokens from transcript length.

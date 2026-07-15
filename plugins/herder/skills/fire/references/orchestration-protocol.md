@@ -101,10 +101,10 @@ CHECKS: <command — result, one per line>
 FILES CHANGED: <paths>
 STOPPED BECAUSE: <only when not COMPLETE>
 NOTES: <material facts only>
-USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; cost_usd=<decimal|unknown>; source=<host source|unknown>
+USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Tell the worker to use `unknown` for values not explicitly exposed by the host and never estimate from transcript length or model price. Treat missing commits, dirty intended changes, unverifiable checks, STOPPED, tool errors, or silence as failure and enter rescue. Record the attempt through Plans even when no response or usage envelope returns.
+Tell the worker to use `unknown` for values not explicitly exposed by the host and never estimate from transcript length. Treat missing commits, dirty intended changes, unverifiable checks, STOPPED, tool errors, or silence as failure and enter rescue. Record the attempt through Plans even when no response or usage envelope returns.
 
 ## 5. Transactional Integration
 
@@ -141,7 +141,7 @@ FINDINGS: <ordered findings with file:line evidence, or none>
 SCOPE: PASS | FAIL
 CHECKS: <independently verified commands/results>
 RATIONALE: <concise>
-USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; cost_usd=<decimal|unknown>; source=<host source|unknown>
+USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
 Tell the reviewer never to estimate unavailable usage. Only `APPROVE` with `SCOPE: PASS` can integrate. Verify the integration branch still points to the staging base SHA, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD and review again. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
@@ -173,7 +173,7 @@ CHECKS: <command — result, one per line>
 QUESTION: <one focused question only for NEEDS_INPUT>
 REPLAN: <specific corrected assumption/plan text only for REPLAN>
 EVIDENCE: <concise repository/tool evidence>
-USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; cost_usd=<decimal|unknown>; source=<host source|unknown>
+USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
 Tell the saver never to estimate unavailable usage. Record each saver round separately, including a round that ends in `NEEDS_INPUT`, `REPLAN`, or `TERMINAL`.
@@ -191,9 +191,9 @@ Bound recovery to two autonomous saver repair rounds and two user clarification 
 
 The root coordinator is the only usage-ledger writer. After every agent attempt reaches a terminal host state, call `plan_manager record-usage` before taking the next lifecycle action. Use an idempotent attempt ID such as `<run-id>-<plan-id>-<role>-<ordinal>`; use plan `RUN` for a final cross-plan reviewer or integration-rescue agent.
 
-Attribute the configured model and effort resolved before dispatch. Prefer host-reported effective model/effort and structured usage over configured values and the worker's envelope when those fields are exposed. Copy input, cached-input, output, reasoning, and USD cost only when explicitly reported. If the host exposes tokens but not cost, record the tokens and leave cost `unknown`. If nothing is exposed, record every numeric field as `unknown` with source `unknown`. Never tokenize transcripts, infer hidden reasoning, or multiply API list prices into a subscription-backed cost.
+Attribute the configured model and effort resolved before dispatch. Prefer host-reported effective model/effort and structured usage over configured values and the worker's envelope when those fields are exposed. Copy input, cached-input, output, and reasoning tokens only when explicitly reported. If nothing is exposed, record every token field as `unknown` with source `unknown`. Never tokenize transcripts or infer hidden reasoning.
 
-Use `plan_manager usage <plan_dir> --pretty` for reporting. Its token subtotal is input plus output for attempts where both are known; cached-input and reasoning columns are details, not additional tokens. Always report coverage beside subtotals. The README ledger covers recorded Herder attempts, not unobservable coordinator, platform, retry, or billing overhead.
+Use `plan_manager usage <plan_dir> --pretty` for reporting. Its token subtotal is input plus output for attempts where both are known; cached-input and reasoning columns are details, not additional tokens. Always report coverage beside subtotals. The README ledger covers recorded Herder attempts, not unobservable coordinator, platform, or retry overhead.
 
 ## 8. Resume Semantics
 

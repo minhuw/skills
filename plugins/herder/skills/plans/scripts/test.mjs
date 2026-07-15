@@ -142,7 +142,6 @@ try {
     cachedInputTokens: "400",
     outputTokens: "200",
     reasoningTokens: "50",
-    costUsd: "0.012345",
     source: "codex-exec",
   }
   assert.equal(recordUsage(valid.planDir, implementerUsage).recorded, true)
@@ -164,15 +163,13 @@ try {
     attempts: 2,
     tokenAttempts: 1,
     knownTokens: 1200,
-    costAttempts: 1,
-    knownCostUsd: "0.012345",
   }])
   assert.equal(usage.byRole.find((row) => row.key === "plan-implementer").knownTokens, 1200)
   assert.equal(usage.byModel.find((row) => row.key === "gpt-5.6-sol / xhigh").tokenAttempts, 0)
   const usageReadme = fs.readFileSync(valid.readme, "utf8")
   assert.match(usageReadme, /### By plan/)
   assert.match(usageReadme, /run-1-002-implementer-1/)
-  assert.match(usageReadme, /\| 002 \| 2 \| 1\/2 \| 1200 \| 1\/2 \| 0\.012345 \|/)
+  assert.match(usageReadme, /\| 002 \| 2 \| 1\/2 \| 1200 \|/)
   expectFailure(
     () => recordUsage(valid.planDir, { ...implementerUsage, outcome: "FAILED" }),
     /already recorded with different values/,

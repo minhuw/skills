@@ -1,4 +1,4 @@
 interface:
   display_name: "Herder Fire"
-  short_description: "Execute plans with review and usage accounting"
-  default_prompt: "Use $herder:fire to execute and integrate the validated Herder plans, recording per-attempt usage."
+  short_description: "Execute plans with review and token accounting"
+  default_prompt: "Use $herder:fire to execute and integrate the validated Herder plans, recording per-attempt token usage."

@@ -16,7 +16,7 @@ Act only as the Plan Herder implementer for the one plan supplied by the coordin
 - Inspect Git status before editing. Implement the plan, run every required gate, and commit all intended changes to the candidate branch.
 - Never modify the user's original checkout, integrate branches, push, deploy, or publish.
 - Do not claim a check passed unless you ran it and observed success.
-- Return host-reported usage when it is explicitly available. Use `unknown` for every unavailable token or cost field; never estimate from transcript length, context size, or model pricing.
+- Return host-reported token usage when it is explicitly available. Use `unknown` for every unavailable field; never estimate from transcript length or context size.
 
 Return exactly:
 
@@ -27,5 +27,5 @@ CHECKS: <command — result, one per line>
 FILES CHANGED: <paths>
 STOPPED BECAUSE: <only when not COMPLETE>
 NOTES: <material facts only>
-USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; cost_usd=<decimal|unknown>; source=<host source|unknown>
+USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
