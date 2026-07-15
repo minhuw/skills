@@ -21,6 +21,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "../../..");
 const MANIFEST_PATH = path.join(PLUGIN_ROOT, "agent-profiles/manifest.json");
 const HOSTS = ["codex", "claude"];
+const CODEX_BIN = process.env.HERDER_CODEX_BIN || "codex";
 
 class UsageError extends Error {}
 class ConflictError extends Error {
@@ -156,6 +157,20 @@ function codexDestination(options) {
   return path.join(root, ".codex", "agents");
 }
 
+function codexMultiAgentV2Status() {
+  try {
+    const output = execFileSync(CODEX_BIN, ["features", "list"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const match = output.match(/^multi_agent_v2\s+.*\s+(true|false)\s*$/m);
+    if (!match) return { state: "unavailable", detail: "this Codex release does not report multi_agent_v2" };
+    return { state: match[1] === "true" ? "enabled" : "disabled", detail: null };
+  } catch (error) {
+    return { state: "unavailable", detail: `could not run ${CODEX_BIN} features list: ${error.message}` };
+  }
+}
+
 async function exists(filePath) {
   try {
     await access(filePath, fsConstants.F_OK);
@@ -258,7 +273,24 @@ async function installCodex(profiles, { force, dryRun }) {
   return classified;
 }
 
-function printResult(profiles, result, options) {
+function printCodexRequirement(feature) {
+  if (feature.state === "enabled") {
+    console.log("Codex requirement: multi_agent_v2 is enabled.");
+  } else if (feature.state === "disabled") {
+    console.log("WARNING: Codex multi_agent_v2 is disabled. Herder Fire cannot run until it is enabled.");
+  } else {
+    console.log(`WARNING: Could not verify Codex multi_agent_v2 (${feature.detail}). Herder Fire requires a Codex release that exposes it.`);
+  }
+  if (feature.state !== "enabled") console.log("Run: codex features enable multi_agent_v2");
+  console.log("Required custom-role schema (replace a boolean multi_agent_v2 entry; do not define both forms):");
+  console.log("[features.multi_agent_v2]");
+  console.log("enabled = true");
+  console.log("hide_spawn_agent_metadata = false");
+  console.log('tool_namespace = "herder_agents"');
+  console.log("Then start a new Codex session before using $herder:fire.");
+}
+
+function printResult(profiles, result, options, feature) {
   console.log(`Plugin: ${PLUGIN_ROOT}`);
   const mode = options.dryRun ? "Would install" : "Installed";
   for (const profile of result.install) console.log(`${mode}: ${profile.target}`);
@@ -270,8 +302,11 @@ function printResult(profiles, result, options) {
   for (const profile of profiles.filter((item) => item.host === "claude")) {
     console.log(`Bundled: ${profile.identifier}`);
   }
-  if (!options.dryRun && profiles.some((item) => item.host === "codex")) {
-    console.log("Start a new Codex session if .codex/agents did not exist when the current session began.");
+  if (feature) {
+    printCodexRequirement(feature);
+    if (!options.dryRun) {
+      console.log("Start a new Codex session if the agent directory did not exist when the current session began.");
+    }
   }
 }
 
@@ -283,9 +318,10 @@ export async function main(argv = process.argv.slice(2)) {
   }
   const manifest = parseManifest(await readFile(MANIFEST_PATH));
   const hosts = options.host === "all" ? HOSTS : [options.host];
+  const feature = hosts.includes("codex") ? codexMultiAgentV2Status() : null;
   const profiles = await loadProfiles(manifest, hosts, options);
   const result = await installCodex(profiles, options);
-  printResult(profiles, result, options);
+  printResult(profiles, result, options, feature);
 }
 
 const isEntryPoint = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);

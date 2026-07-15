@@ -36,7 +36,7 @@ The temporary directory is deleted after success and preserved after failure.
 
 ## Live Codex compatibility test
 
-This additionally starts three fresh Codex sessions against the fixture:
+This first installs the three native profiles in an isolated user-scoped Codex home, verifies that Multi-Agent V2 is enabled, and then starts three fresh Codex sessions against the fixture:
 
 1. `$herder:improve plan` creates one plan without changing source code and preserves the manager-generated usage ledger.
 2. `$herder:plans status` reads the generated backlog and reports plan `001` ready.
@@ -67,11 +67,17 @@ This targeted mode creates one valid plan with a single unresolved decision, the
 node plugins/herder/scripts/smoke-test.mjs --live-grill --keep
 ```
 
-Use `--workspace` and `--auth-file` exactly as in the general live test. The transcript files are `01-grill-question.jsonl`, `02-grill-answer.jsonl`, and `03-grill-confirm.jsonl`.
+Use `--workspace` and `--auth-file` exactly as in the general live test. The transcript files include `00-install.jsonl`, `01-grill-question.jsonl`, `02-grill-answer.jsonl`, and `03-grill-confirm.jsonl`.
 
 ## Live Fire execution test
 
-This high-cost mode creates a plan with Improve and executes it through the real Codex worker runner. It verifies explicit Luna/max implementation, Sol/xhigh review, numeric `codex-exec-jsonl` usage rows, a completed integration branch, passing integration tests, and an unchanged source branch. The outer Fire coordinator uses bypass permissions only inside the disposable fixture; worker sessions retain their role-specific sandboxes.
+This high-cost mode creates a plan with Improve and executes it through native Codex Multi-Agent V2. The isolated Codex configuration pins the main scheduler to Sol/max, enables `multi_agent_v2`, and gives the coordinator only the workspace-write roots needed for disposable worktrees and Git metadata. The test installs the native profiles in a fresh session, then verifies:
+
+- Fire dispatches `agent_type` with `fork_turns: "none"` and never invokes the removed `codex exec` worker adapter.
+- Implementers run Luna/max and reviewers run Sol/xhigh. The installed reviewer profile requests read-only; the transcript also records whether the coordinator's inherited runtime permission override superseded it, while Fire proves the reviewer left the staged tree unchanged.
+- Every child transcript reports Multi-Agent V2 with one `NEW_TASK` envelope and no user-history messages, proving coordinator history was not forked. Its command evidence must stay under the disposable candidate, staging, or integration worktree root.
+- Exact native per-child transcript telemetry is recorded as numeric `codex-multi-agent-v2-transcript` usage rows.
+- The integration branch passes tests while the source branch and checkout remain unchanged.
 
 ```bash
 node plugins/herder/scripts/smoke-test.mjs \
@@ -79,7 +85,7 @@ node plugins/herder/scripts/smoke-test.mjs \
   --workspace /tmp/herder-live-fire
 ```
 
-The transcript files are `01-improve.jsonl` and `02-fire-run.jsonl`. Inspect the retained fixture, integration worktree, and `herder-plans/README.md`, then delete the workspace when finished.
+The transcript files are `00-install.jsonl`, `01-improve.jsonl`, and `02-fire-run.jsonl`. The retained `reports/final-fire-report.md` contains Fire's user-facing result. `reports/native-spawn-evidence.json` records redacted namespaced routing arguments and coordinator configuration; it records only that an encrypted task payload existed, never the payload itself. `reports/native-agent-evidence.json` records the effective child role, model, effort, sandbox, repository context, execution workdirs, and token telemetry extracted from persisted Codex sessions. Inspect those reports together with the fixture, integration worktree, and `herder-plans/README.md`, then delete the workspace when finished.
 
 ## Release confidence
 

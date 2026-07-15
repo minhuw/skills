@@ -8,17 +8,17 @@
         {
           "source": "agent-profiles/codex/plan_implementer.toml",
           "target": "plan_implementer.toml",
-          "sha256": "2753588091d4e4ed960f3f27089a23b2ba60126c64dbb03c49eaf3799ba95dd2"
+          "sha256": "0a6689daeacd0dd8e42496030d55a2efb0567d8477d29616db1d2197e217a87a"
         },
         {
           "source": "agent-profiles/codex/plan_reviewer.toml",
           "target": "plan_reviewer.toml",
-          "sha256": "2c45fb2a7de843d373fd82b36f704d8da9d343427739788a63a03105b33d76fd"
+          "sha256": "aa232b26b8ba39b665ef02d9b9592a657a69e636f124c89344a16b2eae169ade"
         },
         {
           "source": "agent-profiles/codex/plan_saver.toml",
           "target": "plan_saver.toml",
-          "sha256": "8d6236eca5f5c412c94d1f218f40a11a18e9530bcc07740e3447a184846ede8d"
+          "sha256": "ca19d244d37f509742ddb060350abe503a2b41c0d5e95db5b279c9068e5bf162"
         }
       ]
     },

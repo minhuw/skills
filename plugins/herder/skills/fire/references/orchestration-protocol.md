@@ -21,12 +21,11 @@ Resolve:
 - `repo_root`: absolute repository root.
 - `plan_dir`: absolute Herder plan directory, normally `<repo_root>/herder-plans`.
 - `plan_manager`: absolute path to `skills/plans/scripts/herder-plans.mjs` inside the installed plugin.
-- `codex_runner`: on Codex, the absolute path to `skills/fire/scripts/run-codex-worker.mjs` inside the installed plugin.
+- `codex_evidence_reader`: on Codex, the absolute path to `skills/fire/scripts/read-codex-agent-evidence.mjs` inside the installed plugin.
 - `base_commit`: current `HEAD` for a new run, or current integration HEAD for a resumed run.
 - `run_id`: a filesystem- and branch-safe UTC timestamp or the suffix of the resumed integration branch.
 - `integration_branch`: explicit argument or `plan-herder/integration-<run_id>`.
 - `worktree_root`: a temporary directory outside the user's checkout.
-- `prompt_root`: `<worktree_root>/prompts`, containing one immutable prompt file per Codex worker attempt.
 - `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume.
 
 Read applicable repository instructions before dispatch. Inspect the user's checkout but do not clean, stash, reset, stage, or commit it.
@@ -42,13 +41,13 @@ Complete all checks before creating branches or worktrees:
 1. Confirm `git rev-parse --show-toplevel` and `git worktree list` succeed.
 2. Run `node <plan_manager> validate <plan_dir> --pretty` and reject graph errors.
 3. Confirm every indexed non-rejected plan file exists and is readable.
-4. Resolve the three logical roles and their configured model/effort values. On Codex run `node <codex_runner> --check --pretty`; this validates all bundled profiles against the current Codex model catalog without starting a model turn, so it is not a usage-bearing attempt. Never use a collaboration task name as a substitute for selecting a Codex custom-agent profile. On Claude Code probe `herder:plan-implementer`, `herder:plan-reviewer`, and `herder:plan-saver`; a probe may only return `AVAILABLE`, is a usage-bearing `RUN` attempt, and must be recorded even when preflight later fails. Retain the configured values for usage attribution and replace them with host-reported effective values only when available.
+4. Resolve the three logical roles and their configured model/effort values. On Codex, require a live Multi-Agent V2 spawn schema in the `herder_agents` namespace containing both `agent_type` and `fork_turns`, and inspect the installed `plan_implementer`, `plan_reviewer`, and `plan_saver` definitions. Each must pin its expected model and effort. Never use a task name as a substitute for `agent_type`, and never perform a speculative model call during preflight. On Claude Code probe `herder:plan-implementer`, `herder:plan-reviewer`, and `herder:plan-saver`; a probe may only return `AVAILABLE`, is a usage-bearing `RUN` attempt, and must be recorded even when preflight later fails. Retain the configured values for usage attribution and replace them with host-reported effective values only when available.
 5. Determine the repository-wide verification commands from repository instructions, CI configuration, and plan command tables. Do not guess commands when the plans specify them.
 6. Check that branch names and intended worktree locations do not collide.
 
 Also confirm that the host permission profile permits writes to Git metadata before mutation. Some Codex `workspace-write` profiles protect `.git`, which prevents `git worktree add` even when ordinary repository files are writable. In a controlled disposable environment, select an adequate permission profile before launching the run; otherwise stop at preflight and report the required permission rather than partially creating the run.
 
-If Codex runner validation or a Claude role probe cannot run, report the missing logical role, model, effort, or host identifier. Generic fallback selection is forbidden.
+If the Codex V2 interface, a Codex custom profile, or a Claude role probe is unavailable, report the missing feature, logical role, model, effort, or host identifier. On Codex direct the user to `$herder:install`; do not fall back to nested `codex exec` or a generic agent.
 
 ## 3. Branch and Worktree Layout
 
@@ -62,16 +61,14 @@ plan-herder/<run-id>/<plan-id>-stage-<attempt>
 
 The coordinator creates branches and worktrees. When the host can spawn directly into a supplied isolated worktree, use that facility. Otherwise create the Git worktree first and pass its absolute path to the agent.
 
-For a Codex attempt, create `<prompt_root>/<attempt-id>.md` with `apply_patch`. The file must contain the complete role prompt, including the immutable plan snapshot. Invoke the runner with an absolute worktree and prompt path:
+For a Codex attempt, call the native Multi-Agent V2 spawn tool with:
 
-```bash
-node <codex_runner> --role <plan_implementer|plan_reviewer|plan_saver> \
-  --worktree <absolute-worktree> \
-  --prompt-file <absolute-prompt-file> \
-  --pretty
-```
+- a unique, stable `task_name` based on the run, plan, role, and ordinal;
+- `agent_type` equal to `plan_implementer`, `plan_reviewer`, or `plan_saver`;
+- `fork_turns: "none"` so unrelated coordinator history is not copied;
+- one self-contained initial message containing the complete role prompt and immutable plan snapshot.
 
-The runner sends the prompt to `codex exec` over stdin, pins the bundled model and effort explicitly, disables nested delegation, and returns one JSON object. Its `message` is the worker envelope; its `usage` is structured host telemetry. Treat a nonzero runner exit, `ok: false`, or a missing message as an attempt failure. The prompt files are execution evidence; never commit them.
+Omit `model`, `reasoning_effort`, and `service_tier`. The custom agent definition owns those values. Use the returned canonical task name for follow-up, wait, interrupt, and final-result handling. Treat spawn failure, terminal failure, silence, or a missing response envelope as an attempt failure. Preserve the native child transcript as execution evidence when the host exposes it.
 
 Keep the coordinator shell anchored in the user's stable original checkout or another stable directory. Execute every Git command with `git -C <absolute-worktree>` and every non-Git command with an explicit tool workdir or scoped `(cd <absolute-worktree> && ...)` subshell. Never depend on an ambient `cwd`, and never remove or recreate the directory containing the coordinator process.
 
@@ -95,7 +92,7 @@ Do not serialize independent plans unnecessarily. Do not dispatch a dependent me
 
 ### Implementer prompt contract
 
-Give the resolved implementer role (`plan_implementer` through the Codex runner or `herder:plan-implementer` on Claude Code):
+Give the resolved implementer role (`plan_implementer` through Codex Multi-Agent V2 or `herder:plan-implementer` on Claude Code):
 
 - its role and the prohibition on spawning agents;
 - the absolute candidate worktree path and branch;
@@ -117,7 +114,7 @@ NOTES: <material facts only>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Tell the worker to use `unknown` for values not explicitly exposed by the host and never estimate from transcript length. On Codex, ignore the worker-authored `USAGE` line when the runner provides structured `usage`; the runner envelope wins. Treat missing commits, dirty intended changes, unverifiable checks, STOPPED, tool errors, or silence as failure and enter rescue. Record the attempt through Plans even when no response or usage envelope returns.
+Tell the worker to use `unknown` for values not explicitly exposed by the host and never estimate from transcript length. Structured host telemetry wins over the worker-authored `USAGE` line. Treat missing commits, dirty intended changes, unverifiable checks, STOPPED, tool errors, or silence as failure and enter rescue. Record the attempt through Plans even when no response or usage envelope returns.
 
 ## 5. Transactional Integration
 
@@ -133,11 +130,11 @@ For each candidate:
 4. Confirm the diff is limited to the plan's scope, except generated artifacts explicitly caused by its gates.
 5. Run every plan done criterion and the applicable project-wide gates in the staging worktree.
 6. Create an empty coordinator completion-marker commit with `git commit --allow-empty -m "plan-herder(<id>): mark plan done"`.
-7. Dispatch `plan-reviewer` against the complete staging diff from the pre-plan integration SHA to staging HEAD.
+7. Record the staging worktree's clean status and tree SHA, dispatch `plan-reviewer` against the complete staging diff from the pre-plan integration SHA to staging HEAD, and prove both are unchanged after review. Any reviewer mutation is a failed review even if its verdict says APPROVE.
 
 ### Reviewer prompt contract
 
-Give the resolved reviewer role (`plan_reviewer` through the Codex runner or `herder:plan-reviewer` on Claude Code):
+Give the resolved reviewer role (`plan_reviewer` through Codex Multi-Agent V2 or `herder:plan-reviewer` on Claude Code):
 
 - its role and the prohibition on editing or spawning agents;
 - the absolute staging worktree path and branch;
@@ -157,7 +154,7 @@ RATIONALE: <concise>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Tell the reviewer never to estimate unavailable usage. On Codex, prefer the runner's structured `usage` over the reviewer-authored `USAGE` line. Only `APPROVE` with `SCOPE: PASS` can integrate. Verify the integration branch still points to the staging base SHA, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD and review again. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
+Tell the reviewer never to estimate unavailable usage. Prefer structured host telemetry over the reviewer-authored `USAGE` line. Only `APPROVE` with `SCOPE: PASS` can integrate. Verify the integration branch still points to the staging base SHA, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD and review again. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
 
 If any merge, check, review, or compare-and-advance step fails, leave integration HEAD unchanged and enter rescue.
 
@@ -165,7 +162,7 @@ If any merge, check, review, or compare-and-advance step fails, leave integratio
 
 Prepare the rescue environment; do not ask `plan-saver` to reconstruct missing candidate changes from a different checkout. Reuse the candidate branch/worktree when it safely contains the failed work. For integration-only failures, create a rescue branch/worktree from the latest integration HEAD and combine the candidate there first.
 
-Give the resolved saver role (`plan_saver` through the Codex runner or `herder:plan-saver` on Claude Code) only:
+Give the resolved saver role (`plan_saver` through Codex Multi-Agent V2 or `herder:plan-saver` on Claude Code) only:
 
 - the absolute rescue worktree path;
 - branch name;
@@ -189,7 +186,7 @@ EVIDENCE: <concise repository/tool evidence>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Tell the saver never to estimate unavailable usage. On Codex, prefer the runner's structured `usage` over the saver-authored `USAGE` line. Record each saver round separately, including a round that ends in `NEEDS_INPUT`, `REPLAN`, or `TERMINAL`.
+Tell the saver never to estimate unavailable usage. Prefer structured host telemetry over the saver-authored `USAGE` line. Record each saver round separately, including a round that ends in `NEEDS_INPUT`, `REPLAN`, or `TERMINAL`.
 
 Handle outcomes:
 
@@ -204,7 +201,7 @@ Bound recovery to two autonomous saver repair rounds and two user clarification 
 
 The root coordinator is the only usage-ledger writer. After every agent attempt reaches a terminal host state, call `plan_manager record-usage` before taking the next lifecycle action. Use an idempotent attempt ID such as `<run-id>-<plan-id>-<role>-<ordinal>`; use plan `RUN` for a final cross-plan reviewer or integration-rescue agent.
 
-Attribute the configured model and effort resolved before dispatch. Prefer host-reported effective model/effort and structured usage over configured values and the worker's envelope when those fields are exposed. On Codex, copy `inputTokens`, `cachedInputTokens`, `outputTokens`, and `reasoningTokens` from the runner result and use source `codex-exec-jsonl`; the runner's `totalTokens` is only a convenience and is not passed to `record-usage`. If the runner reaches no terminal usage event, record every token field as `unknown` with source `unknown`. On Claude, copy structured host telemetry when available and otherwise use `unknown`. Never tokenize transcripts or infer hidden reasoning.
+Attribute the configured model and effort resolved before dispatch. Prefer host-reported effective model/effort and structured usage over configured values and the worker's envelope when those fields are exposed. On Codex, after a child reaches a terminal state, run `node <codex_evidence_reader> --agent <returned-canonical-task-name> --pretty`. Require its `agentRole` to match the requested custom profile and its `multiAgentVersion` to be `v2`; a mismatch is a routing failure. When its `usage` is present, copy the exact fields and source `codex-multi-agent-v2-transcript`. If no uniquely attributable terminal usage exists, record every token field as `unknown` with source `unknown`. On Claude, copy structured host telemetry when available and otherwise use `unknown`. Never tokenize transcripts, subtract coordinator totals, or infer hidden reasoning.
 
 Use `plan_manager usage <plan_dir> --pretty` for reporting. Its token subtotal is input plus output for attempts where both are known; cached-input and reasoning columns are details, not additional tokens. Always report coverage beside subtotals. The README ledger covers recorded Herder attempts, not unobservable coordinator, platform, or retry overhead.
 

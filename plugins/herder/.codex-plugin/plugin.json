@@ -1,6 +1,6 @@
 {
   "name": "herder",
-  "version": "0.4.0+codex.20260715073004",
+  "version": "0.4.0+codex.20260715090645",
   "description": "Create, interrogate, manage, and execute dependency-aware implementation plans with reviewed integration and token accounting.",
   "author": {
     "name": "minhuw",
