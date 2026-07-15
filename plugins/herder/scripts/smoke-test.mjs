@@ -131,7 +131,7 @@ tool_namespace = "herder_agents"
 max_depth = 1
 
 [sandbox_workspace_write]
-writable_roots = [${tomlString(path.join(project, ".git"))}, ${tomlString(fireRoot)}]
+writable_roots = [${tomlString(codexHome)}, ${tomlString(path.join(project, ".git"))}, ${tomlString(fireRoot)}]
 `)
 }
 
@@ -563,7 +563,9 @@ function main() {
         assert.match(confirmed.message, /valid|updated|refined|plan 001/i)
         const after = fs.readFileSync(plan, "utf8")
         assert.notEqual(after, before, "Grill did not update the confirmed plan")
-        assert.match(after, /plain text|package version followed by one newline/i)
+        assert.match(after, /version[\s\S]*followed by exactly one newline/i)
+        assert.match(after, /no label|without (?:a )?label/i)
+        assert.match(after, /(?:no|without)[^\n.]{0,80}JSON/i)
         assert.doesNotMatch(after, /DECISION NEEDED/)
         parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "refined plan validation")
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
