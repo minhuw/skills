@@ -1,4 +1,0 @@
-interface:
-  display_name: "Grill Others"
-  short_description: "Run a multi-agent design jury"
-  default_prompt: "Use $grill-others to stress-test this design with Codex, Claude Code, and Pi before implementation."
