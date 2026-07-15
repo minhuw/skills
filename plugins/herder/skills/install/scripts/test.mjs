@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { access, chmod, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -72,10 +72,45 @@ process.stdout.write("multi_agent_v2                       under development  tr
   const forced = run(...common, "--force");
   assert.match(forced, /Installed \(replaced\): .*plan_implementer\.toml/);
   assert.deepEqual(await readFile(installed), await readFile(source));
-  const backupRoot = path.join(projectRoot, ".codex/agents/.herder-backups");
+  const backupRoot = path.join(projectRoot, ".codex/.plan-herder-backups");
   const stamps = await readdir(backupRoot);
   assert.equal(stamps.length, 1);
   assert.equal(await readFile(path.join(backupRoot, stamps[0], "plan_implementer.toml"), "utf8"), "customized\n");
+  assert.deepEqual((await readdir(path.join(projectRoot, ".codex/agents"))).sort(), [
+    "plan_implementer.toml",
+    "plan_reviewer.toml",
+    "plan_saver.toml",
+  ]);
+  await assert.rejects(access(path.join(projectRoot, ".codex/agents/.herder-backups")));
+
+  const migrationProject = path.join(fixtureRoot, "migration-project");
+  const migrationCommon = ["--host", "codex", "--project-root", migrationProject];
+  run(...migrationCommon);
+  const legacyRoot = path.join(migrationProject, ".codex/agents/.herder-backups");
+  const legacyStamp = "2026-07-15T12-58-16-000Z";
+  const legacyProfile = path.join(legacyRoot, legacyStamp, "plan_reviewer.toml");
+  await mkdir(path.dirname(legacyProfile), { recursive: true });
+  await writeFile(legacyProfile, "legacy reviewer\n");
+
+  const migrationPreview = run(...migrationCommon, "--dry-run");
+  assert.match(migrationPreview, /Would migrate legacy Codex backups:/);
+  assert.equal(await readFile(legacyProfile, "utf8"), "legacy reviewer\n");
+
+  const migrated = run(...migrationCommon);
+  assert.match(migrated, /Migrated legacy Codex backups:/);
+  await assert.rejects(access(legacyRoot));
+  const migrationBackupRoot = path.join(migrationProject, ".codex/.plan-herder-backups");
+  const migratedDirs = (await readdir(migrationBackupRoot)).filter((entry) => entry.startsWith("legacy-"));
+  assert.equal(migratedDirs.length, 1);
+  assert.equal(
+    await readFile(path.join(migrationBackupRoot, migratedDirs[0], legacyStamp, "plan_reviewer.toml"), "utf8"),
+    "legacy reviewer\n",
+  );
+  assert.deepEqual((await readdir(path.join(migrationProject, ".codex/agents"))).sort(), [
+    "plan_implementer.toml",
+    "plan_reviewer.toml",
+    "plan_saver.toml",
+  ]);
 
   const claudeProject = path.join(fixtureRoot, "claude-project");
   const claude = run("--host", "claude", "--project-root", claudeProject);

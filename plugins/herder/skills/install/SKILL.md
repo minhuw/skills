@@ -58,6 +58,6 @@ Do not set legacy `agents.max_threads` with Multi-Agent V2. Use Fire's `--max-pa
 
 ## Conflict Policy
 
-Install automatically when a target is absent or byte-identical. If a target differs, stop without changing any profile and show the conflict. Preserve user customization by default. Use `--force` only with explicit user authorization; the installer saves replaced files under `.plan-herder-backups/<timestamp>/` before writing the new set.
+Install automatically when a target is absent or byte-identical. If a target differs, stop without changing any profile and show the conflict. Preserve user customization by default. Use `--force` only with explicit user authorization; the installer saves replaced files under `<Codex config root>/.plan-herder-backups/<timestamp>/`, alongside rather than inside `agents/`, before writing the new set. On any install or verification run, migrate the unsafe legacy `agents/.herder-backups/` directory to a timestamped directory under that safe root; `--dry-run` reports the migration without changing files.
 
 Do not execute profile contents. Read only files named in the bundled manifest, require paths to remain inside the expected plugin profile trees, and verify every SHA-256 digest before writing anything.

@@ -221,8 +221,30 @@ function backupStamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function codexBackupRoot(target) {
+  const agentsDir = path.dirname(target);
+  return path.join(path.dirname(agentsDir), ".plan-herder-backups");
+}
+
+async function migrateLegacyCodexBackups(profiles, { dryRun, stamp }) {
+  const profile = profiles.find((item) => item.host === "codex");
+  if (!profile) return;
+  const legacyRoot = path.join(path.dirname(profile.target), ".herder-backups");
+  if (!(await exists(legacyRoot))) return;
+  const destination = path.join(codexBackupRoot(profile.target), `legacy-${stamp}`);
+  if (dryRun) {
+    console.log(`Would migrate legacy Codex backups: ${legacyRoot} -> ${destination}`);
+    return;
+  }
+  await mkdir(path.dirname(destination), { recursive: true });
+  await rename(legacyRoot, destination);
+  console.log(`Migrated legacy Codex backups: ${legacyRoot} -> ${destination}`);
+}
+
 async function installCodex(profiles, { force, dryRun }) {
   const classified = await classifyCodex(profiles);
+  const stamp = backupStamp();
+  await migrateLegacyCodexBackups(profiles, { dryRun, stamp });
   if (dryRun) return classified;
   if (classified.conflicts.length > 0 && !force) {
     throw new ConflictError(classified.conflicts);
@@ -232,7 +254,6 @@ async function installCodex(profiles, { force, dryRun }) {
   const prepared = [];
   const backups = [];
   const installedTargets = [];
-  const stamp = backupStamp();
 
   try {
     for (const profile of changing) {
@@ -248,7 +269,7 @@ async function installCodex(profiles, { force, dryRun }) {
 
     for (const profile of prepared) {
       if (await exists(profile.target)) {
-        const backupDir = path.join(path.dirname(profile.target), ".herder-backups", stamp);
+        const backupDir = path.join(codexBackupRoot(profile.target), stamp);
         await mkdir(backupDir, { recursive: true });
         const backup = path.join(backupDir, path.basename(profile.target));
         await copyFile(profile.target, backup);
