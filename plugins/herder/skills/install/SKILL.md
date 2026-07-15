@@ -7,6 +7,8 @@ description: Install or verify the implementer, reviewer, and saver agent profil
 
 Install or verify the three host-native agent profiles required by Herder. The profiles are bundled with the installed plugin, so the plugin version is the single verified release unit and no runtime network fetch is required.
 
+Codex Fire reads these bundled profiles through its worker runner and does not depend on the collaboration tool discovering a custom agent type. Installing them still makes the same roles available for direct host-native use outside Fire. Claude Fire continues to use the bundled host-native agents directly.
+
 ## Invocation
 
 Interpret tokens after the skill name as installer arguments:
@@ -36,7 +38,7 @@ node <skill-dir>/scripts/install-herder.mjs \
 ```
 
 4. Report every installed, bundled, unchanged, or conflicted profile.
-5. On Codex, if the agent directory did not exist when the current session started, tell the user to start a new session before invoking `$herder:fire`.
+5. On Codex, if the agent directory did not exist when the current session started, tell the user to start a new session before using the profiles directly. `$herder:fire` can use the bundled profiles immediately through its worker runner.
 
 Codex project scope installs to `<repo>/.codex/agents/`; user scope installs to `~/.codex/agents/`. Claude agents load directly from the plugin's `agents/` directory, so the installer only verifies their bundled definitions.
 

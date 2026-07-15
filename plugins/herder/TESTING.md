@@ -9,6 +9,7 @@ From the marketplace repository root:
 ```bash
 node plugins/herder/skills/plans/scripts/test.mjs
 node plugins/herder/skills/install/scripts/test.mjs
+node plugins/herder/skills/fire/scripts/test.mjs
 
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/plans
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/grill
@@ -68,6 +69,18 @@ node plugins/herder/scripts/smoke-test.mjs --live-grill --keep
 
 Use `--workspace` and `--auth-file` exactly as in the general live test. The transcript files are `01-grill-question.jsonl`, `02-grill-answer.jsonl`, and `03-grill-confirm.jsonl`.
 
+## Live Fire execution test
+
+This high-cost mode creates a plan with Improve and executes it through the real Codex worker runner. It verifies explicit Luna/max implementation, Sol/xhigh review, numeric `codex-exec-jsonl` usage rows, a completed integration branch, passing integration tests, and an unchanged source branch. The outer Fire coordinator uses bypass permissions only inside the disposable fixture; worker sessions retain their role-specific sandboxes.
+
+```bash
+node plugins/herder/scripts/smoke-test.mjs \
+  --live-fire \
+  --workspace /tmp/herder-live-fire
+```
+
+The transcript files are `01-improve.jsonl` and `02-fire-run.jsonl`. Inspect the retained fixture, integration worktree, and `herder-plans/README.md`, then delete the workspace when finished.
+
 ## Release confidence
 
-Before publishing, require all deterministic checks and the local installation smoke test. Run the general live test after changes to Improve output, the Plans protocol, or Fire's consumption of plan state. Run the targeted Grill test after changes to its interview, confirmation, or plan-editing contract. A Fire execution run with real implementer/reviewer/saver agents is a separate higher-cost integration test and should be performed when scheduling, worktree, review, or rescue behavior changes materially.
+Before publishing, require all deterministic checks and the local installation smoke test. Run the general live test after changes to Improve output, the Plans protocol, or Fire's consumption of plan state. Run the targeted Grill test after changes to its interview, confirmation, or plan-editing contract. Run the high-cost Fire execution mode when scheduling, worktree, model routing, usage capture, review, or rescue behavior changes materially.

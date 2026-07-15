@@ -1,13 +1,21 @@
 {
   "name": "herder",
-  "version": "0.4.0",
+  "version": "0.4.0+codex.20260715073004",
   "description": "Create, interrogate, manage, and execute dependency-aware implementation plans with reviewed integration and token accounting.",
   "author": {
     "name": "minhuw",
     "url": "https://github.com/minhuw"
   },
   "repository": "https://github.com/minhuw/skills",
-  "keywords": ["plans", "audit", "interview", "orchestration", "subagents", "worktrees", "usage"],
+  "keywords": [
+    "plans",
+    "audit",
+    "interview",
+    "orchestration",
+    "subagents",
+    "worktrees",
+    "usage"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Herder",
@@ -15,7 +23,9 @@
     "longDescription": "Herder audits repositories, interrogates ambiguous plans one decision at a time, manages a local dependency-aware backlog, reviews candidates, rescues failures, integrates verified work transactionally, and records per-attempt token usage with honest coverage.",
     "developerName": "minhuw",
     "category": "Developer Tools",
-    "capabilities": ["Write"],
+    "capabilities": [
+      "Write"
+    ],
     "defaultPrompt": [
       "Create a Herder plan for this change, then grill me to refine it.",
       "Audit this repository and create prioritized Herder plans.",

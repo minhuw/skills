@@ -19,6 +19,7 @@ function fail(message) {
 function parseArgs(argv) {
   const options = {
     live: false,
+    liveFire: false,
     liveGrill: false,
     keep: false,
     workspace: "",
@@ -27,6 +28,7 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === "--live") options.live = true
+    else if (argument === "--live-fire") options.liveFire = true
     else if (argument === "--live-grill") options.liveGrill = true
     else if (argument === "--keep") options.keep = true
     else if (["--workspace", "--auth-file"].includes(argument)) {
@@ -34,11 +36,13 @@ function parseArgs(argv) {
       const key = argument === "--workspace" ? "workspace" : "authFile"
       options[key] = path.resolve(argv[++index])
     } else if (["-h", "--help"].includes(argument)) {
-      process.stdout.write(`Usage: node smoke-test.mjs [--live | --live-grill] [--keep] [--workspace <empty-dir>] [--auth-file <file>]\n`)
+      process.stdout.write(`Usage: node smoke-test.mjs [--live | --live-fire | --live-grill] [--keep] [--workspace <empty-dir>] [--auth-file <file>]\n`)
       process.exit(0)
     } else fail(`Unknown argument: ${argument}`)
   }
-  if (options.live && options.liveGrill) fail("--live and --live-grill are separate test modes")
+  if ([options.live, options.liveFire, options.liveGrill].filter(Boolean).length > 1) {
+    fail("--live, --live-fire, and --live-grill are separate test modes")
+  }
   if (options.workspace) options.keep = true
   return options
 }
@@ -149,16 +153,27 @@ function finishCodexStep(name, result, context) {
   return { message, threadId: startedThreadId(result.stdout) }
 }
 
-function runCodex(name, prompt, context, { ephemeral = true } = {}) {
+function runCodex(name, prompt, context, { dangerous = false, ephemeral = true } = {}) {
   const args = [
     "exec",
-    "--sandbox", "workspace-write",
     "--json",
     "-C", context.project,
     prompt,
   ]
+  if (dangerous) args.splice(1, 0, "--dangerously-bypass-approvals-and-sandbox")
+  else args.splice(1, 0, "--sandbox", "workspace-write")
   if (ephemeral) args.splice(1, 0, "--ephemeral")
   return finishCodexStep(name, run("codex", args, { cwd: context.project, env: context.env, allowFailure: true }), context)
+}
+
+function worktreeForBranch(repo, branch) {
+  const lines = run("git", ["worktree", "list", "--porcelain"], { cwd: repo }).stdout.split(/\r?\n/)
+  let current = ""
+  for (const line of lines) {
+    if (line.startsWith("worktree ")) current = line.slice("worktree ".length)
+    if (line === `branch refs/heads/${branch}`) return current
+  }
+  fail(`No worktree found for ${branch}`)
 }
 
 function resumeCodex(name, threadId, prompt, context) {
@@ -302,6 +317,11 @@ function main() {
     for (const skill of expectedSkills) {
       assert.equal(fs.existsSync(path.join(installedPath, "skills", skill, "SKILL.md")), true, `missing installed skill ${skill}`)
     }
+    assert.equal(
+      fs.existsSync(path.join(installedPath, "skills", "fire", "scripts", "run-codex-worker.mjs")),
+      true,
+      "missing installed Codex worker runner",
+    )
 
     const manager = path.join(installedPath, "skills", "plans", "scripts", "herder-plans.mjs")
     const initialized = parseJson(run("node", [manager, "init", "herder-plans", "--pretty"], { cwd: project }).stdout, "plans init")
@@ -327,7 +347,7 @@ function main() {
 
     run("npm", ["test"], { cwd: project })
 
-    if (options.live || options.liveGrill) {
+    if (options.live || options.liveFire || options.liveGrill) {
       if (!fs.existsSync(options.authFile)) fail(`Codex auth file not found: ${options.authFile}`)
       const authTarget = path.join(codexHome, "auth.json")
       if (!fs.existsSync(authTarget)) {
@@ -336,7 +356,7 @@ function main() {
       }
       const context = { project, env, transcripts }
 
-      if (options.live) {
+      if (options.live || options.liveFire) {
         const improveMessage = runCodex("01-improve", `Use $herder:improve plan to add a --version flag to this tiny CLI. Write exactly one self-contained plan under herder-plans/, do not modify source code, do not ask questions, and validate the backlog before finishing.`, context).message
         assert.match(improveMessage, /herder-plans|plan/i)
 
@@ -346,11 +366,40 @@ function main() {
         assert.equal(parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "preserved usage report").attempts, 1)
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
 
-        const plansMessage = runCodex("02-plans-status", `Use $herder:plans status herder-plans. Stay read-only and report the ready plan IDs.`, context).message
-        assert.match(plansMessage, /001/)
+        if (options.live) {
+          const plansMessage = runCodex("02-plans-status", `Use $herder:plans status herder-plans. Stay read-only and report the ready plan IDs.`, context).message
+          assert.match(plansMessage, /001/)
 
-        const fireMessage = runCodex("03-fire-status", `Use $herder:fire status herder-plans. Stay read-only, do not spawn workers, and report the ready plan IDs.`, context).message
-        assert.match(fireMessage, /001/)
+          const fireMessage = runCodex("03-fire-status", `Use $herder:fire status herder-plans. Stay read-only, do not spawn workers, and report the ready plan IDs.`, context).message
+          assert.match(fireMessage, /001/)
+        } else {
+          const originalHead = run("git", ["rev-parse", "HEAD"], { cwd: project }).stdout.trim()
+          const fireRoot = path.join(root, "fire-worktrees")
+          const fireMessage = runCodex("02-fire-run", `Use $herder:fire herder-plans --max-parallel 1. Execute the validated backlog end to end in this disposable repository. Use ${fireRoot} as the worktree root. Do not push or merge into the current branch. Follow the skill exactly and report the integration branch, verification, and token usage.`, context, {
+            dangerous: true,
+            ephemeral: false,
+          }).message
+          assert.match(fireMessage, /completed|done|integration/i)
+
+          const completedGraph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "completed validation")
+          assert.equal(completedGraph.complete, true)
+          assert.equal(completedGraph.counts.done, 1)
+          const completedUsage = parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "completed usage report")
+          const fireAttempts = completedUsage.records.filter((record) => record.attempt !== "smoke-run-reviewer-1")
+          assert.equal(fireAttempts.length >= 3, true)
+          assert.equal(fireAttempts.every((record) => Number.isSafeInteger(record.inputTokens)), true)
+          assert.equal(fireAttempts.every((record) => Number.isSafeInteger(record.outputTokens)), true)
+          assert.equal(fireAttempts.every((record) => record.source === "codex-exec-jsonl"), true)
+          assert.equal(fireAttempts.some((record) => record.model === "gpt-5.6-luna" && record.effort === "max"), true)
+          assert.equal(fireAttempts.some((record) => record.model === "gpt-5.6-sol" && record.effort === "xhigh"), true)
+
+          const integrationBranches = run("git", ["branch", "--list", "plan-herder/integration-*", "--format=%(refname:short)"], { cwd: project }).stdout.trim().split(/\r?\n/).filter(Boolean)
+          assert.equal(integrationBranches.length, 1)
+          const integrationWorktree = worktreeForBranch(project, integrationBranches[0])
+          run("npm", ["test"], { cwd: integrationWorktree })
+          assert.equal(run("git", ["rev-parse", "HEAD"], { cwd: project }).stdout.trim(), originalHead)
+          assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
+        }
       } else {
         const plan = writeGrillPlan(project)
         parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "grill fixture validation")
@@ -379,7 +428,7 @@ function main() {
     process.stdout.write(`Herder smoke test passed\n`)
     process.stdout.write(`Plugin: ${installed.name}@${installed.version}\n`)
     process.stdout.write(`Fixture: ${options.keep ? project : "temporary (removed after success)"}\n`)
-    if (options.live || options.liveGrill) process.stdout.write(`Transcripts: ${transcripts}\n`)
+    if (options.live || options.liveFire || options.liveGrill) process.stdout.write(`Transcripts: ${transcripts}\n`)
   } finally {
     if (createdAuthLink) {
       try {
