@@ -1,7 +1,7 @@
 {
   "name": "herder",
-  "version": "0.2.0",
-  "description": "Create, manage, and execute dependency-aware implementation plans with reviewed multi-agent integration.",
+  "version": "0.3.0",
+  "description": "Create, interrogate, manage, and execute dependency-aware implementation plans with reviewed multi-agent integration.",
   "author": {
     "name": "minhuw",
     "url": "https://github.com/minhuw"

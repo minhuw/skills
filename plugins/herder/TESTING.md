@@ -11,6 +11,7 @@ node plugins/herder/skills/plans/scripts/test.mjs
 node plugins/herder/skills/install/scripts/test.mjs
 
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/plans
+python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/grill
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/improve
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/fire
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/install
@@ -24,7 +25,7 @@ Use `uv run --with pyyaml python ...` when the validation scripts' Python enviro
 
 ## Local installation smoke test
 
-This creates a real temporary Git repository and isolated `CODEX_HOME`, installs the current marketplace checkout through `codex plugin`, verifies all four skills are cached, initializes an ignored `herder-plans/` backlog through the installed manager, validates it, and runs the fixture's tests:
+This creates a real temporary Git repository and isolated `CODEX_HOME`, installs the current marketplace checkout through `codex plugin`, verifies all five skills are cached, initializes an ignored `herder-plans/` backlog through the installed manager, validates it, and runs the fixture's tests:
 
 ```bash
 node plugins/herder/scripts/smoke-test.mjs
@@ -57,6 +58,16 @@ node plugins/herder/scripts/smoke-test.mjs \
 
 `--workspace` must name an empty directory and implies `--keep`. Inspect `transcripts/` there when a skill behaves unexpectedly. Delete the directory manually after inspection.
 
+## Live Grill interaction test
+
+This targeted mode creates one valid plan with a single unresolved decision, then resumes one Codex session across three turns. It verifies that `$herder:grill` asks one question without editing, records the answer without editing, and changes the plan only after explicit confirmation. It then validates the refined backlog and confirms the source checkout stayed clean.
+
+```bash
+node plugins/herder/scripts/smoke-test.mjs --live-grill --keep
+```
+
+Use `--workspace` and `--auth-file` exactly as in the general live test. The transcript files are `01-grill-question.jsonl`, `02-grill-answer.jsonl`, and `03-grill-confirm.jsonl`.
+
 ## Release confidence
 
-Before publishing, require all deterministic checks, the local installation smoke test, and at least one successful live test after any change to Improve output, the Plans protocol, or Fire's consumption of plan state. A Fire execution run with real implementer/reviewer/saver agents is a separate higher-cost integration test and should be performed when scheduling, worktree, review, or rescue behavior changes materially.
+Before publishing, require all deterministic checks and the local installation smoke test. Run the general live test after changes to Improve output, the Plans protocol, or Fire's consumption of plan state. Run the targeted Grill test after changes to its interview, confirmation, or plan-editing contract. A Fire execution run with real implementer/reviewer/saver agents is a separate higher-cost integration test and should be performed when scheduling, worktree, review, or rescue behavior changes materially.

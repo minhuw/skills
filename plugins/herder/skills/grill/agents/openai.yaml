@@ -1,0 +1,4 @@
+interface:
+  display_name: "Herder Grill"
+  short_description: "Interrogate and refine one Herder plan"
+  default_prompt: "Use $herder:grill to question me one decision at a time and refine a Herder plan."
