@@ -671,6 +671,7 @@ function main() {
 
         const fireTranscript = fs.readFileSync(path.join(transcripts, "02-fire-run.jsonl"), "utf8")
         assert.doesNotMatch(fireTranscript, /run-codex-worker\.mjs/)
+        assert.match(fireTranscript, /run-gate\.mjs/, "Fire did not isolate coordinator gate output")
 
         const integrationBranches = run("git", ["branch", "--list", "plan-herder/integration-*", "--format=%(refname:short)"], { cwd: project }).stdout.trim().split(/\r?\n/).filter(Boolean)
         assert.equal(integrationBranches.length, 1)

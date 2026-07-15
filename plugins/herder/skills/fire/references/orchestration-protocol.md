@@ -22,10 +22,12 @@ Resolve:
 - `plan_dir`: absolute Herder plan directory, normally `<repo_root>/herder-plans`.
 - `plan_manager`: absolute path to `skills/plans/scripts/herder-plans.mjs` inside the installed plugin.
 - `codex_evidence_reader`: on Codex, the absolute path to `skills/fire/scripts/read-codex-agent-evidence.mjs` inside the installed plugin.
+- `gate_runner`: absolute path to `skills/fire/scripts/run-gate.mjs` inside the installed plugin.
 - `base_commit`: current `HEAD` for a new run, or current integration HEAD for a resumed run.
 - `run_id`: a filesystem- and branch-safe UTC timestamp or the suffix of the resumed integration branch.
 - `integration_branch`: explicit argument or `plan-herder/integration-<run_id>`.
 - `worktree_root`: a temporary directory outside the user's checkout.
+- `gate_log_root`: `<worktree_root>/logs`, outside every integration, candidate, staging, and rescue worktree.
 - `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume.
 - `recovery_counters`: per-plan substantive saver rounds, clarification cycles, and same-round interruption restarts for the current invocation.
 
@@ -69,7 +71,7 @@ For a Codex attempt, call the native Multi-Agent V2 spawn tool with:
 - `fork_turns: "none"` so unrelated coordinator history is not copied;
 - one self-contained initial message containing the complete role prompt and immutable plan snapshot.
 
-Omit `model`, `reasoning_effort`, and `service_tier`. The custom agent definition owns those values. Use the returned canonical task name for follow-up, wait, interrupt, and final-result handling. Treat spawn failure, terminal failure, silence, or a missing response envelope as an attempt failure for usage accounting, then apply Section 6 before deciding whether a saver repair round was consumed. Preserve the native child transcript as execution evidence when the host exposes it.
+Omit `model`, `reasoning_effort`, and `service_tier`. The custom agent definition owns those values. Use the returned canonical task name for follow-up, wait, interrupt, and final-result handling. Treat spawn failure, terminal failure, or a native terminal state without a response envelope as an attempt failure for usage accounting, then apply Section 6 before deciding whether a saver repair round was consumed. A merely quiet running worker is not a failed attempt; continue the event-driven wait unless the user supplied a deadline. Preserve the native child transcript as execution evidence when the host exposes it.
 
 Keep the coordinator shell anchored in the user's stable original checkout or another stable directory. Execute every Git command with `git -C <absolute-worktree>` and every non-Git command with an explicit tool workdir or scoped `(cd <absolute-worktree> && ...)` subshell. Never depend on an ambient `cwd`, and never remove or recreate the directory containing the coordinator process.
 
@@ -103,6 +105,7 @@ Give the resolved implementer role (`plan_implementer` through Codex Multi-Agent
 - an instruction never to edit `herder-plans/README.md` or any plan status;
 - the stable attempt ID and resolved model/effort attribution;
 - a requirement to stay in scope, honor STOP conditions, run every gate, and commit all intended changes;
+- a requirement to summarize checks without pasting command logs;
 - this exact response shape:
 
 ```text
@@ -115,11 +118,25 @@ NOTES: <material facts only>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Tell the worker to use `unknown` for values not explicitly exposed by the host and never estimate from transcript length. Structured host telemetry wins over the worker-authored `USAGE` line. Treat missing commits, dirty intended changes, unverifiable checks, STOPPED, tool errors, or silence as failure and enter rescue. Record the attempt through Plans even when no response or usage envelope returns.
+Tell the worker to use `unknown` for values not explicitly exposed by the host and never estimate from transcript length. Structured host telemetry wins over the worker-authored `USAGE` line. Treat missing commits, dirty intended changes, unverifiable checks, STOPPED, tool errors, or a terminal attempt without a response as failure and enter rescue. Record the attempt through Plans even when no response or usage envelope returns.
+
+### Coordinator wait discipline
+
+After dispatching Codex workers, call native `wait_agent` with `timeout_ms: 60000`. It is a long poll: it returns immediately when any agent update arrives and otherwise supplies a one-minute heartbeat. Process every queued update before waiting again.
+
+A timeout is not a state change. If no local scheduling or integration work became ready, do not reread transcripts, request status, or call `list_agents`; issue the next long wait. Use `list_agents` only for initial bookkeeping or reconciliation after an ambiguous, missing, or contradictory terminal event. On Claude Code, use its native blocking agent wait with the same event-first behavior.
 
 ## 5. Transactional Integration
 
 Never test a candidate by first advancing the integration branch.
+
+Run every coordinator-owned verification gate, including final project-wide gates, through:
+
+```text
+node <gate_runner> --cwd <absolute-worktree> --log-dir <gate_log_root>/<plan-or-RUN>/<phase> --label <stable-label> -- <command> <arguments...>
+```
+
+Pass the exact command as argv after `--`; do not add a shell unless the specified verification command itself requires one. Never place secrets in command arguments. The runner writes combined stdout/stderr to a unique private log and returns only a command fingerprint, exit status, duration, byte count, SHA-256, and log path. It returns no command output on success or failure. Treat that compact JSON as the check result; never inline, stringify, or reread a complete gate log in coordinator context. Let Saver reproduce failed gates in its isolated context instead of feeding their output to the coordinator. Preserve the log with the failed worktree evidence. Git state-inspection commands are not verification gates and need not use the runner.
 
 Run each coordinator transaction fail-fast (`set -e` or one checked command per tool call). Treat every nonzero exit as the end of that transaction; do not continue with empty or stale shell variables. Before retrying, prove that canonical integration HEAD still equals the transaction's recorded staging-base SHA.
 
@@ -144,6 +161,7 @@ Give the resolved reviewer role (`plan_reviewer` through Codex Multi-Agent V2 or
 - the actual checks run and their results;
 - the stable attempt ID and resolved model/effort attribution;
 - instructions to inspect the diff, trace every hunk to the plan, verify scope and behavior, and run additional read-only or verification commands as needed;
+- instructions to summarize checks without pasting command logs;
 - this exact response shape:
 
 ```text
@@ -184,7 +202,7 @@ Give the resolved saver role (`plan_saver` through Codex Multi-Agent V2 or `herd
 - the user's answer when resuming after `NEEDS_INPUT`.
 - the stable attempt ID and resolved model/effort attribution.
 
-Do not pass implementer or reviewer theories by default. Let the saver inspect status, log, diff, repository instructions, and tests independently. Add the exact failing command/output only when the failure is integration-only or cannot be reproduced from the rescue worktree.
+Do not pass implementer or reviewer theories or raw gate output by default. Let the saver inspect status, diff, repository instructions, and tests independently. Add the exact failing command and compact runner evidence only when the failure is integration-only or cannot be reproduced from the rescue worktree.
 
 Require this response shape:
 
@@ -265,5 +283,6 @@ Do not merge, push, publish, deploy, or delete the preserved candidate/rescue ev
 - final commit SHA;
 - plans completed/rejected/blocked;
 - final verification commands and results;
+- compact gate evidence and retained log paths;
 - usage subtotals and coverage by plan, role, and model/effort;
 - preserved branches needing attention.

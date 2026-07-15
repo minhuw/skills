@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import process from "node:process"
@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url"
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const reader = path.join(scriptDir, "read-codex-agent-evidence.mjs")
+const gateRunner = path.join(scriptDir, "run-gate.mjs")
 const root = await mkdtemp(path.join(tmpdir(), "herder-agent-evidence-test-"))
 const sessions = path.join(root, "sessions", "2026", "07", "15")
 const agentId = "019f0000-0000-7000-8000-000000000001"
@@ -133,7 +134,102 @@ try {
   const missing = spawnSync(process.execPath, [reader, "--agent", "missing", "--codex-home", root], { encoding: "utf8" })
   assert.equal(missing.status, 1)
   assert.equal(JSON.parse(missing.stdout).ok, false)
-  console.log("herder Codex Multi-Agent V2 evidence tests passed")
+
+  const protocol = await readFile(path.join(scriptDir, "..", "references", "orchestration-protocol.md"), "utf8")
+  assert.match(protocol, /wait_agent.*timeout_ms: 60000/)
+  assert.match(protocol, /do not reread transcripts, request status, or call `list_agents`/)
+  assert.match(protocol, /node <gate_runner> --cwd/)
+  assert.match(protocol, /returns no command output on success or failure/)
+
+  const gateWorktree = path.join(root, "gate-worktree")
+  const gateLogs = path.join(root, "gate-logs")
+  await mkdir(gateWorktree)
+  const success = spawnSync(process.execPath, [
+    gateRunner,
+    "--cwd", gateWorktree,
+    "--log-dir", gateLogs,
+    "--label", "verbose-success",
+    "--",
+    process.execPath,
+    "-e",
+    'process.stdout.write("x".repeat(250000))',
+  ], { encoding: "utf8", maxBuffer: 1024 * 1024 })
+  assert.equal(success.status, 0)
+  assert.equal(success.stderr, "")
+  assert.ok(Buffer.byteLength(success.stdout) < 2_000, "successful gate leaked its verbose output")
+  const successEvidence = JSON.parse(success.stdout)
+  assert.equal(successEvidence.ok, true)
+  assert.equal(successEvidence.exitCode, 0)
+  assert.equal(successEvidence.logBytes, 250_000)
+  assert.match(successEvidence.logSha256, /^[a-f0-9]{64}$/)
+  assert.match(successEvidence.commandSha256, /^[a-f0-9]{64}$/)
+  assert.equal("command" in successEvidence, false)
+  assert.equal("failureTail" in successEvidence, false)
+  assert.equal((await readFile(successEvidence.logPath)).byteLength, 250_000)
+
+  const failure = spawnSync(process.execPath, [
+    gateRunner,
+    "--cwd", gateWorktree,
+    "--log-dir", gateLogs,
+    "--label", "bounded-failure",
+    "--",
+    process.execPath,
+    "-e",
+    'for (let i = 0; i < 200; i += 1) console.log(`line-${String(i).padStart(3, "0")}`); console.error("FINAL FAILURE"); process.exit(7)',
+  ], { encoding: "utf8", maxBuffer: 1024 * 1024 })
+  assert.equal(failure.status, 1)
+  assert.equal(failure.stderr, "")
+  assert.ok(Buffer.byteLength(failure.stdout) < 2_000, "failed gate leaked its verbose output")
+  const failureEvidence = JSON.parse(failure.stdout)
+  assert.equal(failureEvidence.ok, false)
+  assert.equal(failureEvidence.exitCode, 7)
+  assert.equal("failureTail" in failureEvidence, false)
+  assert.doesNotMatch(failure.stdout, /FINAL FAILURE|line-000/)
+  const fullFailureLog = await readFile(failureEvidence.logPath, "utf8")
+  assert.match(fullFailureLog, /line-000/)
+  assert.match(fullFailureLog, /FINAL FAILURE/)
+
+  const worktreeAlias = path.join(root, "gate-worktree-alias")
+  const hiddenLogDir = path.join(worktreeAlias, "hidden-logs")
+  await symlink(gateWorktree, worktreeAlias, "dir")
+  const symlinkEscape = spawnSync(process.execPath, [
+    gateRunner,
+    "--cwd", gateWorktree,
+    "--log-dir", hiddenLogDir,
+    "--label", "symlink-escape",
+    "--",
+    process.execPath,
+    "-e",
+    "process.exit(0)",
+  ], { encoding: "utf8" })
+  assert.equal(symlinkEscape.status, 1)
+  assert.match(JSON.parse(symlinkEscape.stdout).error, /outside the command worktree/)
+  await assert.rejects(stat(path.join(gateWorktree, "hidden-logs")), { code: "ENOENT" })
+
+  const dotDotNamedLogDir = path.join(gateWorktree, "..logs")
+  const dotDotNamedEscape = spawnSync(process.execPath, [
+    gateRunner,
+    "--cwd", gateWorktree,
+    "--log-dir", dotDotNamedLogDir,
+    "--label", "dot-dot-name",
+    "--",
+    process.execPath,
+    "-e",
+    "process.exit(0)",
+  ], { encoding: "utf8" })
+  assert.equal(dotDotNamedEscape.status, 1)
+  assert.match(JSON.parse(dotDotNamedEscape.stdout).error, /outside the command worktree/)
+  await assert.rejects(stat(dotDotNamedLogDir), { code: "ENOENT" })
+
+  const invalid = spawnSync(process.execPath, [gateRunner, "--cwd", gateWorktree], { encoding: "utf8" })
+  assert.equal(invalid.status, 1)
+  assert.deepEqual(JSON.parse(invalid.stdout), {
+    ok: false,
+    phase: "arguments",
+    error: "--log-dir is required",
+  })
+
+  console.log("herder Fire evidence and compact gate tests passed")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

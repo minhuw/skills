@@ -23,6 +23,8 @@ claude plugin validate plugins/herder --strict
 git diff --check
 ```
 
+The Fire script test covers both native agent-evidence extraction and coordinator gate isolation. It runs a 250 KB passing gate and a long failing gate, then proves that all output stays in private log files while stdout contains only compact JSON.
+
 Use `uv run --with pyyaml python ...` when the validation scripts' Python environment does not already contain PyYAML.
 
 ## Local installation smoke test
@@ -94,6 +96,7 @@ This high-cost mode creates a plan with Improve and executes it through native C
 - Every child transcript reports Multi-Agent V2 with one `NEW_TASK` envelope and no user-history messages, proving coordinator history was not forked. Its command evidence must stay under the disposable candidate, staging, or integration worktree root.
 - Exact native per-child transcript telemetry is recorded as numeric `codex-multi-agent-v2-transcript` usage rows.
 - Transcript evidence distinguishes a real final response from `task_complete` without an envelope, allowing a clean classifier/transport interruption to be recorded as `INTERRUPTED` and restarted without consuming a substantive saver round.
+- Fire uses native `wait_agent` as a one-minute event-driven long poll rather than routine status polling, and coordinator verification calls use `run-gate.mjs` so passing command bodies do not enter the coordinator transcript.
 - The integration branch passes tests while the source branch and checkout remain unchanged.
 
 ```bash
