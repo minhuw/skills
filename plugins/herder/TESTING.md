@@ -25,7 +25,7 @@ Use `uv run --with pyyaml python ...` when the validation scripts' Python enviro
 
 ## Local installation smoke test
 
-This creates a real temporary Git repository and isolated `CODEX_HOME`, installs the current marketplace checkout through `codex plugin`, verifies all five skills are cached, initializes an ignored `herder-plans/` backlog through the installed manager, validates it, and runs the fixture's tests:
+This creates a real temporary Git repository and isolated `CODEX_HOME`, installs the current marketplace checkout through `codex plugin`, verifies all five skills are cached, initializes an ignored `herder-plans/` backlog through the installed manager, records and aggregates a usage attempt, validates the backlog, and runs the fixture's tests:
 
 ```bash
 node plugins/herder/scripts/smoke-test.mjs
@@ -37,7 +37,7 @@ The temporary directory is deleted after success and preserved after failure.
 
 This additionally starts three fresh Codex sessions against the fixture:
 
-1. `$herder:improve plan` creates one plan without changing source code.
+1. `$herder:improve plan` creates one plan without changing source code and preserves the manager-generated usage ledger.
 2. `$herder:plans status` reads the generated backlog and reports plan `001` ready.
 3. `$herder:fire status` consumes the same backlog without spawning workers or changing files.
 

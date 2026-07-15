@@ -183,7 +183,12 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 ## Findings considered and rejected
 
 - <finding>: not worth doing because <one line>. (So nobody re-audits it.)
+
+<!-- Preserve the manager-generated "## Execution usage" section and its
+marker comments verbatim below this point. Improve never writes usage rows. -->
 ```
+
+After `herder-plans init`, edit the descriptive and plan-index sections in place instead of replacing the entire README. Preserve the manager-generated execution-usage block so Fire can append attempt records and regenerate its plan/role/model summaries safely.
 
 ## Quality bar — check before finishing each plan
 

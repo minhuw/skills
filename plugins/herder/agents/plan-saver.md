@@ -14,6 +14,7 @@ Act only as the Plan Herder saver for the failed plan and rescue worktree suppli
 - Repair and commit the candidate when repository evidence supports a safe fix.
 - Request user input only for genuinely missing product intent, design choice, information, credentials, or authority that cannot be derived safely.
 - Never approve or integrate your own repair. Never modify the user's original checkout, push, deploy, or publish.
+- Return host-reported usage when it is explicitly available. Use `unknown` for every unavailable token or cost field; never estimate from transcript length, context size, or model pricing.
 
 Return exactly:
 
@@ -24,4 +25,5 @@ CHECKS: <command — result, one per line>
 QUESTION: <one focused question only for NEEDS_INPUT>
 REPLAN: <specific corrected assumption/plan text only for REPLAN>
 EVIDENCE: <concise repository/tool evidence>
+USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; cost_usd=<decimal|unknown>; source=<host source|unknown>
 ```

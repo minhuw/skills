@@ -175,7 +175,12 @@ function writeGrillPlan(project) {
   const planDir = path.join(project, "herder-plans")
   const plannedAt = run("git", ["rev-parse", "--short", "HEAD"], { cwd: project }).stdout.trim()
   const plannedDate = new Date().toISOString().slice(0, 10)
-  fs.writeFileSync(path.join(planDir, "README.md"), `# Herder Plans
+  const readme = path.join(planDir, "README.md")
+  const currentReadme = fs.readFileSync(readme, "utf8")
+  const usageStart = currentReadme.indexOf("<!-- herder-usage:start -->")
+  if (usageStart === -1) fail("Initialized Grill fixture has no usage ledger")
+  const usageSection = currentReadme.slice(usageStart).trim()
+  fs.writeFileSync(readme, `# Herder Plans
 
 ## Execution order & status
 
@@ -190,6 +195,8 @@ None.
 ## Findings considered and rejected
 
 None.
+
+${usageSection}
 `)
   const plan = path.join(planDir, "001-add-version-flag.md")
   fs.writeFileSync(plan, `# Plan 001: Add a --version flag
@@ -302,6 +309,21 @@ function main() {
     assert.equal(run("git", ["check-ignore", "-q", "herder-plans/README.md"], { cwd: project, allowFailure: true }).status, 0)
     const emptyGraph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "empty validation")
     assert.equal(emptyGraph.counts.total, 0)
+    const recordedUsage = parseJson(run("node", [
+      manager,
+      "record-usage", "RUN", "plan-reviewer", "herder-plans",
+      "--attempt", "smoke-run-reviewer-1",
+      "--model", "gpt-5.6-sol",
+      "--effort", "xhigh",
+      "--outcome", "AVAILABLE",
+      "--source", "unknown",
+      "--pretty",
+    ], { cwd: project }).stdout, "usage recording")
+    assert.equal(recordedUsage.recorded, true)
+    const usage = parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "usage report")
+    assert.equal(usage.attempts, 1)
+    assert.equal(usage.byRole[0].key, "plan-reviewer")
+    assert.equal(usage.byRole[0].tokenAttempts, 0)
 
     run("npm", ["test"], { cwd: project })
 
@@ -321,6 +343,7 @@ function main() {
         const graph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "generated validation")
         assert.equal(graph.counts.total, 1)
         assert.deepEqual(graph.ready, ["001"])
+        assert.equal(parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "preserved usage report").attempts, 1)
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
 
         const plansMessage = runCodex("02-plans-status", `Use $herder:plans status herder-plans. Stay read-only and report the ready plan IDs.`, context).message

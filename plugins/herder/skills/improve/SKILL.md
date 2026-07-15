@@ -117,7 +117,7 @@ Write each plan **for the weakest plausible executor**. That means:
 - A maintenance note (what future changes will interact with this, what to watch in review).
 - Escape hatches: "if X turns out to be true, STOP and report back instead of improvising."
 
-Finish by writing `herder-plans/README.md` with the recommended execution order, dependencies, and status. Validate the result before reporting success:
+Finish by updating `herder-plans/README.md` with the recommended execution order, dependencies, and status. Preserve the manager-generated `## Execution usage` block and its marker comments verbatim; it belongs to Fire and Plans, not Improve. Validate the result before reporting success:
 
 ```bash
 node <plugin-root>/skills/plans/scripts/herder-plans.mjs validate herder-plans --pretty

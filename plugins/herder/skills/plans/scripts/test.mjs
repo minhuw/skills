@@ -7,7 +7,9 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import {
   buildGraph,
+  getUsageReport,
   initPlanDir,
+  recordUsage,
   setTracking,
   snapshotPlan,
   transitionStatus,
@@ -106,6 +108,8 @@ try {
   assert.equal(initialized.createdReadme, true)
   assert.equal(initialized.tracking, "local")
   assert.equal(buildGraph(initialized.planDir).complete, true)
+  assert.match(fs.readFileSync(initialized.readme, "utf8"), /## Execution usage/)
+  assert.equal(getUsageReport(initialized.planDir).attempts, 0)
   const excludeFile = git(repo, "rev-parse", "--git-path", "info/exclude")
   const resolvedExclude = path.isAbsolute(excludeFile) ? excludeFile : path.join(repo, excludeFile)
   assert.match(fs.readFileSync(resolvedExclude, "utf8"), /^\/herder-plans\/$/m)
@@ -126,6 +130,61 @@ try {
   assert.deepEqual(valid.waves, [["001", "003"], ["002"]])
   assert.equal(valid.complete, false)
   assert.equal(valid.plans.find((plan) => plan.id === "003").statusDetail, "previous attempt stopped")
+
+  const implementerUsage = {
+    plan: "002",
+    role: "plan-implementer",
+    attempt: "run-1-002-implementer-1",
+    model: "gpt-5.6-luna",
+    effort: "max",
+    outcome: "COMPLETE",
+    inputTokens: "1000",
+    cachedInputTokens: "400",
+    outputTokens: "200",
+    reasoningTokens: "50",
+    costUsd: "0.012345",
+    source: "codex-exec",
+  }
+  assert.equal(recordUsage(valid.planDir, implementerUsage).recorded, true)
+  assert.equal(recordUsage(valid.planDir, implementerUsage).recorded, false)
+  assert.equal(recordUsage(valid.planDir, {
+    plan: "002",
+    role: "plan-reviewer",
+    attempt: "run-1-002-reviewer-1",
+    model: "gpt-5.6-sol",
+    effort: "xhigh",
+    outcome: "APPROVE",
+    source: "unknown",
+  }).recorded, true)
+
+  const usage = getUsageReport(valid.planDir)
+  assert.equal(usage.attempts, 2)
+  assert.deepEqual(usage.byPlan, [{
+    key: "002",
+    attempts: 2,
+    tokenAttempts: 1,
+    knownTokens: 1200,
+    costAttempts: 1,
+    knownCostUsd: "0.012345",
+  }])
+  assert.equal(usage.byRole.find((row) => row.key === "plan-implementer").knownTokens, 1200)
+  assert.equal(usage.byModel.find((row) => row.key === "gpt-5.6-sol / xhigh").tokenAttempts, 0)
+  const usageReadme = fs.readFileSync(valid.readme, "utf8")
+  assert.match(usageReadme, /### By plan/)
+  assert.match(usageReadme, /run-1-002-implementer-1/)
+  assert.match(usageReadme, /\| 002 \| 2 \| 1\/2 \| 1200 \| 1\/2 \| 0\.012345 \|/)
+  expectFailure(
+    () => recordUsage(valid.planDir, { ...implementerUsage, outcome: "FAILED" }),
+    /already recorded with different values/,
+  )
+  expectFailure(
+    () => recordUsage(valid.planDir, { ...implementerUsage, attempt: "bad-source", source: "unknown" }),
+    /numeric usage but an unknown source/,
+  )
+  expectFailure(
+    () => recordUsage(valid.planDir, { ...implementerUsage, attempt: "unknown-plan", plan: "999" }),
+    /is not indexed/,
+  )
 
   const snapshot = snapshotPlan(valid.planDir, "2")
   assert.equal(snapshot.plan.id, "002")

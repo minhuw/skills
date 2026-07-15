@@ -10,8 +10,9 @@ Use this protocol for every `fire` and `resume` run. The coordinator owns schedu
 4. Dispatch ready plans
 5. Transactional integration
 6. Rescue before escalation
-7. Resume semantics
-8. Completion
+7. Usage accounting
+8. Resume semantics
+9. Completion
 
 ## 1. Establish the Run
 
@@ -24,6 +25,7 @@ Resolve:
 - `run_id`: a filesystem- and branch-safe UTC timestamp or the suffix of the resumed integration branch.
 - `integration_branch`: explicit argument or `plan-herder/integration-<run_id>`.
 - `worktree_root`: a temporary directory outside the user's checkout.
+- `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume.
 
 Read applicable repository instructions before dispatch. Inspect the user's checkout but do not clean, stash, reset, stage, or commit it.
 
@@ -38,7 +40,7 @@ Complete all checks before creating branches or worktrees:
 1. Confirm `git rev-parse --show-toplevel` and `git worktree list` succeed.
 2. Run `node <plan_manager> validate <plan_dir> --pretty` and reject graph errors.
 3. Confirm every indexed non-rejected plan file exists and is readable.
-4. Resolve or probe the three logical roles. On Codex use `plan_implementer`, `plan_reviewer`, and `plan_saver`; on Claude Code use `herder:plan-implementer`, `herder:plan-reviewer`, and `herder:plan-saver`. A probe may only ask the mapped role to return `AVAILABLE`; do not give it repository work.
+4. Resolve or probe the three logical roles and their configured model/effort values. On Codex use `plan_implementer`, `plan_reviewer`, and `plan_saver`; on Claude Code use `herder:plan-implementer`, `herder:plan-reviewer`, and `herder:plan-saver`. A probe may only ask the mapped role to return `AVAILABLE`; do not give it repository work. Retain the configured values for usage attribution and replace them with host-reported effective values only when available. A probe is a usage-bearing `RUN` attempt and must be recorded even when preflight later fails; this README-only accounting write does not authorize Git mutation.
 5. Determine the repository-wide verification commands from repository instructions, CI configuration, and plan command tables. Do not guess commands when the plans specify them.
 6. Check that branch names and intended worktree locations do not collide.
 
@@ -88,6 +90,7 @@ Give the resolved implementer role (`plan_implementer` on Codex or `herder:plan-
 - the complete `planText` returned by `plan_manager snapshot`, always inlined;
 - applicable repository instructions;
 - an instruction never to edit `herder-plans/README.md` or any plan status;
+- the stable attempt ID and resolved model/effort attribution;
 - a requirement to stay in scope, honor STOP conditions, run every gate, and commit all intended changes;
 - this exact response shape:
 
@@ -98,9 +101,10 @@ CHECKS: <command — result, one per line>
 FILES CHANGED: <paths>
 STOPPED BECAUSE: <only when not COMPLETE>
 NOTES: <material facts only>
+USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; cost_usd=<decimal|unknown>; source=<host source|unknown>
 ```
 
-Treat missing commits, dirty intended changes, unverifiable checks, STOPPED, tool errors, or silence as failure and enter rescue.
+Tell the worker to use `unknown` for values not explicitly exposed by the host and never estimate from transcript length or model price. Treat missing commits, dirty intended changes, unverifiable checks, STOPPED, tool errors, or silence as failure and enter rescue. Record the attempt through Plans even when no response or usage envelope returns.
 
 ## 5. Transactional Integration
 
@@ -127,6 +131,7 @@ Give the resolved reviewer role (`plan_reviewer` on Codex or `herder:plan-review
 - the complete plan text;
 - the base and staged HEAD SHAs;
 - the actual checks run and their results;
+- the stable attempt ID and resolved model/effort attribution;
 - instructions to inspect the diff, trace every hunk to the plan, verify scope and behavior, and run additional read-only or verification commands as needed;
 - this exact response shape:
 
@@ -136,9 +141,10 @@ FINDINGS: <ordered findings with file:line evidence, or none>
 SCOPE: PASS | FAIL
 CHECKS: <independently verified commands/results>
 RATIONALE: <concise>
+USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; cost_usd=<decimal|unknown>; source=<host source|unknown>
 ```
 
-Only `APPROVE` with `SCOPE: PASS` can integrate. Verify the integration branch still points to the staging base SHA, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD and review again. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
+Tell the reviewer never to estimate unavailable usage. Only `APPROVE` with `SCOPE: PASS` can integrate. Verify the integration branch still points to the staging base SHA, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD and review again. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
 
 If any merge, check, review, or compare-and-advance step fails, leave integration HEAD unchanged and enter rescue.
 
@@ -154,6 +160,7 @@ Give the resolved saver role (`plan_saver` on Codex or `herder:plan-saver` on Cl
 - the statement that the previous attempt failed;
 - the expected outcome: inspect Git/repository state, reproduce relevant gates, repair and commit if possible, or classify the blocker;
 - the user's answer when resuming after `NEEDS_INPUT`.
+- the stable attempt ID and resolved model/effort attribution.
 
 Do not pass implementer or reviewer theories by default. Let the saver inspect status, log, diff, repository instructions, and tests independently. Add the exact failing command/output only when the failure is integration-only or cannot be reproduced from the rescue worktree.
 
@@ -166,7 +173,10 @@ CHECKS: <command — result, one per line>
 QUESTION: <one focused question only for NEEDS_INPUT>
 REPLAN: <specific corrected assumption/plan text only for REPLAN>
 EVIDENCE: <concise repository/tool evidence>
+USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; cost_usd=<decimal|unknown>; source=<host source|unknown>
 ```
+
+Tell the saver never to estimate unavailable usage. Record each saver round separately, including a round that ends in `NEEDS_INPUT`, `REPLAN`, or `TERMINAL`.
 
 Handle outcomes:
 
@@ -177,7 +187,15 @@ Handle outcomes:
 
 Bound recovery to two autonomous saver repair rounds and two user clarification cycles per plan. After a bound is exhausted, transition the plan to `BLOCKED`, preserve the rescue branch, and report the evidence. A new explicit `resume` invocation may authorize another bounded cycle.
 
-## 7. Resume Semantics
+## 7. Usage Accounting
+
+The root coordinator is the only usage-ledger writer. After every agent attempt reaches a terminal host state, call `plan_manager record-usage` before taking the next lifecycle action. Use an idempotent attempt ID such as `<run-id>-<plan-id>-<role>-<ordinal>`; use plan `RUN` for a final cross-plan reviewer or integration-rescue agent.
+
+Attribute the configured model and effort resolved before dispatch. Prefer host-reported effective model/effort and structured usage over configured values and the worker's envelope when those fields are exposed. Copy input, cached-input, output, reasoning, and USD cost only when explicitly reported. If the host exposes tokens but not cost, record the tokens and leave cost `unknown`. If nothing is exposed, record every numeric field as `unknown` with source `unknown`. Never tokenize transcripts, infer hidden reasoning, or multiply API list prices into a subscription-backed cost.
+
+Use `plan_manager usage <plan_dir> --pretty` for reporting. Its token subtotal is input plus output for attempts where both are known; cached-input and reasoning columns are details, not additional tokens. Always report coverage beside subtotals. The README ledger covers recorded Herder attempts, not unobservable coordinator, platform, retry, or billing overhead.
+
+## 8. Resume Semantics
 
 Reconstruct state from:
 
@@ -185,12 +203,13 @@ Reconstruct state from:
 - completion commits containing `plan-herder(<id>):`;
 - candidate and staging branch names;
 - branch ancestry and worktree cleanliness.
+- the manager-generated usage ledger and existing attempt IDs.
 
 For `IN PROGRESS`, inspect its candidate branch. If it contains committed work, stage and review it; if it has no usable work, dispatch a fresh implementer. For `BLOCKED`, start with a saver when a rescue branch exists; otherwise create a fresh candidate from integration HEAD and let the saver investigate the plan and repository.
 
-Never trust a `DONE` row alone. Verify its completion marker is reachable from integration HEAD and re-run cheap done criteria when resuming. If a marker is missing or verification fails, transition it to `BLOCKED` through Plans and enter rescue before allowing dependents to start. Conversely, if a reachable marker exists while the index is not DONE, reconcile that status before dispatching dependents.
+Never trust a `DONE` row alone. Verify its completion marker is reachable from integration HEAD and re-run cheap done criteria when resuming. If a marker is missing or verification fails, transition it to `BLOCKED` through Plans and enter rescue before allowing dependents to start. Conversely, if a reachable marker exists while the index is not DONE, reconcile that status before dispatching dependents. Continue role ordinals after the highest recorded attempt; never duplicate or rewrite a prior usage row.
 
-## 8. Completion
+## 9. Completion
 
 The run succeeds when every plan is `DONE` or `REJECTED`, all dependency markers are ancestors of integration HEAD, the final project-wide gates pass, and a final reviewer audit finds no cross-plan integration regression.
 
@@ -202,4 +221,5 @@ Do not merge, push, publish, deploy, or delete the preserved candidate/rescue ev
 - final commit SHA;
 - plans completed/rejected/blocked;
 - final verification commands and results;
+- usage subtotals and coverage by plan, role, and model/effort;
 - preserved branches needing attention.

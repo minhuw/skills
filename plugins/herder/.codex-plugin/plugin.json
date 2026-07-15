@@ -1,18 +1,18 @@
 {
   "name": "herder",
-  "version": "0.3.0",
-  "description": "Create, interrogate, manage, and execute dependency-aware implementation plans with reviewed multi-agent integration.",
+  "version": "0.4.0",
+  "description": "Create, interrogate, manage, and execute dependency-aware implementation plans with reviewed integration and usage accounting.",
   "author": {
     "name": "minhuw",
     "url": "https://github.com/minhuw"
   },
   "repository": "https://github.com/minhuw/skills",
-  "keywords": ["plans", "audit", "interview", "orchestration", "subagents", "worktrees"],
+  "keywords": ["plans", "audit", "interview", "orchestration", "subagents", "worktrees", "usage"],
   "skills": "./skills/",
   "interface": {
     "displayName": "Herder",
     "shortDescription": "Create, refine, and execute plans with specialized agents.",
-    "longDescription": "Herder audits repositories, interrogates ambiguous plans one decision at a time, manages a local dependency-aware backlog, reviews candidates, rescues failures, and integrates verified work transactionally.",
+    "longDescription": "Herder audits repositories, interrogates ambiguous plans one decision at a time, manages a local dependency-aware backlog, reviews candidates, rescues failures, integrates verified work transactionally, and records per-attempt usage with honest coverage.",
     "developerName": "minhuw",
     "category": "Developer Tools",
     "capabilities": ["Write"],
