@@ -1,0 +1,4 @@
+interface:
+  display_name: "Herder Validate"
+  short_description: "Audit and safely repair Herder plans"
+  default_prompt: "Use $herder:validate to audit this repository's Herder plan directory and report whether it is Fire-ready without changing files."

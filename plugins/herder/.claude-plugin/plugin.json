@@ -1,7 +1,7 @@
 {
   "name": "herder",
   "version": "0.6.0",
-  "description": "Create plans from user intent or repository evidence, clarify decisions, manage dependencies, and execute them with reviewed integration and token accounting.",
+  "description": "Create plans from user intent or repository evidence, validate and safely repair them, manage dependencies, and execute with reviewed integration and token accounting.",
   "author": {
     "name": "minhuw",
     "url": "https://github.com/minhuw"

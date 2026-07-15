@@ -16,6 +16,7 @@ python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/g
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/improve
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/fire
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/install
+python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/validate
 python3 /path/to/plugin-creator/scripts/validate_plugin.py plugins/herder
 
 claude plugin validate plugins/herder --strict
@@ -26,7 +27,7 @@ Use `uv run --with pyyaml python ...` when the validation scripts' Python enviro
 
 ## Local installation smoke test
 
-This creates a real temporary Git repository and isolated `CODEX_HOME`, installs the current marketplace checkout through `codex plugin`, verifies all five skills are cached, initializes an ignored `herder-plans/` backlog through the installed manager, records and aggregates a usage attempt, validates the backlog, and runs the fixture's tests:
+This creates a real temporary Git repository and isolated `CODEX_HOME`, installs the current marketplace checkout through `codex plugin`, verifies all six skills are cached, initializes an ignored `herder-plans/` backlog through the installed manager, records and aggregates a usage attempt, validates the backlog, and runs the fixture's tests:
 
 ```bash
 node plugins/herder/scripts/smoke-test.mjs
@@ -69,6 +70,21 @@ node plugins/herder/scripts/smoke-test.mjs --live-grill --keep
 
 Use `--workspace` and `--auth-file` exactly as in the general live test. The transcript files include `00-install.jsonl`, `01-grill-question.jsonl`, `02-grill-answer.jsonl`, and `03-grill-confirm.jsonl`.
 
+## Live Validate repair test
+
+This targeted mode creates one executor-ready plan and audits it with `$herder:validate` without `--fix`, proving the plan directory and source checkout remain byte-for-byte unchanged. It then renames one required heading, proves manager validation fails, runs `$herder:validate --fix`, and verifies that:
+
+- the canonical heading and manager validity are restored;
+- plan `001` remains ready without a lifecycle transition;
+- the manager-generated execution-usage ledger is unchanged; and
+- no tracked source file changes.
+
+```bash
+node plugins/herder/scripts/smoke-test.mjs --live-validate --keep
+```
+
+Use `--workspace` and `--auth-file` exactly as in the general live test. The transcript files are `00-install.jsonl`, `01-validate-read-only.jsonl`, and `02-validate-fix.jsonl`.
+
 ## Live Fire execution test
 
 This high-cost mode creates a plan with Improve and executes it through native Codex Multi-Agent V2. The isolated Codex configuration pins the main scheduler to Sol/max, enables `multi_agent_v2`, and gives the coordinator only the workspace-write roots needed for disposable worktrees and Git metadata. The test installs the native profiles in a fresh session, then verifies:
@@ -89,4 +105,4 @@ The transcript files are `00-install.jsonl`, `01-improve.jsonl`, and `02-fire-ru
 
 ## Release confidence
 
-Before publishing, require all deterministic checks and the local installation smoke test. Run the general live test after changes to Improve output, the Plans protocol, or Fire's consumption of plan state. Run the targeted Grill test after changes to its interview, confirmation, or plan-editing contract. Run the high-cost Fire execution mode when scheduling, worktree, model routing, usage capture, review, or rescue behavior changes materially.
+Before publishing, require all deterministic checks and the local installation smoke test. Run the general live test after changes to Improve output, the Plans protocol, or Fire's consumption of plan state. Run the targeted Grill test after changes to its interview, confirmation, or plan-editing contract. Run the targeted Validate test after changes to validation, repair boundaries, or Fire-readiness reporting. Run the high-cost Fire execution mode when scheduling, worktree, model routing, usage capture, review, or rescue behavior changes materially.

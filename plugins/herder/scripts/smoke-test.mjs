@@ -21,6 +21,7 @@ function parseArgs(argv) {
     live: false,
     liveFire: false,
     liveGrill: false,
+    liveValidate: false,
     keep: false,
     workspace: "",
     authFile: process.env.HERDER_SMOKE_AUTH || path.join(os.homedir(), ".codex", "auth.json"),
@@ -30,18 +31,19 @@ function parseArgs(argv) {
     if (argument === "--live") options.live = true
     else if (argument === "--live-fire") options.liveFire = true
     else if (argument === "--live-grill") options.liveGrill = true
+    else if (argument === "--live-validate") options.liveValidate = true
     else if (argument === "--keep") options.keep = true
     else if (["--workspace", "--auth-file"].includes(argument)) {
       if (index === argv.length - 1) fail(`${argument} requires a value`)
       const key = argument === "--workspace" ? "workspace" : "authFile"
       options[key] = path.resolve(argv[++index])
     } else if (["-h", "--help"].includes(argument)) {
-      process.stdout.write(`Usage: node smoke-test.mjs [--live | --live-fire | --live-grill] [--keep] [--workspace <empty-dir>] [--auth-file <file>]\n`)
+      process.stdout.write(`Usage: node smoke-test.mjs [--live | --live-fire | --live-grill | --live-validate] [--keep] [--workspace <empty-dir>] [--auth-file <file>]\n`)
       process.exit(0)
     } else fail(`Unknown argument: ${argument}`)
   }
-  if ([options.live, options.liveFire, options.liveGrill].filter(Boolean).length > 1) {
-    fail("--live, --live-fire, and --live-grill are separate test modes")
+  if ([options.live, options.liveFire, options.liveGrill, options.liveValidate].filter(Boolean).length > 1) {
+    fail("--live, --live-fire, --live-grill, and --live-validate are separate test modes")
   }
   if (options.workspace) options.keep = true
   return options
@@ -366,6 +368,119 @@ Keep package metadata as the version source of truth. Reviewers should reject du
   return plan
 }
 
+function writeValidatePlan(project) {
+  const plan = writeGrillPlan(project)
+  const plannedAt = run("git", ["rev-parse", "--short", "HEAD"], { cwd: project }).stdout.trim()
+  const plannedDate = new Date().toISOString().slice(0, 10)
+  fs.writeFileSync(plan, `# Plan 001: Add a --version flag
+
+> **Executor instructions**: Follow this plan step by step. Run every verification command and confirm its expected result before continuing. Stop and report if a STOP condition occurs; do not improvise. Do not edit \`herder-plans/README.md\`; the root coordinator owns status transitions.
+>
+> **Drift check (run first)**: \`git diff --stat ${plannedAt}..HEAD -- package.json src/cli.mjs test/cli.test.mjs\`
+> If an in-scope file changed, compare the Current state excerpts with the live file. Stop on a mismatch.
+
+## Status
+
+- **Priority**: P2
+- **Effort**: S
+- **Risk**: LOW
+- **Depends on**: none
+- **Category**: dx
+- **Planned at**: commit \`${plannedAt}\`, ${plannedDate}
+
+## Why this matters
+
+Users need a deterministic version string for bug reports and scripts. The exact \`--version\` output becomes a small public CLI contract while the existing no-argument greeting remains unchanged.
+
+### Accepted decisions
+
+- Print only \`1.0.0\` followed by exactly one newline; do not add a label or JSON wrapper.
+- Store \`1.0.0\` in \`package.json\` as the single version source of truth.
+- Keep the CLI dependency-free and do not introduce a general argument parser or aliases.
+- Preserve the no-argument output exactly. These are explicit non-goals, not deferred work.
+
+## Current state
+
+- \`src/cli.mjs:1-7\` exports \`message()\`, prints \`herder-smoke\` when invoked directly, and does not inspect arguments:
+
+  \`\`\`js
+  export function message() {
+    return "herder-smoke"
+  }
+  \`\`\`
+
+- \`package.json:1-8\` defines an ESM, dependency-free package with \`npm test\`; it has no \`version\` field.
+- \`test/cli.test.mjs:1-7\` uses \`node:test\` and strict assertions to cover \`message()\`. Match that style for new tests.
+- Repository instructions in \`AGENTS.md\` require ESM style, no dependencies, and \`npm test\` verification.
+- The repository has no domain glossary, context map, or ADR obligation for this isolated CLI flag.
+
+## Commands you will need
+
+| Purpose | Command | Expected on success |
+|---|---|---|
+| Tests | \`npm test\` | exits 0 and all tests pass |
+| Version | \`node src/cli.mjs --version\` | prints exactly \`1.0.0\` and exits 0 |
+| Greeting | \`node src/cli.mjs\` | prints exactly \`herder-smoke\` and exits 0 |
+
+## Scope
+
+**In scope** (the only files to modify):
+
+- \`package.json\`
+- \`src/cli.mjs\`
+- \`test/cli.test.mjs\`
+
+**Out of scope**:
+
+- Dependencies, a general argument parser, aliases, JSON output, and labels.
+- Any change to the no-argument greeting or exported \`message()\` behavior.
+- Project documentation or context/ADR files; no durable terminology or architecture decision changes.
+
+## Git workflow
+
+- Use a disposable Herder candidate branch created by Fire.
+- Make one logical commit using the repository's observed conventional style, for example \`feat: add version flag\`.
+- Do not push or open a pull request.
+
+## Steps
+
+### Step 1: Add the version source and exact CLI branch
+
+Add \`"version": "1.0.0"\` to \`package.json\`. In \`src/cli.mjs\`, load that package metadata using a dependency-free ESM mechanism and, only when the sole argument is exactly \`--version\`, print the version plus one newline. Preserve the existing direct no-argument path and \`message()\` export.
+
+**Verify**: \`node src/cli.mjs --version\` → exactly \`1.0.0\` followed by one newline; \`node src/cli.mjs\` → exactly \`herder-smoke\` followed by one newline.
+
+### Step 2: Add black-box regression coverage
+
+Extend \`test/cli.test.mjs\` with child-process assertions for the exact \`--version\` stdout and exit code and the unchanged no-argument stdout. Follow the file's existing \`node:test\` and strict-assertion style; add no test dependency.
+
+**Verify**: \`npm test\` → exits 0 with the existing test and both CLI invocation cases passing.
+
+## Test plan
+
+- Extend \`test/cli.test.mjs\`, following its existing \`node:test\` structure.
+- Cover exact version stdout \`1.0.0\\n\`, successful version exit, exact no-argument stdout \`herder-smoke\\n\`, and successful no-argument exit.
+- Run \`npm test\` and both direct CLI commands; all must exit 0 with the outputs above.
+
+## Done criteria
+
+- [ ] \`npm test\` exits 0 and covers both CLI invocation paths.
+- [ ] \`node src/cli.mjs --version\` exits 0 with stdout exactly \`1.0.0\\n\`.
+- [ ] \`node src/cli.mjs\` exits 0 with stdout exactly \`herder-smoke\\n\`.
+- [ ] \`package.json\` is the only version source and no dependency is added.
+- [ ] \`git status --short\` names no modified file outside \`package.json\`, \`src/cli.mjs\`, and \`test/cli.test.mjs\`.
+
+## STOP conditions
+
+Stop and report rather than improvise if the drift check changes any Current state fact, package metadata cannot be loaded without a dependency, the change requires a general parser, an in-scope command fails twice after a reasonable repair, or any out-of-scope file appears necessary.
+
+## Maintenance notes
+
+Keep \`package.json\` as the version source of truth. Reviewers should reject duplicated version constants, extra output decoration, changes to no-argument behavior, and new parsing dependencies. Revisit these tests if the CLI later adopts a deliberate argument parser.
+`)
+  return plan
+}
+
 function installPlugin(codexHome, project) {
   const env = { ...process.env, CODEX_HOME: codexHome }
   const marketplace = run("codex", ["plugin", "marketplace", "add", marketplaceRoot, "--json"], { cwd: project, env })
@@ -398,7 +513,7 @@ function main() {
     writeFixture(project)
     const { env, installed } = installPlugin(codexHome, project)
     const installedPath = installed.installedPath
-    const expectedSkills = ["fire", "grill", "improve", "install", "plans"]
+    const expectedSkills = ["fire", "grill", "improve", "install", "plans", "validate"]
     for (const skill of expectedSkills) {
       assert.equal(fs.existsSync(path.join(installedPath, "skills", skill, "SKILL.md")), true, `missing installed skill ${skill}`)
     }
@@ -413,11 +528,18 @@ function main() {
     assert.doesNotMatch(sharedTemplateText, /\*\*Issue\*\*/)
     const grillText = fs.readFileSync(path.join(installedPath, "skills", "grill", "SKILL.md"), "utf8")
     const improveText = fs.readFileSync(path.join(installedPath, "skills", "improve", "SKILL.md"), "utf8")
+    const validateText = fs.readFileSync(path.join(installedPath, "skills", "validate", "SKILL.md"), "utf8")
     assert.match(grillText, /herder:grill <change-description>/)
     assert.match(grillText, /Producer self-review/)
     assert.match(grillText, /resume the one-question interview/)
     assert.match(improveText, /Route user intent to .*herder:grill/)
     assert.match(improveText, /Producer self-review/)
+    assert.match(validateText, /herder:validate \[<plan-dir>\] \[--fix\]/)
+    assert.match(validateText, /herder-plans\.mjs/)
+    assert.match(validateText, /strictly read-only/)
+    assert.match(validateText, /Producer self-review/)
+    assert.match(validateText, /Never alter the manager-generated `## Execution usage` block/)
+    assert.match(validateText, /Never change lifecycle status/)
     const evidenceReader = path.join(installedPath, "skills", "fire", "scripts", "read-codex-agent-evidence.mjs")
     assert.equal(fs.existsSync(evidenceReader), true, "missing installed Codex Multi-Agent V2 evidence reader")
 
@@ -445,7 +567,7 @@ function main() {
 
     run("npm", ["test"], { cwd: project })
 
-    if (options.live || options.liveFire || options.liveGrill) {
+    if (options.live || options.liveFire || options.liveGrill || options.liveValidate) {
       if (!fs.existsSync(options.authFile)) fail(`Codex auth file not found: ${options.authFile}`)
       const authTarget = path.join(codexHome, "auth.json")
       if (!fs.existsSync(authTarget)) {
@@ -546,7 +668,7 @@ function main() {
         run("npm", ["test"], { cwd: integrationWorktree })
         assert.equal(run("git", ["rev-parse", "HEAD"], { cwd: project }).stdout.trim(), originalHead)
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
-      } else {
+      } else if (options.liveGrill) {
         const plan = writeGrillPlan(project)
         parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "grill fixture validation")
         const before = fs.readFileSync(plan, "utf8")
@@ -569,6 +691,40 @@ function main() {
         assert.doesNotMatch(after, /DECISION NEEDED/)
         parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "refined plan validation")
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
+      } else {
+        const plan = writeValidatePlan(project)
+        const readme = path.join(project, "herder-plans", "README.md")
+        const validGraph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "Validate fixture validation")
+        assert.equal(validGraph.counts.total, 1)
+        assert.deepEqual(validGraph.ready, ["001"])
+
+        const beforePlan = fs.readFileSync(plan, "utf8")
+        const beforeReadme = fs.readFileSync(readme, "utf8")
+        const beforeSourceStatus = run("git", ["status", "--short"], { cwd: project }).stdout
+        const auditMessage = runCodex("01-validate-read-only", `Use $herder:validate herder-plans. Audit the backlog against the complete Herder contract, stay strictly read-only, and report manager status, issue counts, and Fire-readiness.`, context).message
+        assert.match(auditMessage, /Fire.ready|manager|valid/i)
+        assert.equal(fs.readFileSync(plan, "utf8"), beforePlan, "Validate edited a plan without --fix")
+        assert.equal(fs.readFileSync(readme, "utf8"), beforeReadme, "Validate edited the index without --fix")
+        assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout, beforeSourceStatus, "Validate changed source without --fix")
+
+        const brokenPlan = beforePlan.replace("## Maintenance notes", "## Maintenance guidance")
+        assert.notEqual(brokenPlan, beforePlan, "Validate fixture did not contain the heading to corrupt")
+        fs.writeFileSync(plan, brokenPlan)
+        const brokenValidation = run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project, allowFailure: true })
+        assert.notEqual(brokenValidation.status, 0, "Corrupted Validate fixture unexpectedly passed manager validation")
+
+        const fixMessage = runCodex("02-validate-fix", `Use $herder:validate herder-plans --fix. Repair every safe issue, preserve lifecycle status and the execution-usage ledger, do not touch source files, rerun validation, and report before/after counts plus Fire-readiness.`, context).message
+        assert.match(fixMessage, /repair|fixed|Fire.ready|valid/i)
+        const repairedPlan = fs.readFileSync(plan, "utf8")
+        assert.notEqual(repairedPlan, brokenPlan, "Validate --fix did not repair the malformed plan")
+        assert.match(repairedPlan, /^## Maintenance notes$/m)
+        assert.doesNotMatch(repairedPlan, /^## Maintenance guidance$/m)
+        const repairedGraph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "repaired Validate fixture validation")
+        assert.equal(repairedGraph.counts.total, 1)
+        assert.deepEqual(repairedGraph.ready, ["001"])
+        assert.equal(parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "Validate usage preservation").attempts, 1)
+        assert.equal(fs.readFileSync(readme, "utf8"), beforeReadme, "Validate --fix changed the usage-bearing index")
+        assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout, beforeSourceStatus, "Validate --fix changed source files")
       }
     }
 
@@ -576,7 +732,7 @@ function main() {
     process.stdout.write(`Herder smoke test passed\n`)
     process.stdout.write(`Plugin: ${installed.name}@${installed.version}\n`)
     process.stdout.write(`Fixture: ${options.keep ? project : "temporary (removed after success)"}\n`)
-    if (options.live || options.liveFire || options.liveGrill) process.stdout.write(`Transcripts: ${transcripts}\n`)
+    if (options.live || options.liveFire || options.liveGrill || options.liveValidate) process.stdout.write(`Transcripts: ${transcripts}\n`)
     if (options.liveFire) process.stdout.write(`Reports: ${reports}\n`)
   } finally {
     if (createdAuthLink) {

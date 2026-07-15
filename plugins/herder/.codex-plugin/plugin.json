@@ -1,7 +1,7 @@
 {
   "name": "herder",
-  "version": "0.6.0",
-  "description": "Create plans from user intent or repository evidence, clarify decisions, manage dependencies, and execute them with reviewed integration and token accounting.",
+  "version": "0.6.0+codex.20260715115915",
+  "description": "Create plans from user intent or repository evidence, validate and safely repair them, manage dependencies, and execute with reviewed integration and token accounting.",
   "author": {
     "name": "minhuw",
     "url": "https://github.com/minhuw"
@@ -10,6 +10,7 @@
   "keywords": [
     "plans",
     "audit",
+    "validation",
     "interview",
     "orchestration",
     "subagents",
@@ -20,7 +21,7 @@
   "interface": {
     "displayName": "Herder",
     "shortDescription": "Clarify, create, and execute plans with specialized agents.",
-    "longDescription": "Herder grills requested changes into canonical plans, audits repositories for evidence-backed improvements, manages a local dependency-aware backlog, reviews candidates, rescues failures, integrates verified work transactionally, and records per-attempt token usage with honest coverage.",
+    "longDescription": "Herder grills requested changes into canonical plans, audits repositories for evidence-backed improvements, validates and conservatively repairs local dependency-aware backlogs, reviews candidates, rescues failures, integrates verified work transactionally, and records per-attempt token usage with honest coverage.",
     "developerName": "minhuw",
     "category": "Developer Tools",
     "capabilities": [
@@ -29,6 +30,7 @@
     "defaultPrompt": [
       "Grill me one decision at a time, then create one validated Herder plan for this change.",
       "Audit this repository and create prioritized Herder plans.",
+      "Validate and safely repair the Herder plan backlog.",
       "Fire the implementation plans in this repository."
     ]
   }
