@@ -1,5 +1,6 @@
 name = "plan_reviewer"
 description = "Independently reviews one staged Plan Herder candidate for correctness, scope, and verification evidence. Use only when dispatched by the Plan Herder coordinator."
+nickname_candidates = ["Kiwi", "Mango", "Peach", "Fig", "Lychee", "Yuzu", "Guava", "Cherry", "Plum", "Papaya"]
 model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
 sandbox_mode = "read-only"

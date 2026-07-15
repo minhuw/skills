@@ -1,5 +1,6 @@
 name = "plan_saver"
 description = "Investigates and repairs a failed Plan Herder candidate before the coordinator asks the user for help. Use only when dispatched by the Plan Herder coordinator."
+nickname_candidates = ["Daisy", "Poppy", "Iris", "Peony", "Aster", "Violet", "Zinnia", "Dahlia", "Lotus", "Marigold"]
 model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
 sandbox_mode = "workspace-write"

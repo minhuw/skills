@@ -517,6 +517,16 @@ function main() {
     for (const skill of expectedSkills) {
       assert.equal(fs.existsSync(path.join(installedPath, "skills", skill, "SKILL.md")), true, `missing installed skill ${skill}`)
     }
+    const expectedNicknames = {
+      plan_implementer: ["Mocha", "Latte", "Cortado", "Piccolo", "Doppio", "Affogato", "Espresso", "Macchiato", "Cappuccino", "Ristretto"],
+      plan_reviewer: ["Kiwi", "Mango", "Peach", "Fig", "Lychee", "Yuzu", "Guava", "Cherry", "Plum", "Papaya"],
+      plan_saver: ["Daisy", "Poppy", "Iris", "Peony", "Aster", "Violet", "Zinnia", "Dahlia", "Lotus", "Marigold"],
+    }
+    for (const [profile, nicknames] of Object.entries(expectedNicknames)) {
+      const profileText = fs.readFileSync(path.join(installedPath, "agent-profiles", "codex", `${profile}.toml`), "utf8")
+      const declaration = `nickname_candidates = [${nicknames.map((nickname) => JSON.stringify(nickname)).join(", ")}]`
+      assert.equal(profileText.includes(declaration), true, `wrong packaged nicknames for ${profile}`)
+    }
     const sharedTemplate = path.join(installedPath, "skills", "plans", "references", "plan-template.md")
     assert.equal(fs.existsSync(sharedTemplate), true, "missing shared plan template")
     assert.equal(fs.existsSync(path.join(installedPath, "skills", "improve", "references", "plan-template.md")), false, "Improve still owns a private plan template")

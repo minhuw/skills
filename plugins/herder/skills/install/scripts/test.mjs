@@ -41,6 +41,18 @@ process.stdout.write("multi_agent_v2                       under development  tr
   const installed = path.join(projectRoot, ".codex/agents/plan_implementer.toml");
   const source = path.join(pluginRoot, "agent-profiles/codex/plan_implementer.toml");
   assert.deepEqual(await readFile(installed), await readFile(source));
+  const expectedNicknames = {
+    plan_implementer: ["Mocha", "Latte", "Cortado", "Piccolo", "Doppio", "Affogato", "Espresso", "Macchiato", "Cappuccino", "Ristretto"],
+    plan_reviewer: ["Kiwi", "Mango", "Peach", "Fig", "Lychee", "Yuzu", "Guava", "Cherry", "Plum", "Papaya"],
+    plan_saver: ["Daisy", "Poppy", "Iris", "Peony", "Aster", "Violet", "Zinnia", "Dahlia", "Lotus", "Marigold"],
+  };
+  for (const [profile, nicknames] of Object.entries(expectedNicknames)) {
+    const installedProfile = path.join(projectRoot, ".codex/agents", `${profile}.toml`);
+    const sourceProfile = path.join(pluginRoot, "agent-profiles/codex", `${profile}.toml`);
+    const declaration = `nickname_candidates = [${nicknames.map((nickname) => JSON.stringify(nickname)).join(", ")}]`;
+    assert.deepEqual(await readFile(installedProfile), await readFile(sourceProfile));
+    assert.equal((await readFile(installedProfile, "utf8")).includes(declaration), true, `wrong nicknames for ${profile}`);
+  }
 
   const second = run(...common);
   assert.match(second, /Unchanged: .*plan_implementer\.toml/);
