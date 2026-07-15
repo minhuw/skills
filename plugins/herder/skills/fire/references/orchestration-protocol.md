@@ -27,6 +27,7 @@ Resolve:
 - `integration_branch`: explicit argument or `plan-herder/integration-<run_id>`.
 - `worktree_root`: a temporary directory outside the user's checkout.
 - `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume.
+- `recovery_counters`: per-plan substantive saver rounds, clarification cycles, and same-round interruption restarts for the current invocation.
 
 Read applicable repository instructions before dispatch. Inspect the user's checkout but do not clean, stash, reset, stage, or commit it.
 
@@ -68,7 +69,7 @@ For a Codex attempt, call the native Multi-Agent V2 spawn tool with:
 - `fork_turns: "none"` so unrelated coordinator history is not copied;
 - one self-contained initial message containing the complete role prompt and immutable plan snapshot.
 
-Omit `model`, `reasoning_effort`, and `service_tier`. The custom agent definition owns those values. Use the returned canonical task name for follow-up, wait, interrupt, and final-result handling. Treat spawn failure, terminal failure, silence, or a missing response envelope as an attempt failure. Preserve the native child transcript as execution evidence when the host exposes it.
+Omit `model`, `reasoning_effort`, and `service_tier`. The custom agent definition owns those values. Use the returned canonical task name for follow-up, wait, interrupt, and final-result handling. Treat spawn failure, terminal failure, silence, or a missing response envelope as an attempt failure for usage accounting, then apply Section 6 before deciding whether a saver repair round was consumed. Preserve the native child transcript as execution evidence when the host exposes it.
 
 Keep the coordinator shell anchored in the user's stable original checkout or another stable directory. Execute every Git command with `git -C <absolute-worktree>` and every non-Git command with an explicit tool workdir or scoped `(cd <absolute-worktree> && ...)` subshell. Never depend on an ambient `cwd`, and never remove or recreate the directory containing the coordinator process.
 
@@ -162,6 +163,17 @@ If any merge, check, review, or compare-and-advance step fails, leave integratio
 
 Prepare the rescue environment; do not ask `plan-saver` to reconstruct missing candidate changes from a different checkout. Reuse the candidate branch/worktree when it safely contains the failed work. For integration-only failures, create a rescue branch/worktree from the latest integration HEAD and combine the candidate there first.
 
+An **agent attempt** is one host spawn and always receives a unique usage row. A **saver repair round** is a substantive saver result or a saver attempt that may have changed the rescue branch. Host interruption alone does not consume a repair round when all no-mutation invariants below are proven.
+
+Before every saver dispatch, record:
+
+- integration HEAD;
+- rescue branch HEAD and tree SHA;
+- the exact `git status --porcelain=v1 --untracked-files=all` result and whether it is empty; and
+- the repair-round number plus the attempt ordinal.
+
+A dirty rescue worktree may contain the failed work Saver must recover, but it is ineligible for a no-cost interruption restart. Never reset, clean, stash, or discard files merely to make an attempt eligible.
+
 Give the resolved saver role (`plan_saver` through Codex Multi-Agent V2 or `herder:plan-saver` on Claude Code) only:
 
 - the absolute rescue worktree path;
@@ -186,7 +198,27 @@ EVIDENCE: <concise repository/tool evidence>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Tell the saver never to estimate unavailable usage. Prefer structured host telemetry over the saver-authored `USAGE` line. Record each saver round separately, including a round that ends in `NEEDS_INPUT`, `REPLAN`, or `TERMINAL`.
+Tell the saver never to estimate unavailable usage. Prefer structured host telemetry over the saver-authored `USAGE` line. Record each saver attempt separately, including one that ends in `INTERRUPTED`, `NEEDS_INPUT`, `REPLAN`, or `TERMINAL`.
+
+### Host interruption
+
+Classify a saver attempt as `INTERRUPTED` only when every condition holds:
+
+1. The native host state is spawn-failed, errored, aborted, disconnected, or timed out because of platform, policy/classifier, transport, or session-runtime failure—not a repository command failure or child-authored `OUTCOME`.
+2. No parseable final saver envelope exists. A transcript `task_complete` event without a final agent message is not a successful result; the native host state is authoritative.
+3. Integration HEAD, rescue HEAD, and rescue tree SHA exactly match their pre-dispatch values.
+4. The rescue worktree was clean before dispatch and remains clean afterward, including untracked files.
+
+If any condition is unknown or false, record `FAILED`, consume the repair round, preserve the branch, and continue normal rescue handling. Do not infer safety from a missing response alone.
+
+For a proven interruption:
+
+1. Record exact available usage with outcome `INTERRUPTED` under a new attempt ID.
+2. Do not increment the saver repair-round or user-clarification counters.
+3. Start a fresh agent session for the same round with the next role attempt ordinal. Give it the normal minimal saver prompt plus only the fact that the previous host attempt ended before any repository mutation; do not replay classifier text or prior theories.
+4. Permit at most two same-round interruption restarts. If all are interrupted, transition the plan to `BLOCKED` with an infrastructure/policy reason, preserve the unused substantive recovery budget in the report, and stop that plan. Do not describe this as exhausting the saver repair limit.
+
+Every restarted spawn is still an independently attributable usage attempt. Never reuse an interrupted agent session or attempt ID.
 
 Handle outcomes:
 
@@ -195,13 +227,13 @@ Handle outcomes:
 - `NEEDS_INPUT`: ensure the question is irreducible and focused, then ask the user exactly that question. Continue unrelated ready plans. After the answer, refresh the rescue branch onto the latest integration HEAD when necessary and automatically dispatch `plan-saver` again with the answer.
 - `TERMINAL`: transition the plan to `BLOCKED` through Plans with a one-line reason and report it; do not fabricate a question.
 
-Bound recovery to two autonomous saver repair rounds and two user clarification cycles per plan. After a bound is exhausted, transition the plan to `BLOCKED`, preserve the rescue branch, and report the evidence. A new explicit `resume` invocation may authorize another bounded cycle.
+Bound recovery to two substantive autonomous saver repair rounds and two user clarification cycles per plan. `INTERRUPTED` usage rows do not count toward either bound. After a substantive or interruption-restart bound is exhausted, transition the plan to `BLOCKED`, preserve the rescue branch, and report which bound ended the run. A new explicit `resume` invocation may authorize another bounded cycle.
 
 ## 7. Usage Accounting
 
-The root coordinator is the only usage-ledger writer. After every agent attempt reaches a terminal host state, call `plan_manager record-usage` before taking the next lifecycle action. Use an idempotent attempt ID such as `<run-id>-<plan-id>-<role>-<ordinal>`; use plan `RUN` for a final cross-plan reviewer or integration-rescue agent.
+The root coordinator is the only usage-ledger writer. After every agent attempt reaches a terminal host state, call `plan_manager record-usage` before taking the next lifecycle action. Use an idempotent attempt ID such as `<run-id>-<plan-id>-<role>-<ordinal>`; increment the ordinal for same-round interruption restarts and use plan `RUN` for a final cross-plan reviewer or integration-rescue agent. Record the normalized outcome, including `INTERRUPTED`, so attempt count and substantive recovery count can be reconstructed separately.
 
-Attribute the configured model and effort resolved before dispatch. Prefer host-reported effective model/effort and structured usage over configured values and the worker's envelope when those fields are exposed. On Codex, after a child reaches a terminal state, run `node <codex_evidence_reader> --agent <returned-canonical-task-name> --pretty`. Require its `agentRole` to match the requested custom profile and its `multiAgentVersion` to be `v2`; a mismatch is a routing failure. When its `usage` is present, copy the exact fields and source `codex-multi-agent-v2-transcript`. If no uniquely attributable terminal usage exists, record every token field as `unknown` with source `unknown`. On Claude, copy structured host telemetry when available and otherwise use `unknown`. Never tokenize transcripts, subtract coordinator totals, or infer hidden reasoning.
+Attribute the configured model and effort resolved before dispatch. Prefer host-reported effective model/effort and structured usage over configured values and the worker's envelope when those fields are exposed. On Codex, after a child reaches a terminal state, run `node <codex_evidence_reader> --agent <returned-canonical-task-name> --pretty`. Require its `agentRole` to match the requested custom profile and its `multiAgentVersion` to be `v2`; a mismatch is a routing failure. Use its `terminal.taskComplete`, `terminal.turnAborted`, and `terminal.finalEnvelopePresent` fields together with the native agent state when classifying interruptions; `taskComplete` alone is insufficient. When its `usage` is present, copy the exact fields and source `codex-multi-agent-v2-transcript`. If no uniquely attributable terminal usage exists, record every token field as `unknown` with source `unknown`. On Claude, copy structured host telemetry when available and otherwise use `unknown`. Never tokenize transcripts, subtract coordinator totals, or infer hidden reasoning.
 
 Use `plan_manager usage <plan_dir> --pretty` for reporting. Its token subtotal is input plus output for attempts where both are known; cached-input and reasoning columns are details, not additional tokens. Always report coverage beside subtotals. The README ledger covers recorded Herder attempts, not unobservable coordinator, platform, or retry overhead.
 
@@ -214,6 +246,8 @@ Reconstruct state from:
 - candidate and staging branch names;
 - branch ancestry and worktree cleanliness.
 - the manager-generated usage ledger and existing attempt IDs.
+
+Treat saver ledger rows with outcome `INTERRUPTED` as attempts but not substantive repair rounds. Continue attempt ordinals after them. An explicit resume starts a new bounded recovery cycle, but never rewrites or drops prior interruption usage.
 
 For `IN PROGRESS`, inspect its candidate branch. If it contains committed work, stage and review it; if it has no usable work, dispatch a fresh implementer. For `BLOCKED`, start with a saver when a rescue branch exists; otherwise create a fresh candidate from integration HEAD and let the saver investigate the plan and repository.
 

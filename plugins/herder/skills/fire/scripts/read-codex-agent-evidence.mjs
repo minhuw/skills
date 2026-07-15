@@ -75,6 +75,9 @@ function parseSession(text, agent, file) {
   let tokenUsage = null
   let userMessageCount = 0
   let taskMessageCount = 0
+  let taskComplete = false
+  let turnAborted = false
+  let finalEnvelopePresent = false
   const executionWorkdirs = new Set()
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim().startsWith("{")) continue
@@ -91,6 +94,19 @@ function parseSession(text, agent, file) {
     }
     if (event.type === "turn_context") context = event.payload || null
     if (event.type === "event_msg" && event.payload?.type === "user_message") userMessageCount += 1
+    if (event.type === "event_msg" && event.payload?.type === "task_complete") {
+      taskComplete = true
+      if (typeof event.payload.last_agent_message === "string" && event.payload.last_agent_message.trim()) {
+        finalEnvelopePresent = true
+      }
+    }
+    if (event.type === "event_msg" && event.payload?.type === "turn_aborted") turnAborted = true
+    if (event.type === "event_msg" && event.payload?.type === "agent_message" && event.payload.phase === "final_answer") {
+      finalEnvelopePresent = true
+    }
+    if (event.type === "response_item" && event.payload?.type === "message" && event.payload.phase === "final_answer") {
+      finalEnvelopePresent = true
+    }
     if (event.type === "response_item" && event.payload?.type === "agent_message") {
       const content = event.payload.content || []
       if (content.some((item) => item.type === "input_text" && item.text?.includes("Message Type: NEW_TASK"))) {
@@ -126,6 +142,11 @@ function parseSession(text, agent, file) {
     executionWorkdirs: [...executionWorkdirs],
     userMessageCount,
     taskMessageCount,
+    terminal: {
+      taskComplete,
+      turnAborted,
+      finalEnvelopePresent,
+    },
     usage: tokenUsage,
   }
 }
