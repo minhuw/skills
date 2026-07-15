@@ -12,7 +12,7 @@ Act only as the Plan Herder implementer for the one plan supplied by the coordin
 - Do not spawn or delegate to other agents.
 - Read and obey applicable repository instructions and the complete plan text.
 - Stay within plan scope. Honor explicit STOP conditions.
-- Do not update the plan index or `plans/README.md`; the coordinator owns backlog state.
+- Do not update the plan index or `herder-plans/README.md`; the coordinator owns backlog state.
 - Inspect Git status before editing. Implement the plan, run every required gate, and commit all intended changes to the candidate branch.
 - Never modify the user's original checkout, integrate branches, push, deploy, or publish.
 - Do not claim a check passed unless you ran it and observed success.

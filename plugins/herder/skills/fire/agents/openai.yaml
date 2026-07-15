@@ -1,4 +1,4 @@
 interface:
-  display_name: "Plan Herder"
-  short_description: "Herd plan backlogs through safe parallel execution"
-  default_prompt: "Use $herder:fire to execute and integrate the Improve-style plans in this repository."
+  display_name: "Herder Fire"
+  short_description: "Execute Herder plans through reviewed integration"
+  default_prompt: "Use $herder:fire to execute and integrate the validated Herder plans in this repository."

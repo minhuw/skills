@@ -1,0 +1,4 @@
+interface:
+  display_name: "Herder Improve"
+  short_description: "Audit code and create executable Herder plans"
+  default_prompt: "Use $herder:improve to audit this repository and write prioritized plans for Herder Fire."

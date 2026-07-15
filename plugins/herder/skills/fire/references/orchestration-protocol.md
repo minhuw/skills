@@ -18,7 +18,8 @@ Use this protocol for every `fire` and `resume` run. The coordinator owns schedu
 Resolve:
 
 - `repo_root`: absolute repository root.
-- `plan_dir`: absolute Improve-style plan directory.
+- `plan_dir`: absolute Herder plan directory, normally `<repo_root>/herder-plans`.
+- `plan_manager`: absolute path to `skills/plans/scripts/herder-plans.mjs` inside the installed plugin.
 - `base_commit`: current `HEAD` for a new run, or current integration HEAD for a resumed run.
 - `run_id`: a filesystem- and branch-safe UTC timestamp or the suffix of the resumed integration branch.
 - `integration_branch`: explicit argument or `plan-herder/integration-<run_id>`.
@@ -28,14 +29,14 @@ Read applicable repository instructions before dispatch. Inspect the user's chec
 
 For a new run, refuse an already-existing integration branch rather than repurposing it. For a resumed run, refuse a missing branch. Create or reopen an integration worktree for that branch.
 
-If the plan directory is not present at `base_commit`, or its working-copy content differs, copy the exact plan snapshot into the integration worktree and commit only that directory. Do not copy unrelated dirty files.
+Treat `plan_dir` as coordinator-owned local state. It is Git-ignored by default and must not be copied into integration, candidate, staging, or rescue branches. Obtain individual immutable dispatch snapshots through `plan_manager snapshot`.
 
 ## 2. Preflight Without Mutation
 
 Complete all checks before creating branches or worktrees:
 
 1. Confirm `git rev-parse --show-toplevel` and `git worktree list` succeed.
-2. Run `scripts/plan-graph.mjs` and reject graph errors.
+2. Run `node <plan_manager> validate <plan_dir> --pretty` and reject graph errors.
 3. Confirm every indexed non-rejected plan file exists and is readable.
 4. Resolve or probe the three logical roles. On Codex use `plan_implementer`, `plan_reviewer`, and `plan_saver`; on Claude Code use `herder:plan-implementer`, `herder:plan-reviewer`, and `herder:plan-saver`. A probe may only ask the mapped role to return `AVAILABLE`; do not give it repository work.
 5. Determine the repository-wide verification commands from repository instructions, CI configuration, and plan command tables. Do not guess commands when the plans specify them.
@@ -65,13 +66,14 @@ Keep one candidate branch per plan. On resume, inspect an existing candidate bra
 
 At each scheduling pass:
 
-1. Re-run the graph parser against the integration worktree's plan directory.
+1. Run `node <plan_manager> ready <plan_dir> --pretty` from the stable coordination checkout.
+   Its `ready` list contains dependency-satisfied `TODO` plans only. Route `blocked` plans to Saver and reconstruct `inProgress` plans through resume semantics; never treat either list as fresh implementer work.
 2. Select actionable plans whose dependencies are all `DONE`.
 3. Find each dependency's coordinator completion commit by its exact `plan-herder(<id>): mark plan done` subject.
 4. Verify every completion commit is an ancestor of integration HEAD.
 5. Create the candidate branch from that exact integration HEAD and record the candidate base SHA.
 6. Verify the dependency commits are ancestors of the candidate base.
-7. Mark the plan `IN PROGRESS` in coordinator-owned state/index as a batch before dispatch when persistence is needed; workers never edit the index.
+7. Mark every selected plan `IN PROGRESS` through `plan_manager transition` as a batch before dispatch; workers never edit the index.
 8. Dispatch up to the available concurrency limit.
 
 Do not serialize independent plans unnecessarily. Do not dispatch a dependent merely because a dependency's implementer finished; wait for reviewed integration and `DONE` status.
@@ -83,9 +85,9 @@ Give the resolved implementer role (`plan_implementer` on Codex or `herder:plan-
 - its role and the prohibition on spawning agents;
 - the absolute candidate worktree path and branch;
 - the candidate base SHA;
-- the complete plan text, inlined even when also available as a file;
+- the complete `planText` returned by `plan_manager snapshot`, always inlined;
 - applicable repository instructions;
-- an override to skip any plan instruction to update `plans/README.md`;
+- an instruction never to edit `herder-plans/README.md` or any plan status;
 - a requirement to stay in scope, honor STOP conditions, run every gate, and commit all intended changes;
 - this exact response shape:
 
@@ -113,9 +115,8 @@ For each candidate:
 3. Resolve no substantive conflict in the coordinator. A conflict is a rescue event.
 4. Confirm the diff is limited to the plan's scope, except generated artifacts explicitly caused by its gates.
 5. Run every plan done criterion and the applicable project-wide gates in the staging worktree.
-6. Update the index row to `DONE` in staging and commit it with subject `plan-herder(<id>): mark plan done`.
-7. Re-run any check affected by the index commit.
-8. Dispatch `plan-reviewer` against the complete staging diff from the pre-plan integration SHA to staging HEAD.
+6. Create an empty coordinator completion-marker commit with `git commit --allow-empty -m "plan-herder(<id>): mark plan done"`.
+7. Dispatch `plan-reviewer` against the complete staging diff from the pre-plan integration SHA to staging HEAD.
 
 ### Reviewer prompt contract
 
@@ -137,7 +138,7 @@ CHECKS: <independently verified commands/results>
 RATIONALE: <concise>
 ```
 
-Only `APPROVE` with `SCOPE: PASS` can integrate. Verify the integration branch still points to the staging base SHA, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD and review again. Record staging HEAD as the plan's completion commit.
+Only `APPROVE` with `SCOPE: PASS` can integrate. Verify the integration branch still points to the staging base SHA, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD and review again. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
 
 If any merge, check, review, or compare-and-advance step fails, leave integration HEAD unchanged and enter rescue.
 
@@ -149,7 +150,7 @@ Give the resolved saver role (`plan_saver` on Codex or `herder:plan-saver` on Cl
 
 - the absolute rescue worktree path;
 - branch name;
-- the complete plan text or an accessible absolute path (inline it when uncommitted or absent from the worktree);
+- the complete snapshotted plan text, always inlined because the plan directory may be absent from the worktree;
 - the statement that the previous attempt failed;
 - the expected outcome: inspect Git/repository state, reproduce relevant gates, repair and commit if possible, or classify the blocker;
 - the user's answer when resuming after `NEEDS_INPUT`.
@@ -170,24 +171,24 @@ EVIDENCE: <concise repository/tool evidence>
 Handle outcomes:
 
 - `REPAIRED`: treat the rescue branch as the new candidate. Repeat transactional staging, all checks, and independent review. The saver never self-approves.
-- `REPLAN`: validate the evidence, revise the plan/index on the integration branch, commit the revision, discard stale staging, and dispatch a fresh implementer from the new integration HEAD.
+- `REPLAN`: validate the evidence, revise the coordinator's plan file and index, validate them through Plans, discard stale staging, and dispatch a fresh implementer from the new integration HEAD. Do not commit the local plan directory into execution branches.
 - `NEEDS_INPUT`: ensure the question is irreducible and focused, then ask the user exactly that question. Continue unrelated ready plans. After the answer, refresh the rescue branch onto the latest integration HEAD when necessary and automatically dispatch `plan-saver` again with the answer.
-- `TERMINAL`: mark `BLOCKED` with a one-line reason and report it; do not fabricate a question.
+- `TERMINAL`: transition the plan to `BLOCKED` through Plans with a one-line reason and report it; do not fabricate a question.
 
-Bound recovery to two autonomous saver repair rounds and two user clarification cycles per plan. After a bound is exhausted, mark the plan `BLOCKED`, preserve the rescue branch, and report the evidence. A new explicit `resume` invocation may authorize another bounded cycle.
+Bound recovery to two autonomous saver repair rounds and two user clarification cycles per plan. After a bound is exhausted, transition the plan to `BLOCKED`, preserve the rescue branch, and report the evidence. A new explicit `resume` invocation may authorize another bounded cycle.
 
 ## 7. Resume Semantics
 
 Reconstruct state from:
 
-- the integration branch's `README.md` status table;
+- `node <plan_manager> status <plan_dir> --pretty`;
 - completion commits containing `plan-herder(<id>):`;
 - candidate and staging branch names;
 - branch ancestry and worktree cleanliness.
 
 For `IN PROGRESS`, inspect its candidate branch. If it contains committed work, stage and review it; if it has no usable work, dispatch a fresh implementer. For `BLOCKED`, start with a saver when a rescue branch exists; otherwise create a fresh candidate from integration HEAD and let the saver investigate the plan and repository.
 
-Never trust a `DONE` row alone. Verify its completion marker is reachable from integration HEAD and re-run cheap done criteria when resuming. If a marker is missing or verification fails, return the plan to rescue before allowing dependents to start.
+Never trust a `DONE` row alone. Verify its completion marker is reachable from integration HEAD and re-run cheap done criteria when resuming. If a marker is missing or verification fails, transition it to `BLOCKED` through Plans and enter rescue before allowing dependents to start. Conversely, if a reachable marker exists while the index is not DONE, reconcile that status before dispatching dependents.
 
 ## 8. Completion
 

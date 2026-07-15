@@ -8,7 +8,7 @@
         {
           "source": "agent-profiles/codex/plan_implementer.toml",
           "target": "plan_implementer.toml",
-          "sha256": "730924c0da756e6fde82046a3c2d0bb86de4004c64fa897d505e1295aeae5035"
+          "sha256": "9d5d5f20dc3cee83c4fa96a7a1dec931502aa0e023cacde5f46b437fa2a89c45"
         },
         {
           "source": "agent-profiles/codex/plan_reviewer.toml",
@@ -28,7 +28,7 @@
         {
           "source": "agents/plan-implementer.md",
           "identifier": "herder:plan-implementer",
-          "sha256": "01b308964974a6d00f01793610a28a00639cb32e3abe906225fdc9fdc85c5a95"
+          "sha256": "51ca82c570080c54904e6cdedb67f5a06541a13afe343cc6a120715b229b5c83"
         },
         {
           "source": "agents/plan-reviewer.md",
