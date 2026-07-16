@@ -140,6 +140,21 @@ try {
   assert.match(protocol, /do not reread transcripts, request status, or call `list_agents`/)
   assert.match(protocol, /node <gate_runner> --cwd/)
   assert.match(protocol, /returns no command output on success or failure/)
+  assert.match(protocol, /compact failure envelope/)
+  assert.match(protocol, /every direct reviewer finding or failed-agent stop reason/)
+  assert.match(protocol, /Give each plan generation two substantive autonomous Saver repair rounds/)
+  assert.match(protocol, /Accept at most two `REPLAN` outcomes per plan per invocation/)
+  assert.match(protocol, /same signature survives two consecutive completed implementation generations/)
+  assert.match(protocol, /Never infer a reset from a staging rebuild or Saver commit/)
+
+  const pluginRoot = path.resolve(scriptDir, "..", "..", "..")
+  const codexSaver = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_saver.toml"), "utf8")
+  const claudeSaver = await readFile(path.join(pluginRoot, "agents", "plan-saver.md"), "utf8")
+  for (const profile of [codexSaver, claudeSaver]) {
+    assert.match(profile, /compact failure envelope/)
+    assert.match(profile, /Verify every direct finding and reproduction command/)
+    assert.match(profile, /Do not replace a narrow repair with an unrelated audit/)
+  }
 
   const gateWorktree = path.join(root, "gate-worktree")
   const gateLogs = path.join(root, "gate-logs")

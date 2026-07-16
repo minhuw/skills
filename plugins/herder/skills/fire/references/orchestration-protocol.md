@@ -29,7 +29,7 @@ Resolve:
 - `worktree_root`: a temporary directory outside the user's checkout.
 - `gate_log_root`: `<worktree_root>/logs`, outside every integration, candidate, staging, and rescue worktree.
 - `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume.
-- `recovery_counters`: per-plan substantive saver rounds, clarification cycles, and same-round interruption restarts for the current invocation.
+- `recovery_state`: per-plan generation IDs, substantive saver rounds, clarification cycles, same-round interruption restarts, accepted replans, and compact failure signatures for the current invocation.
 
 Read applicable repository instructions before dispatch. Inspect the user's checkout but do not clean, stash, reset, stage, or commit it.
 
@@ -183,12 +183,14 @@ Prepare the rescue environment; do not ask `plan-saver` to reconstruct missing c
 
 An **agent attempt** is one host spawn and always receives a unique usage row. A **saver repair round** is a substantive saver result or a saver attempt that may have changed the rescue branch. Host interruption alone does not consume a repair round when all no-mutation invariants below are proven.
 
+A **plan generation** starts with an immutable plan snapshot, integration-base SHA, and fresh implementer candidate. Number the initial generation `0`; increment only after accepting `REPLAN`, validating the revised plan, and dispatching a fresh implementer from integration HEAD. Record the SHA-256 of the exact snapshotted `planText` with the generation. `REPAIRED`, staging rebuilds, rebases needed for unrelated integrations, clarification answers, and interrupted attempts remain in the same generation and never reset its recovery budget.
+
 Before every saver dispatch, record:
 
 - integration HEAD;
 - rescue branch HEAD and tree SHA;
 - the exact `git status --porcelain=v1 --untracked-files=all` result and whether it is empty; and
-- the repair-round number plus the attempt ordinal.
+- the plan-generation number, snapshot SHA-256, repair-round number, and attempt ordinal.
 
 A dirty rescue worktree may contain the failed work Saver must recover, but it is ineligible for a no-cost interruption restart. Never reset, clean, stash, or discard files merely to make an attempt eligible.
 
@@ -197,12 +199,16 @@ Give the resolved saver role (`plan_saver` through Codex Multi-Agent V2 or `herd
 - the absolute rescue worktree path;
 - branch name;
 - the complete snapshotted plan text, always inlined because the plan directory may be absent from the worktree;
-- the statement that the previous attempt failed;
+- a compact failure envelope containing:
+  - failure source (`implementer`, `merge`, `gate`, `review`, or `compare-and-advance`), plan generation, snapshot SHA-256, integration-base SHA, and immutable failed HEAD/tree SHA;
+  - every direct reviewer finding or failed-agent stop reason, preserving file/line evidence and order but omitting commentary and theories;
+  - each exact reproduction command when known, plus compact `run-gate.mjs` evidence (fingerprint, exit status, duration, log SHA/path) without raw output; and
+  - prior Saver outcomes in this generation and the remaining generation/replan budget;
 - the expected outcome: inspect Git/repository state, reproduce relevant gates, repair and commit if possible, or classify the blocker;
-- the user's answer when resuming after `NEEDS_INPUT`.
+- the user's answer when resuming after `NEEDS_INPUT`;
 - the stable attempt ID and resolved model/effort attribution.
 
-Do not pass implementer or reviewer theories or raw gate output by default. Let the saver inspect status, diff, repository instructions, and tests independently. Add the exact failing command and compact runner evidence only when the failure is integration-only or cannot be reproduced from the rescue worktree.
+Pass direct failure evidence, not implementer/reviewer theories or raw gate output. Use `none` for unavailable findings or reproduction commands rather than inventing them. Tell Saver to verify every direct finding or repro first and broaden investigation only when that evidence indicates a systemic issue or cannot explain the failure. The immutable failed artifact may differ from the mutable rescue worktree; label both explicitly so Saver can compare them without guessing.
 
 Require this response shape:
 
@@ -241,11 +247,15 @@ Every restarted spawn is still an independently attributable usage attempt. Neve
 Handle outcomes:
 
 - `REPAIRED`: treat the rescue branch as the new candidate. Repeat transactional staging, all checks, and independent review. The saver never self-approves.
-- `REPLAN`: validate the evidence, revise the coordinator's plan file and index, validate them through Plans, discard stale staging, and dispatch a fresh implementer from the new integration HEAD. Do not commit the local plan directory into execution branches.
+- `REPLAN`: validate the evidence and the replan guards below. If accepted, revise the coordinator's plan file and index, validate them through Plans, discard stale staging, increment the plan generation, reset only that new generation's recovery counters, and dispatch a fresh implementer from the new integration HEAD. Do not commit the local plan directory into execution branches.
 - `NEEDS_INPUT`: ensure the question is irreducible and focused, then ask the user exactly that question. Continue unrelated ready plans. After the answer, refresh the rescue branch onto the latest integration HEAD when necessary and automatically dispatch `plan-saver` again with the answer.
 - `TERMINAL`: transition the plan to `BLOCKED` through Plans with a one-line reason and report it; do not fabricate a question.
 
-Bound recovery to two substantive autonomous saver repair rounds and two user clarification cycles per plan. `INTERRUPTED` usage rows do not count toward either bound. After a substantive or interruption-restart bound is exhausted, transition the plan to `BLOCKED`, preserve the rescue branch, and report which bound ended the run. A new explicit `resume` invocation may authorize another bounded cycle.
+Give each plan generation two substantive autonomous Saver repair rounds and two user clarification cycles. `INTERRUPTED` usage rows do not count toward either bound. A successfully accepted `REPLAN` therefore gives the fresh implementation generation its own budget; it does not erase prior usage or attempt ordinals.
+
+Bound replanning separately. Accept at most two `REPLAN` outcomes per plan per invocation. Derive a compact failure signature from the failure source plus normalized direct findings, or from failing command fingerprints and exit statuses when findings are absent; exclude generation numbers and commit SHAs. If the same signature survives two consecutive completed implementation generations, reject another `REPLAN` for that signature: Saver must repair it, return `NEEDS_INPUT`, or classify it `TERMINAL`. If a rejected `REPLAN` leaves a substantive round in the current generation, redispatch a fresh Saver with the guard result; otherwise transition the plan to `BLOCKED`.
+
+After a generation's substantive, clarification, interruption-restart, or replan bound is exhausted, transition the plan to `BLOCKED`, preserve the rescue branch, and report the generation plus the exact bound or repeated signature that ended the run. A new explicit `resume` invocation may authorize another bounded cycle.
 
 ## 7. Usage Accounting
 
@@ -265,7 +275,7 @@ Reconstruct state from:
 - branch ancestry and worktree cleanliness.
 - the manager-generated usage ledger and existing attempt IDs.
 
-Treat saver ledger rows with outcome `INTERRUPTED` as attempts but not substantive repair rounds. Continue attempt ordinals after them. An explicit resume starts a new bounded recovery cycle, but never rewrites or drops prior interruption usage.
+Treat saver ledger rows with outcome `INTERRUPTED` as attempts but not substantive repair rounds. Anchor the resumed cycle's initial generation to the current validated snapshot and usable candidate; prior `REPLAN` rows remain history, but their old counter buckets need not be recreated. Never infer a reset from a staging rebuild or Saver commit. Continue attempt ordinals after every prior row. An explicit resume starts a new bounded recovery cycle, but never rewrites or drops prior usage.
 
 For `IN PROGRESS`, inspect its candidate branch. If it contains committed work, stage and review it; if it has no usable work, dispatch a fresh implementer. For `BLOCKED`, start with a saver when a rescue branch exists; otherwise create a fresh candidate from integration HEAD and let the saver investigate the plan and repository.
 

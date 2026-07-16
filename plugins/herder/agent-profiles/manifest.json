@@ -18,7 +18,7 @@
         {
           "source": "agent-profiles/codex/plan_saver.toml",
           "target": "plan_saver.toml",
-          "sha256": "5b39524a4affe72aa9d80fe074f3435564bed4e0c584e2d18e26064cab17e3c6"
+          "sha256": "46cc12c8fcc960a5ff88d9fee894c321360e93d2ecc0524a00e6927328f0347e"
         }
       ]
     },
@@ -38,7 +38,7 @@
         {
           "source": "agents/plan-saver.md",
           "identifier": "herder:plan-saver",
-          "sha256": "1c926a3034cb86e0dfc1db675c8b4008760c0e98c270670c06c05c603731e8c6"
+          "sha256": "0ead5cc7d6c048a3ac149ca92fe84913a4033dd75554413684f1642ea5a4f599"
         }
       ]
     }

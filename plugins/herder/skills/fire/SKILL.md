@@ -63,6 +63,7 @@ Claude uses the native role identifiers shipped with the plugin.
 - Fork dependents only from canonical integration HEAD after every dependency is reviewed, integrated, `DONE`, and represented by a reachable completion marker.
 - Record one usage row after every usage-bearing probe or terminal attempt, including terminal attempts without a response. Copy host telemetry when available; otherwise record `unknown`. Never estimate.
 - Route ordinary implementation, staging, verification, review, and reconciliation failures through Saver before asking the user. Ask only after Saver returns `NEEDS_INPUT`; then redispatch it with the answer.
+- Give Saver the protocol's compact direct-evidence envelope and scope its bounded recovery to the current immutable plan generation. An accepted `REPLAN` starts a fresh generation budget; repairs, restaging, and clarification do not.
 - Distinguish agent attempts from saver repair rounds. Record a host-interrupted attempt, but do not consume a repair round when the protocol proves that no saver outcome or worktree mutation occurred. Bound same-round interruption restarts separately.
 - Keep reviewer work read-only and prove its staging tree did not change. V2 children inherit live permission overrides, so never launch Fire with `--dangerously-bypass-approvals-and-sandbox`.
 - Use Codex waits as event-driven long polls with the protocol's one-minute heartbeat. Capture coordinator gate output through `run-gate.mjs`; keep complete logs outside every Git worktree and retain only compact evidence in coordinator context.

@@ -23,7 +23,7 @@ claude plugin validate plugins/herder --strict
 git diff --check
 ```
 
-The Fire script test covers both native agent-evidence extraction and coordinator gate isolation. It runs a 250 KB passing gate and a long failing gate, then proves that all output stays in private log files while stdout contains only compact JSON.
+The Fire script test covers native agent-evidence extraction, coordinator gate isolation, compact Saver failure envelopes, and per-generation recovery guards. It runs a 250 KB passing gate and a long failing gate, then proves that all output stays in private log files while stdout contains only compact JSON.
 
 Use `uv run --with pyyaml python ...` when the validation scripts' Python environment does not already contain PyYAML.
 
