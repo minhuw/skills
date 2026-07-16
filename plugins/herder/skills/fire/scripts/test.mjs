@@ -146,6 +146,9 @@ try {
   assert.match(protocol, /Accept at most two `REPLAN` outcomes per plan per invocation/)
   assert.match(protocol, /same signature survives two consecutive completed implementation generations/)
   assert.match(protocol, /Never infer a reset from a staging rebuild or Saver commit/)
+  assert.match(protocol, /git worktree lock --reason plan-herder:/)
+  assert.match(protocol, /Proof-based automatic cleanup may remove clean `DONE` artifacts/)
+  assert.match(protocol, /never deletes the integration branch\/worktree, gate logs, plan directory, user checkout, or unrelated refs/)
 
   const pluginRoot = path.resolve(scriptDir, "..", "..", "..")
   const codexSaver = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_saver.toml"), "utf8")

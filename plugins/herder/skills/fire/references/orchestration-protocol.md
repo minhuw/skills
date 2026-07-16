@@ -13,6 +13,7 @@ Use this protocol for every `fire` and `resume` run. The coordinator owns schedu
 7. Usage accounting
 8. Resume semantics
 9. Completion
+10. Cleanup
 
 ## 1. Establish the Run
 
@@ -60,9 +61,12 @@ Use names equivalent to:
 plan-herder/integration-<run-id>
 plan-herder/<run-id>/<plan-id>-candidate
 plan-herder/<run-id>/<plan-id>-stage-<attempt>
+plan-herder/<run-id>/<plan-id>-rescue-<attempt>
 ```
 
 The coordinator creates branches and worktrees. When the host can spawn directly into a supplied isolated worktree, use that facility. Otherwise create the Git worktree first and pass its absolute path to the agent.
+
+Lock a candidate, staging, or rescue worktree with `git worktree lock --reason plan-herder:<run-id>:<plan-id>:<role>` while an agent can still access it. Only the root coordinator may unlock it, and only after the agent is terminal and no retry can reuse that session. A lock is a cleanup lease, not lifecycle state; Plans remains the sole plan-state owner.
 
 For a Codex attempt, call the native Multi-Agent V2 spawn tool with:
 
@@ -175,6 +179,8 @@ USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; ou
 
 Tell the reviewer never to estimate unavailable usage. Prefer structured host telemetry over the reviewer-authored `USAGE` line. Only `APPROVE` with `SCOPE: PASS` can integrate. Verify the integration branch still points to the staging base SHA, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD and review again. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
 
+After `DONE`, prove no worker can still access that plan's candidate or staging worktrees, unlock them, and invoke the cleanup runner with `--plan <id>`. Cleanup refusal or failure is a reported maintenance warning, not a reason to roll back reviewed integration or block dependents; preserve every artifact the runner skips.
+
 If any merge, check, review, or compare-and-advance step fails, leave integration HEAD unchanged and enter rescue.
 
 ## 6. Rescue Before Escalation
@@ -277,6 +283,8 @@ Reconstruct state from:
 
 Treat saver ledger rows with outcome `INTERRUPTED` as attempts but not substantive repair rounds. Anchor the resumed cycle's initial generation to the current validated snapshot and usable candidate; prior `REPLAN` rows remain history, but their old counter buckets need not be recreated. Never infer a reset from a staging rebuild or Saver commit. Continue attempt ordinals after every prior row. An explicit resume starts a new bounded recovery cycle, but never rewrites or drops prior usage.
 
+Treat worktree locks as leases. On resume, reconcile native agent states before unlocking a stale Herder lock; keep the worktree locked whenever an agent is active, ambiguous, or could still be retried in the same session.
+
 For `IN PROGRESS`, inspect its candidate branch. If it contains committed work, stage and review it; if it has no usable work, dispatch a fresh implementer. For `BLOCKED`, start with a saver when a rescue branch exists; otherwise create a fresh candidate from integration HEAD and let the saver investigate the plan and repository.
 
 Never trust a `DONE` row alone. Verify its completion marker is reachable from integration HEAD and re-run cheap done criteria when resuming. If a marker is missing or verification fails, transition it to `BLOCKED` through Plans and enter rescue before allowing dependents to start. Conversely, if a reachable marker exists while the index is not DONE, reconcile that status before dispatching dependents. Continue role ordinals after the highest recorded attempt; never duplicate or rewrite a prior usage row.
@@ -287,7 +295,7 @@ The run succeeds when every plan is `DONE` or `REJECTED`, all dependency markers
 
 If that final gate or audit fails, create an integration-rescue branch/worktree from integration HEAD and send `plan-saver` a synthetic plan containing the failing final criterion and expected integrated behavior. Treat any repair as a new transaction: stage it from the unchanged integration HEAD, run all final gates, obtain a fresh reviewer approval, and only then advance integration.
 
-Do not merge, push, publish, deploy, or delete the preserved candidate/rescue evidence unless the user explicitly requests it. Report:
+Do not merge, push, publish, or deploy. Proof-based automatic cleanup may remove clean `DONE` artifacts; preserve blocked/failed candidate and rescue evidence unless the user explicitly requests `--include-failed`. Report:
 
 - integration branch and absolute worktree;
 - final commit SHA;
@@ -296,3 +304,19 @@ Do not merge, push, publish, deploy, or delete the preserved candidate/rescue ev
 - compact gate evidence and retained log paths;
 - usage subtotals and coverage by plan, role, and model/effort;
 - preserved branches needing attention.
+
+## 10. Cleanup
+
+Cleanup is a Fire coordinator operation, never a worker role. For automatic post-`DONE` cleanup or explicit `herder:fire cleanup`, invoke:
+
+```text
+node <cleanup_runner> --repo <repo_root> --plan-dir <plan_dir> --integration-branch <branch> [--plan <id>] [--dry-run] [--include-failed] --pretty
+```
+
+Require the exact integration branch; never infer it for cleanup. Before mutating, prove no active or ambiguous agent can access a targeted worktree. `--dry-run` may inspect an active run but must not unlock anything.
+
+The runner owns the mechanical safety checks. It validates Plans, limits branches to the integration branch's run prefix and recognized candidate/stage/rescue names, and preserves unrecognized artifacts. By default a branch is eligible only when its plan is `DONE`, the exact completion marker is reachable, its tip is an ancestor of integration HEAD, and any attached worktree is unlocked and clean. Delete the worktree first, then delete the ref only if it still points to the preflight SHA.
+
+`--include-failed` is valid only when the user explicitly supplied it and the run is stopped. It additionally makes clean, unlocked non-`DONE` candidate/stage/rescue evidence eligible even when unmerged. It never overrides a dirty, locked, missing, or unrecognized worktree and never deletes the integration branch/worktree, gate logs, plan directory, user checkout, or unrelated refs. Do not invent an `--include-failed` authorization during Fire or resume.
+
+For explicit cleanup, report every planned/removed artifact and every preserved artifact with its reason. For automatic cleanup, retain the compact result in the run report. Never ask an implementer, reviewer, Saver, or plan producer to remove Git state.

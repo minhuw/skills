@@ -1,6 +1,6 @@
 ---
 name: fire
-description: Execute a validated herder-plans/ backlog as a dependency-aware multi-agent run with per-attempt token accounting. Use when the user asks to fire, run, resume, automatically complete Herder plans, or report a Fire run's token coverage using isolated implementer, reviewer, saver, and transactional integration worktrees. Do not use to create plans, repair plan formatting, or implement one ordinary task directly.
+description: Execute, resume, inspect, or safely clean a validated herder-plans/ backlog as a dependency-aware multi-agent run with per-attempt token accounting. Use when the user asks to fire, run, resume, automatically complete Herder plans, clean Herder run worktrees or branches, or report a Fire run's status and token coverage. Do not use to create plans, repair plan formatting, or implement one ordinary task directly.
 ---
 
 # Herder Fire
@@ -17,6 +17,7 @@ Interpret tokens after the skill name as arguments. Codex uses `$herder:fire ...
 herder:fire [<plan-dir>] [--integration-branch <branch>] [--max-parallel <n>]
 herder:fire resume [<plan-dir>] [--integration-branch <branch>] [--max-parallel <n>]
 herder:fire status [<plan-dir>] [--integration-branch <branch>]
+herder:fire cleanup [<plan-dir>] --integration-branch <branch> [--plan <id>] [--dry-run] [--include-failed]
 ```
 
 - Default command: `fire`.
@@ -25,6 +26,7 @@ herder:fire status [<plan-dir>] [--integration-branch <branch>]
 - Default integration branch: `plan-herder/integration-<UTC timestamp>`.
 - `resume` requires the named integration branch, except when exactly one local `plan-herder/integration-*` branch exists.
 - `status` is read-only: combine Plans status and usage with relevant Git branches and completion markers. It need not load the execution protocol.
+- `cleanup` runs no agents and requires an explicit integration branch. Default cleanup removes only clean, reachable artifacts for `DONE` plans; `--dry-run` previews, `--plan` narrows, and `--include-failed` explicitly authorizes deletion of clean non-`DONE` evidence. It never removes dirty or locked worktrees, integration, logs, or plans.
 
 Never add `plans/execution.yaml`, another state file, or another plan parser.
 
@@ -36,9 +38,10 @@ Resolve the plugin root as two directories above this skill. Use:
 <plugin-root>/skills/plans/scripts/herder-plans.mjs
 <plugin-root>/skills/fire/scripts/read-codex-agent-evidence.mjs
 <plugin-root>/skills/fire/scripts/run-gate.mjs
+<plugin-root>/skills/fire/scripts/cleanup-run.mjs
 ```
 
-The manager commands Fire needs are `validate`, `ready`, `snapshot`, `transition`, `record-usage`, and `usage`; invoke each with `node <manager> ... --pretty`. Treat nonzero exits as coordinator failures. Fire never parses or directly edits `README.md`; only the root coordinator may call `transition` or `record-usage` during execution.
+The manager commands Fire needs are `validate`, `ready`, `snapshot`, `transition`, `record-usage`, and `usage`; invoke each with `node <manager> ... --pretty`. Treat nonzero exits as coordinator failures. Fire never parses or directly edits `README.md`; only the root coordinator may call `transition` or `record-usage` during execution. Only the root coordinator may invoke the cleanup runner.
 
 The backlog is normally local and Git-ignored. Always run `snapshot` in the stable coordination checkout and inline its complete `planText` in worker prompts; never assume a child worktree contains the plan directory.
 
@@ -59,7 +62,7 @@ Claude uses the native role identifiers shipped with the plugin.
 ## Hard Boundaries
 
 - Preserve the user's branch, index, source changes, and untracked files. Plans status and usage updates are the only coordination-checkout writes.
-- Keep candidates, rescue, staging, and integration isolated in worktrees. Never push, open a PR, deploy, publish, merge into the user's branch, or perform destructive cleanup without explicit authorization.
+- Keep candidates, rescue, staging, and integration isolated in worktrees. Never push, open a PR, deploy, publish, or merge into the user's branch. Delete run artifacts only through the cleanup runner's proof-based rules; never delegate cleanup to a worker.
 - Fork dependents only from canonical integration HEAD after every dependency is reviewed, integrated, `DONE`, and represented by a reachable completion marker.
 - Record one usage row after every usage-bearing probe or terminal attempt, including terminal attempts without a response. Copy host telemetry when available; otherwise record `unknown`. Never estimate.
 - Route ordinary implementation, staging, verification, review, and reconciliation failures through Saver before asking the user. Ask only after Saver returns `NEEDS_INPUT`; then redispatch it with the answer.

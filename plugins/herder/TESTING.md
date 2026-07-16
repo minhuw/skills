@@ -10,6 +10,7 @@ From the marketplace repository root:
 node plugins/herder/skills/plans/scripts/test.mjs
 node plugins/herder/skills/install/scripts/test.mjs
 node plugins/herder/skills/fire/scripts/test.mjs
+node plugins/herder/skills/fire/scripts/cleanup-test.mjs
 
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/plans
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/grill
@@ -23,7 +24,7 @@ claude plugin validate plugins/herder --strict
 git diff --check
 ```
 
-The Fire script test covers native agent-evidence extraction, coordinator gate isolation, compact Saver failure envelopes, and per-generation recovery guards. It runs a 250 KB passing gate and a long failing gate, then proves that all output stays in private log files while stdout contains only compact JSON.
+The Fire script tests cover native agent-evidence extraction, coordinator gate isolation, compact Saver failure envelopes, per-generation recovery guards, and fail-closed cleanup. The cleanup fixture proves dry-run behavior, reachable `DONE` cleanup, default preservation of failed evidence, explicit clean failed-evidence deletion, and preservation of dirty, unrecognized, unreachable, integration, and log state.
 
 Use `uv run --with pyyaml python ...` when the validation scripts' Python environment does not already contain PyYAML.
 
