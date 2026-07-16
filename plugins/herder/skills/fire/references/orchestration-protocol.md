@@ -127,7 +127,7 @@ Tell the worker to use `unknown` for values not explicitly exposed by the host a
 
 ### Coordinator wait discipline
 
-After dispatching Codex workers, call native `wait_agent` with `timeout_ms: 60000`. It is a long poll: it returns immediately when any agent update arrives and otherwise supplies a one-minute heartbeat. Process every queued update before waiting again.
+After dispatching Codex workers, call native `wait_agent` with `timeout_ms: 600000`. It is a long poll: any agent update, including completion, ends the wait immediately; otherwise the timeout supplies a ten-minute heartbeat. The timeout caps idle wakeups, not result-delivery latency. Process every queued update before waiting again.
 
 A timeout is not a state change. If no local scheduling or integration work became ready, do not reread transcripts, request status, or call `list_agents`; issue the next long wait. Use `list_agents` only for initial bookkeeping or reconciliation after an ambiguous, missing, or contradictory terminal event. On Claude Code, use its native blocking agent wait with the same event-first behavior.
 

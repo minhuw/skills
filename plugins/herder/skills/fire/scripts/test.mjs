@@ -136,7 +136,8 @@ try {
   assert.equal(JSON.parse(missing.stdout).ok, false)
 
   const protocol = await readFile(path.join(scriptDir, "..", "references", "orchestration-protocol.md"), "utf8")
-  assert.match(protocol, /wait_agent.*timeout_ms: 60000/)
+  assert.match(protocol, /wait_agent.*timeout_ms: 600000/)
+  assert.match(protocol, /timeout caps idle wakeups, not result-delivery latency/)
   assert.match(protocol, /do not reread transcripts, request status, or call `list_agents`/)
   assert.match(protocol, /node <gate_runner> --cwd/)
   assert.match(protocol, /returns no command output on success or failure/)
