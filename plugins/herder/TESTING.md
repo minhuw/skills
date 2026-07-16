@@ -20,6 +20,7 @@ python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/i
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/validate
 python3 /path/to/plugin-creator/scripts/validate_plugin.py plugins/herder
 
+claude plugin validate . --strict
 claude plugin validate plugins/herder --strict
 git diff --check
 ```
