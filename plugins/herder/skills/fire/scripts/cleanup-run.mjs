@@ -131,6 +131,20 @@ function isAncestor(repoRoot, ancestor, descendant) {
   fail(`Cannot compare ${ancestor} with ${descendant}: ${(result.stderr || result.stdout).trim()}`)
 }
 
+function isPatchEquivalent(repoRoot, artifactHead, integrationHead) {
+  const mergeBaseResult = runGit(repoRoot, ["merge-base", artifactHead, integrationHead], { allowFailure: true })
+  if (mergeBaseResult.status === 1) return false
+  if (mergeBaseResult.status !== 0) {
+    fail(`Cannot find a merge base for ${artifactHead} and ${integrationHead}: ${(mergeBaseResult.stderr || mergeBaseResult.stdout).trim()}`)
+  }
+  const mergeBase = mergeBaseResult.stdout.trim()
+  const mergeCommits = runGit(repoRoot, ["rev-list", "--min-parents=2", `${mergeBase}..${artifactHead}`]).stdout.trim()
+  if (mergeCommits) return false
+
+  const rows = runGit(repoRoot, ["cherry", integrationHead, artifactHead]).stdout.split(/\r?\n/).filter(Boolean)
+  return rows.length > 0 && rows.every((row) => /^- [0-9a-f]+$/.test(row))
+}
+
 function completionMarkers(repoRoot, integrationBranch) {
   const output = runGit(repoRoot, ["log", "--format=%H%x09%s", integrationBranch]).stdout
   const markers = new Set()
@@ -193,12 +207,17 @@ export function cleanupRun(input) {
     }
 
     let mode
+    let proof = null
     if (plan.status === "DONE") {
       if (!markers.has(plan.id)) {
         skipped.push({ branch: item.branch, plan: plan.id, status: plan.status, reason: "completion-marker-missing" })
         continue
       }
-      if (!isAncestor(repoRoot, item.head, integrationHead)) {
+      if (isAncestor(repoRoot, item.head, integrationHead)) {
+        proof = "ancestor"
+      } else if ((identity.kind.startsWith("candidate") || identity.kind.startsWith("rescue")) && isPatchEquivalent(repoRoot, item.head, integrationHead)) {
+        proof = "patch-equivalent"
+      } else {
         skipped.push({ branch: item.branch, plan: plan.id, status: plan.status, reason: "artifact-not-reachable-from-integration" })
         continue
       }
@@ -230,6 +249,7 @@ export function cleanupRun(input) {
       status: plan.status,
       kind: identity.kind,
       mode,
+      proof,
       worktree: state.path,
       operations: [...(state.path ? ["remove-worktree"] : []), mode === "integrated" ? "delete-proven-branch" : "delete-failed-evidence-branch"],
     })

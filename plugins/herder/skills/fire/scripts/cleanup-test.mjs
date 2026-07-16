@@ -140,16 +140,25 @@ try {
   const candidateBranch = `plan-herder/${runId}/001-candidate`
   const candidate = addWorktree(repo, worktrees, candidateBranch, integrationBranch)
   commitFile(candidate, "done.txt", "done\n", "feat: done candidate")
+  const candidateHead = git(candidate, "rev-parse", "HEAD")
+
+  commitFile(integration, "prior-plan.txt", "prior plan\n", "feat: integrate an earlier plan")
 
   const stageBranch = `plan-herder/${runId}/001-stage-1`
   const stage = addWorktree(repo, worktrees, stageBranch, integrationBranch)
-  git(stage, "merge", "-q", "--no-ff", "-m", "plan-herder(001): stage candidate", candidateBranch)
+  git(stage, "cherry-pick", candidateHead)
   git(stage, "commit", "-q", "--allow-empty", "-m", "plan-herder(001): mark plan done")
   git(integration, "merge", "-q", "--ff-only", stageBranch)
+  assert.equal(run("git", ["-C", repo, "merge-base", "--is-ancestor", candidateHead, integrationBranch], { allowFailure: true }).status, 1)
+  assert.equal(git(repo, "rev-list", "--min-parents=2", `${initial}..${integrationBranch}`), "")
 
   const unreachableBranch = `plan-herder/${runId}/001-stage-99`
   const unreachable = addWorktree(repo, worktrees, unreachableBranch, "main")
   commitFile(unreachable, "unreachable.txt", "unreachable\n", "test: unreachable done artifact")
+
+  const unmatchedCandidateBranch = `plan-herder/${runId}/001-candidate-replan-1`
+  const unmatchedCandidate = addWorktree(repo, worktrees, unmatchedCandidateBranch, "main")
+  commitFile(unmatchedCandidate, "unmatched.txt", "unmatched\n", "test: unmatched candidate patch")
 
   const failedBranch = `plan-herder/${runId}/002-candidate`
   const failed = addWorktree(repo, worktrees, failedBranch, integrationBranch)
@@ -179,11 +188,14 @@ try {
     [candidateBranch, stageBranch].sort(),
     JSON.stringify(preview, null, 2),
   )
+  assert.equal(preview.actions.find((item) => item.branch === candidateBranch).proof, "patch-equivalent")
+  assert.equal(preview.actions.find((item) => item.branch === stageBranch).proof, "ancestor")
   assert.equal(preview.removed.length, 0)
   assert.equal(preview.skipped.find((item) => item.branch === failedBranch).reason, "preserved-non-done-evidence")
   assert.equal(preview.skipped.find((item) => item.branch === dirtyBranch).reason, "preserved-non-done-evidence")
   assert.equal(preview.skipped.find((item) => item.branch === lockedBranch).reason, "preserved-non-done-evidence")
   assert.equal(preview.skipped.find((item) => item.branch === unreachableBranch).reason, "artifact-not-reachable-from-integration")
+  assert.equal(preview.skipped.find((item) => item.branch === unmatchedCandidateBranch).reason, "artifact-not-reachable-from-integration")
   assert.equal(preview.skipped.find((item) => item.branch === markerlessBranch).reason, "completion-marker-missing")
   assert.equal(preview.skipped.find((item) => item.branch === unknownBranch).reason, "unrecognized-run-artifact")
   assert.equal(fs.existsSync(candidate), true)
@@ -220,6 +232,7 @@ try {
   assert.notEqual(git(repo, "branch", "--list", lockedBranch), "")
   assert.notEqual(git(repo, "branch", "--list", markerlessBranch), "")
   assert.notEqual(git(repo, "branch", "--list", unreachableBranch), "")
+  assert.notEqual(git(repo, "branch", "--list", unmatchedCandidateBranch), "")
   assert.notEqual(git(repo, "branch", "--list", unknownBranch), "")
   assert.notEqual(git(repo, "branch", "--list", integrationBranch), "")
 

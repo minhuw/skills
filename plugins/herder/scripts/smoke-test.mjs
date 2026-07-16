@@ -539,6 +539,7 @@ function main() {
     const grillText = fs.readFileSync(path.join(installedPath, "skills", "grill", "SKILL.md"), "utf8")
     const improveText = fs.readFileSync(path.join(installedPath, "skills", "improve", "SKILL.md"), "utf8")
     const fireText = fs.readFileSync(path.join(installedPath, "skills", "fire", "SKILL.md"), "utf8")
+    const fireProtocolText = fs.readFileSync(path.join(installedPath, "skills", "fire", "references", "orchestration-protocol.md"), "utf8")
     const validateText = fs.readFileSync(path.join(installedPath, "skills", "validate", "SKILL.md"), "utf8")
     assert.match(grillText, /herder:grill <change-description>/)
     assert.match(grillText, /Producer self-review/)
@@ -548,6 +549,10 @@ function main() {
     assert.match(fireText, /herder:fire cleanup \[<plan-dir>\]/)
     assert.match(fireText, /--include-failed/)
     assert.match(fireText, /Only the root coordinator may invoke the cleanup runner/)
+    assert.match(fireText, /Keep integration history linear/)
+    assert.match(fireProtocolText, /Replay the exact ordered candidate commits onto staging with `git cherry-pick`/)
+    assert.match(fireProtocolText, /git merge --ff-only <integration-branch>/)
+    assert.doesNotMatch(fireProtocolText, /Merge the candidate with a non-fast-forward/)
     assert.match(validateText, /herder:validate \[<plan-dir>\] \[--fix\]/)
     assert.match(validateText, /herder-plans\.mjs/)
     assert.match(validateText, /strictly read-only/)
@@ -635,6 +640,7 @@ function main() {
           ephemeral: false,
         }).message
         assert.match(fireMessage, /completed|done|integration/i)
+        assert.match(fireMessage, /ff-only|fast-forward/i, "Fire did not report the linear handoff command")
         fs.mkdirSync(reports, { recursive: true })
         fs.writeFileSync(path.join(reports, "final-fire-report.md"), `${fireMessage.trim()}\n`)
 
@@ -681,7 +687,10 @@ function main() {
 
         const integrationBranches = run("git", ["branch", "--list", "plan-herder/integration-*", "--format=%(refname:short)"], { cwd: project }).stdout.trim().split(/\r?\n/).filter(Boolean)
         assert.equal(integrationBranches.length, 1)
-        const integrationWorktree = worktreeForBranch(project, integrationBranches[0])
+        const integrationBranch = integrationBranches[0]
+        const integrationMergeNodes = run("git", ["rev-list", "--min-parents=2", `${originalHead}..${integrationBranch}`], { cwd: project }).stdout.trim()
+        assert.equal(integrationMergeNodes, "", "Fire created a merge node in the integration history")
+        const integrationWorktree = worktreeForBranch(project, integrationBranch)
         run("npm", ["test"], { cwd: integrationWorktree })
         assert.equal(run("git", ["rev-parse", "HEAD"], { cwd: project }).stdout.trim(), originalHead)
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")

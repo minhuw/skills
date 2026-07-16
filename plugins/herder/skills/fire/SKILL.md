@@ -63,6 +63,7 @@ Claude uses the native role identifiers shipped with the plugin.
 
 - Preserve the user's branch, index, source changes, and untracked files. Plans status and usage updates are the only coordination-checkout writes.
 - Keep candidates, rescue, staging, and integration isolated in worktrees. Never push, open a PR, deploy, publish, or merge into the user's branch. Delete run artifacts only through the cleanup runner's proof-based rules; never delegate cleanup to a worker.
+- Keep integration history linear. Replay each candidate's merge-free commits onto staging in order, review that replay, and fast-forward integration to the approved marker; never create a plan merge commit. The only normal user-branch handoff is `git merge --ff-only <integration-branch>`.
 - Fork dependents only from canonical integration HEAD after every dependency is reviewed, integrated, `DONE`, and represented by a reachable completion marker.
 - Record one usage row after every usage-bearing probe or terminal attempt, including terminal attempts without a response. Copy host telemetry when available; otherwise record `unknown`. Never estimate.
 - Route ordinary implementation, staging, verification, review, and reconciliation failures through Saver before asking the user. Ask only after Saver returns `NEEDS_INPUT`; then redispatch it with the answer.

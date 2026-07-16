@@ -31,6 +31,7 @@ Resolve:
 - `gate_log_root`: `<worktree_root>/logs`, outside every integration, candidate, staging, and rescue worktree.
 - `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume.
 - `recovery_state`: per-plan generation IDs, substantive saver rounds, clarification cycles, same-round interruption restarts, accepted replans, and compact failure signatures for the current invocation.
+- `candidate_replay`: the coordinator-recorded replay-base SHA, candidate HEAD, and ordered merge-free commit list for each candidate or rescue artifact.
 
 Read applicable repository instructions before dispatch. Inspect the user's checkout but do not clean, stash, reset, stage, or commit it.
 
@@ -146,13 +147,15 @@ Run each coordinator transaction fail-fast (`set -e` or one checked command per 
 
 For each candidate:
 
-1. Create a new staging branch/worktree from the latest integration HEAD.
-2. Merge the candidate with a non-fast-forward coordinator commit containing `plan-herder(<id>): stage candidate`, or apply its commits in order when repository policy requires linear history.
-3. Resolve no substantive conflict in the coordinator. A conflict is a rescue event.
-4. Confirm the diff is limited to the plan's scope, except generated artifacts explicitly caused by its gates.
-5. Run every plan done criterion and the applicable project-wide gates in the staging worktree.
-6. Create an empty coordinator completion-marker commit with `git commit --allow-empty -m "plan-herder(<id>): mark plan done"`.
-7. Record the staging worktree's clean status and tree SHA, dispatch `plan-reviewer` against the complete staging diff from the pre-plan integration SHA to staging HEAD, and prove both are unchanged after review. Any reviewer mutation is a failed review even if its verdict says APPROVE.
+1. Record the candidate replay base and candidate HEAD. The replay base is the coordinator-recorded branch point before the implementer or Saver changed the artifact; require it to be an ancestor of candidate HEAD.
+2. Enumerate the candidate commits oldest-first with `git rev-list --reverse --first-parent <replay-base>..<candidate-head>`. Require at least one commit, and require `git rev-list --min-parents=2 <replay-base>..<candidate-head>` to be empty. A missing, ambiguous, or merge-bearing commit chain is a rescue event.
+3. Create a new staging branch/worktree from the latest integration HEAD.
+4. Replay the exact ordered candidate commits onto staging with `git cherry-pick`. Never use `git merge`, `--no-ff`, or `--rebase-merges` to stage a plan. Any cherry-pick conflict or empty replay is a rescue event; the coordinator resolves no substantive conflict.
+5. Prove every candidate patch is represented in staging with `git cherry <staging-head> <candidate-head>`: every emitted row must begin with `-`, with no `+` row. Also require `git rev-list --min-parents=2 <staging-base>..HEAD` to be empty so the plan adds no merge node.
+6. Confirm the diff is limited to the plan's scope, except generated artifacts explicitly caused by its gates.
+7. Run every plan done criterion and the applicable project-wide gates in the staging worktree.
+8. Create an empty coordinator completion-marker commit with `git commit --allow-empty -m "plan-herder(<id>): mark plan done"`.
+9. Record the staging worktree's clean status and tree SHA, dispatch `plan-reviewer` against the complete staging diff from the pre-plan integration SHA to staging HEAD, and prove both are unchanged after review. Any reviewer mutation is a failed review even if its verdict says APPROVE.
 
 ### Reviewer prompt contract
 
@@ -177,11 +180,11 @@ RATIONALE: <concise>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Tell the reviewer never to estimate unavailable usage. Prefer structured host telemetry over the reviewer-authored `USAGE` line. Only `APPROVE` with `SCOPE: PASS` can integrate. Verify the integration branch still points to the staging base SHA, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD and review again. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
+Tell the reviewer never to estimate unavailable usage. Prefer structured host telemetry over the reviewer-authored `USAGE` line. Only `APPROVE` with `SCOPE: PASS` can integrate. Verify the integration branch still points to the staging base SHA and the reviewed range contains no merge commit, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD, replay the candidate commits again, and review the rebuilt staging range. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
 
 After `DONE`, prove no worker can still access that plan's candidate or staging worktrees, unlock them, and invoke the cleanup runner with `--plan <id>`. Cleanup refusal or failure is a reported maintenance warning, not a reason to roll back reviewed integration or block dependents; preserve every artifact the runner skips.
 
-If any merge, check, review, or compare-and-advance step fails, leave integration HEAD unchanged and enter rescue.
+If any replay, check, review, or compare-and-advance step fails, leave integration HEAD unchanged and enter rescue.
 
 ## 6. Rescue Before Escalation
 
@@ -252,7 +255,7 @@ Every restarted spawn is still an independently attributable usage attempt. Neve
 
 Handle outcomes:
 
-- `REPAIRED`: treat the rescue branch as the new candidate. Repeat transactional staging, all checks, and independent review. The saver never self-approves.
+- `REPAIRED`: treat the rescue branch as the new candidate and retain the coordinator-recorded rescue branch point as its replay base. Repeat transactional staging, all checks, and independent review. The saver never self-approves.
 - `REPLAN`: validate the evidence and the replan guards below. If accepted, revise the coordinator's plan file and index, validate them through Plans, discard stale staging, increment the plan generation, reset only that new generation's recovery counters, and dispatch a fresh implementer from the new integration HEAD. Do not commit the local plan directory into execution branches.
 - `NEEDS_INPUT`: ensure the question is irreducible and focused, then ask the user exactly that question. Continue unrelated ready plans. After the answer, refresh the rescue branch onto the latest integration HEAD when necessary and automatically dispatch `plan-saver` again with the answer.
 - `TERMINAL`: transition the plan to `BLOCKED` through Plans with a one-line reason and report it; do not fabricate a question.
@@ -285,6 +288,8 @@ Treat saver ledger rows with outcome `INTERRUPTED` as attempts but not substanti
 
 Treat worktree locks as leases. On resume, reconcile native agent states before unlocking a stale Herder lock; keep the worktree locked whenever an agent is active, ambiguous, or could still be retried in the same session.
 
+Reconstruct each candidate or rescue replay base with `git merge-base <artifact-head> <integration-head>`, then verify that the artifact's unique first-parent range is nonempty and merge-free before staging. Never infer the replay set from `integration..artifact`, because integration may contain unrelated plans that landed after the artifact forked.
+
 For `IN PROGRESS`, inspect its candidate branch. If it contains committed work, stage and review it; if it has no usable work, dispatch a fresh implementer. For `BLOCKED`, start with a saver when a rescue branch exists; otherwise create a fresh candidate from integration HEAD and let the saver investigate the plan and repository.
 
 Never trust a `DONE` row alone. Verify its completion marker is reachable from integration HEAD and re-run cheap done criteria when resuming. If a marker is missing or verification fails, transition it to `BLOCKED` through Plans and enter rescue before allowing dependents to start. Conversely, if a reachable marker exists while the index is not DONE, reconcile that status before dispatching dependents. Continue role ordinals after the highest recorded attempt; never duplicate or rewrite a prior usage row.
@@ -305,6 +310,8 @@ Do not merge, push, publish, or deploy. Proof-based automatic cleanup may remove
 - usage subtotals and coverage by plan, role, and model/effort;
 - preserved branches needing attention.
 
+Fire never merges into the user's branch. When its original target branch still points to the run's base commit, report `git merge --ff-only <integration-branch>` as the normal handoff; this adds the reviewed linear commits and completion markers without a merge node. If the target branch moved, report that fast-forward is unavailable and require a fresh replay/review cycle on the new target. Never recommend a non-fast-forward merge, rebasing the user's branch, or removing completion markers to force the handoff.
+
 ## 10. Cleanup
 
 Cleanup is a Fire coordinator operation, never a worker role. For automatic post-`DONE` cleanup or explicit `herder:fire cleanup`, invoke:
@@ -315,7 +322,7 @@ node <cleanup_runner> --repo <repo_root> --plan-dir <plan_dir> --integration-bra
 
 Require the exact integration branch; never infer it for cleanup. Before mutating, prove no active or ambiguous agent can access a targeted worktree. `--dry-run` may inspect an active run but must not unlock anything.
 
-The runner owns the mechanical safety checks. It validates Plans, limits branches to the integration branch's run prefix and recognized candidate/stage/rescue names, and preserves unrecognized artifacts. By default a branch is eligible only when its plan is `DONE`, the exact completion marker is reachable, its tip is an ancestor of integration HEAD, and any attached worktree is unlocked and clean. Delete the worktree first, then delete the ref only if it still points to the preflight SHA.
+The runner owns the mechanical safety checks. It validates Plans, limits branches to the integration branch's run prefix and recognized candidate/stage/rescue names, and preserves unrecognized artifacts. By default a branch is eligible only when its plan is `DONE`, the exact completion marker is reachable, and any attached worktree is unlocked and clean. Staging tips must be ancestors of integration HEAD. Candidate and rescue tips may instead be a merge-free patch-equivalent series proven by `git cherry <integration-head> <artifact-head>` with at least one `-` row and no `+` row. Delete the worktree first, then delete the ref only if it still points to the preflight SHA.
 
 `--include-failed` is valid only when the user explicitly supplied it and the run is stopped. It additionally makes clean, unlocked non-`DONE` candidate/stage/rescue evidence eligible even when unmerged. It never overrides a dirty, locked, missing, or unrecognized worktree and never deletes the integration branch/worktree, gate logs, plan directory, user checkout, or unrelated refs. Do not invent an `--include-failed` authorization during Fire or resume.
 
