@@ -30,7 +30,7 @@ Resolve:
 - `worktree_root`: a temporary directory outside the user's checkout.
 - `gate_log_root`: `<worktree_root>/logs`, outside every integration, candidate, staging, and rescue worktree.
 - `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume.
-- `recovery_state`: per-plan generation IDs, substantive saver rounds, clarification cycles, same-round interruption restarts, accepted replans, and compact failure signatures for the current invocation.
+- `recovery_state`: per-plan generation IDs, substantive saver rounds, clarification cycles, bounded non-capacity interruption restarts, transient-capacity backoff state, accepted replans, and compact failure signatures for the current invocation.
 - `candidate_replay`: the coordinator-recorded replay-base SHA, candidate HEAD, and ordered merge-free commit list for each candidate or rescue artifact.
 
 Read applicable repository instructions before dispatch. Inspect the user's checkout but do not clean, stash, reset, stage, or commit it.
@@ -244,12 +244,24 @@ Classify a saver attempt as `INTERRUPTED` only when every condition holds:
 
 If any condition is unknown or false, record `FAILED`, consume the repair round, preserve the branch, and continue normal rescue handling. Do not infer safety from a missing response alone.
 
-For a proven interruption:
+For every proven interruption:
 
 1. Record exact available usage with outcome `INTERRUPTED` under a new attempt ID.
 2. Do not increment the saver repair-round or user-clarification counters.
-3. Start a fresh agent session for the same round with the next role attempt ordinal. Give it the normal minimal saver prompt plus only the fact that the previous host attempt ended before any repository mutation; do not replay classifier text or prior theories.
-4. Permit at most two same-round interruption restarts. If all are interrupted, transition the plan to `BLOCKED` with an infrastructure/policy reason, preserve the unused substantive recovery budget in the report, and stop that plan. Do not describe this as exhausting the saver repair limit.
+3. Never reuse or resume the interrupted agent session. Any retry uses a fresh agent session for the same round with the next role attempt ordinal and `fork_turns: "none"`. Give it the normal self-contained Saver prompt plus only the fact that the previous host attempt ended before any repository mutation; do not replay classifier text, partial conversation, or prior theories.
+
+After the no-mutation proof, classify the interruption reason from explicit native host evidence:
+
+- **Transient capacity**: the host explicitly reports temporary capacity, overload, retryable rate pressure, or concurrency exhaustion. Never infer capacity from a quiet worker, generic timeout, disconnect, or missing response.
+- **Non-retryable infrastructure**: the host explicitly reports invalid credentials, authorization/configuration failure, exhausted non-renewing quota, or another condition that cannot recover by waiting.
+- **Other host interruption**: any remaining platform, policy/classifier, transport, timeout, disconnect, or session-runtime failure.
+
+Handle the class as follows:
+
+- For transient capacity, do not increment any retry, interruption, clarification, replan, or recovery bound. Keep the rescue lease and logical Saver round intact, then start a fresh Saver after backoff delays of 30 seconds, 60 seconds, 120 seconds, and 300 seconds, remaining capped at 300 seconds for later capacity interruptions. Use a host delayed-wakeup or wait facility when available; never spin or reuse the failed session. Continue until a fresh attempt reaches a non-capacity outcome, the user cancels, a user-supplied deadline expires, or the host cannot keep the run alive.
+- If a capacity wait must stop because of cancellation, deadline, or host lifecycle, transition the plan to `BLOCKED` with detail `infrastructure capacity unavailable; recovery budget preserved`, keep the branch and worktree, and report that `resume` continues the same generation and logical Saver round. Do not describe this as exhausting any retry or repair limit.
+- For non-retryable infrastructure, transition immediately to the same infrastructure `BLOCKED` state without consuming substantive recovery budget.
+- For other host interruptions, permit at most two same-round non-capacity interruption restarts. If both restarts are interrupted, transition the plan to `BLOCKED` with an infrastructure/policy reason, preserve the unused substantive recovery budget in the report, and stop that plan. Do not describe this as exhausting the Saver repair limit.
 
 Every restarted spawn is still an independently attributable usage attempt. Never reuse an interrupted agent session or attempt ID.
 
@@ -264,11 +276,11 @@ Give each plan generation two substantive autonomous Saver repair rounds and two
 
 Bound replanning separately. Accept at most two `REPLAN` outcomes per plan per invocation. Derive a compact failure signature from the failure source plus normalized direct findings, or from failing command fingerprints and exit statuses when findings are absent; exclude generation numbers and commit SHAs. If the same signature survives two consecutive completed implementation generations, reject another `REPLAN` for that signature: Saver must repair it, return `NEEDS_INPUT`, or classify it `TERMINAL`. If a rejected `REPLAN` leaves a substantive round in the current generation, redispatch a fresh Saver with the guard result; otherwise transition the plan to `BLOCKED`.
 
-After a generation's substantive, clarification, interruption-restart, or replan bound is exhausted, transition the plan to `BLOCKED`, preserve the rescue branch, and report the generation plus the exact bound or repeated signature that ended the run. A new explicit `resume` invocation may authorize another bounded cycle.
+After a generation's substantive, clarification, non-capacity interruption-restart, or replan bound is exhausted, transition the plan to `BLOCKED`, preserve the rescue branch, and report the generation plus the exact bound or repeated signature that ended the run. Transient capacity interruptions never exhaust this bound; they stop only under the capacity rules above. A new explicit `resume` invocation may authorize another bounded cycle.
 
 ## 7. Usage Accounting
 
-The root coordinator is the only usage-ledger writer. After every agent attempt reaches a terminal host state, call `plan_manager record-usage` before taking the next lifecycle action. Use an idempotent attempt ID such as `<run-id>-<plan-id>-<role>-<ordinal>`; increment the ordinal for same-round interruption restarts and use plan `RUN` for a final cross-plan reviewer or integration-rescue agent. Record the normalized outcome, including `INTERRUPTED`, so attempt count and substantive recovery count can be reconstructed separately.
+The root coordinator is the only usage-ledger writer. After every agent attempt reaches a terminal host state, call `plan_manager record-usage` before taking the next lifecycle action. Use an idempotent attempt ID such as `<run-id>-<plan-id>-<role>-<ordinal>`; increment the ordinal for every interruption restart, including capacity retries, and use plan `RUN` for a final cross-plan reviewer or integration-rescue agent. Record the normalized outcome, including `INTERRUPTED`, so attempt count and substantive recovery count can be reconstructed separately.
 
 Attribute the configured model and effort resolved before dispatch. Prefer host-reported effective model/effort and structured usage over configured values and the worker's envelope when those fields are exposed. On Codex, after a child reaches a terminal state, run `node <codex_evidence_reader> --agent <returned-canonical-task-name> --pretty`. Require its `agentRole` to match the requested custom profile and its `multiAgentVersion` to be `v2`; a mismatch is a routing failure. Use its `terminal.taskComplete`, `terminal.turnAborted`, and `terminal.finalEnvelopePresent` fields together with the native agent state when classifying interruptions; `taskComplete` alone is insufficient. When its `usage` is present, copy the exact fields and source `codex-multi-agent-v2-transcript`. If no uniquely attributable terminal usage exists, record every token field as `unknown` with source `unknown`. On Claude, copy structured host telemetry when available and otherwise use `unknown`. Never tokenize transcripts, subtract coordinator totals, or infer hidden reasoning.
 
@@ -284,7 +296,7 @@ Reconstruct state from:
 - branch ancestry and worktree cleanliness.
 - the manager-generated usage ledger and existing attempt IDs.
 
-Treat saver ledger rows with outcome `INTERRUPTED` as attempts but not substantive repair rounds. Anchor the resumed cycle's initial generation to the current validated snapshot and usable candidate; prior `REPLAN` rows remain history, but their old counter buckets need not be recreated. Never infer a reset from a staging rebuild or Saver commit. Continue attempt ordinals after every prior row. An explicit resume starts a new bounded recovery cycle, but never rewrites or drops prior usage.
+Treat saver ledger rows with outcome `INTERRUPTED` as attempts but not substantive repair rounds. Anchor the resumed cycle's initial generation to the current validated snapshot and usable candidate; prior `REPLAN` rows remain history, but their old counter buckets need not be recreated. Never infer a reset from a staging rebuild or Saver commit. Continue attempt ordinals after every prior row. When the plan is `BLOCKED` with detail `infrastructure capacity unavailable; recovery budget preserved` and the no-mutation proof still holds, resume the same generation and logical Saver round with a fresh session and restart capacity backoff at 30 seconds. Other explicit resumes start a new bounded recovery cycle. Never rewrite or drop prior usage.
 
 Treat worktree locks as leases. On resume, reconcile native agent states before unlocking a stale Herder lock; keep the worktree locked whenever an agent is active, ambiguous, or could still be retried in the same session.
 
