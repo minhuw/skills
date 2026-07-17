@@ -25,7 +25,7 @@ claude plugin validate plugins/herder --strict
 git diff --check
 ```
 
-The Fire script tests cover native agent-evidence extraction, coordinator gate isolation, severity-gated review convergence, stable finding ledgers, bounded broad discovery, targeted verification, compact Saver failure envelopes, per-generation recovery guards, uncounted transient-capacity backoff, bounded non-capacity interruptions, linear cherry-pick integration, and fail-closed cleanup. The cleanup fixture proves dry-run behavior, ancestor and merge-free patch-equivalent `DONE` cleanup, rejection of unmatched candidate patches, default preservation of failed evidence, explicit clean failed-evidence deletion, and preservation of dirty, unrecognized, unreachable, integration, and log state.
+The Fire script tests cover native agent-evidence extraction by agent and worktree, coordinator gate isolation, severity-gated review convergence, stable finding ledgers, bounded broad discovery, targeted verification, compact Saver failure envelopes, per-generation recovery guards, uncounted transient-capacity backoff, bounded non-capacity interruptions, linear cherry-pick integration, and fail-closed cleanup. The cleanup fixture proves dry-run behavior, complete clean/unlocked `DONE` artifact cleanup (including superseded failed attempts), default preservation of non-`DONE` evidence, explicit clean failed-evidence deletion, and preservation of dirty, locked, unrecognized, markerless, integration, and log state.
 
 Use `uv run --with pyyaml python ...` when the validation scripts' Python environment does not already contain PyYAML.
 

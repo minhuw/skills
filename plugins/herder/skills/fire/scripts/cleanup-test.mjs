@@ -160,6 +160,14 @@ try {
   const unmatchedCandidate = addWorktree(repo, worktrees, unmatchedCandidateBranch, "main")
   commitFile(unmatchedCandidate, "unmatched.txt", "unmatched\n", "test: unmatched candidate patch")
 
+  const dirtyDoneBranch = `plan-herder/${runId}/001-rescue-1`
+  const dirtyDone = addWorktree(repo, worktrees, dirtyDoneBranch, integrationBranch)
+  fs.writeFileSync(path.join(dirtyDone, "uncommitted-done.txt"), "preserve me\n")
+
+  const lockedDoneBranch = `plan-herder/${runId}/001-stage-100`
+  const lockedDone = addWorktree(repo, worktrees, lockedDoneBranch, integrationBranch)
+  git(repo, "worktree", "lock", "--reason", "plan-herder:test:done-active", lockedDone)
+
   const failedBranch = `plan-herder/${runId}/002-candidate`
   const failed = addWorktree(repo, worktrees, failedBranch, integrationBranch)
   commitFile(failed, "failed.txt", "failed\n", "test: preserved failed candidate")
@@ -185,32 +193,42 @@ try {
   const preview = cleanupResult(repo, planDir, integrationBranch, ["--dry-run"]).json
   assert.deepEqual(
     preview.actions.map((item) => item.branch).sort(),
-    [candidateBranch, stageBranch].sort(),
+    [candidateBranch, stageBranch, unreachableBranch, unmatchedCandidateBranch].sort(),
     JSON.stringify(preview, null, 2),
   )
   assert.equal(preview.actions.find((item) => item.branch === candidateBranch).proof, "patch-equivalent")
   assert.equal(preview.actions.find((item) => item.branch === stageBranch).proof, "ancestor")
+  assert.equal(preview.actions.find((item) => item.branch === unreachableBranch).proof, "superseded-by-completion")
+  assert.equal(preview.actions.find((item) => item.branch === unmatchedCandidateBranch).proof, "superseded-by-completion")
   assert.equal(preview.removed.length, 0)
   assert.equal(preview.skipped.find((item) => item.branch === failedBranch).reason, "preserved-non-done-evidence")
   assert.equal(preview.skipped.find((item) => item.branch === dirtyBranch).reason, "preserved-non-done-evidence")
   assert.equal(preview.skipped.find((item) => item.branch === lockedBranch).reason, "preserved-non-done-evidence")
-  assert.equal(preview.skipped.find((item) => item.branch === unreachableBranch).reason, "artifact-not-reachable-from-integration")
-  assert.equal(preview.skipped.find((item) => item.branch === unmatchedCandidateBranch).reason, "artifact-not-reachable-from-integration")
+  assert.equal(preview.skipped.find((item) => item.branch === dirtyDoneBranch).reason, "worktree-dirty")
+  assert.equal(preview.skipped.find((item) => item.branch === lockedDoneBranch).reason, "worktree-locked")
   assert.equal(preview.skipped.find((item) => item.branch === markerlessBranch).reason, "completion-marker-missing")
   assert.equal(preview.skipped.find((item) => item.branch === unknownBranch).reason, "unrecognized-run-artifact")
   assert.equal(fs.existsSync(candidate), true)
   assert.equal(fs.existsSync(stage), true)
 
   const scopedPreview = cleanupResult(repo, planDir, integrationBranch, ["--plan", "1", "--dry-run"]).json
-  assert.deepEqual(scopedPreview.actions.map((item) => item.branch).sort(), [candidateBranch, stageBranch].sort())
+  assert.deepEqual(
+    scopedPreview.actions.map((item) => item.branch).sort(),
+    [candidateBranch, stageBranch, unreachableBranch, unmatchedCandidateBranch].sort(),
+  )
   assert.equal(scopedPreview.skipped.some((item) => item.plan === "002" || item.plan === "003"), false)
 
   const cleaned = cleanupResult(repo, planDir, integrationBranch).json
-  assert.deepEqual(cleaned.removed.map((item) => item.branch).sort(), [candidateBranch, stageBranch].sort())
+  assert.deepEqual(
+    cleaned.removed.map((item) => item.branch).sort(),
+    [candidateBranch, stageBranch, unreachableBranch, unmatchedCandidateBranch].sort(),
+  )
   assert.equal(fs.existsSync(candidate), false)
   assert.equal(fs.existsSync(stage), false)
   assert.equal(git(repo, "branch", "--list", candidateBranch), "")
   assert.equal(git(repo, "branch", "--list", stageBranch), "")
+  assert.equal(git(repo, "branch", "--list", unreachableBranch), "")
+  assert.equal(git(repo, "branch", "--list", unmatchedCandidateBranch), "")
   assert.notEqual(git(repo, "branch", "--list", integrationBranch), "")
   assert.equal(fs.existsSync(integration), true)
   assert.notEqual(git(repo, "branch", "--list", failedBranch), "")
@@ -231,8 +249,8 @@ try {
   assert.equal(fs.existsSync(locked), true)
   assert.notEqual(git(repo, "branch", "--list", lockedBranch), "")
   assert.notEqual(git(repo, "branch", "--list", markerlessBranch), "")
-  assert.notEqual(git(repo, "branch", "--list", unreachableBranch), "")
-  assert.notEqual(git(repo, "branch", "--list", unmatchedCandidateBranch), "")
+  assert.notEqual(git(repo, "branch", "--list", dirtyDoneBranch), "")
+  assert.notEqual(git(repo, "branch", "--list", lockedDoneBranch), "")
   assert.notEqual(git(repo, "branch", "--list", unknownBranch), "")
   assert.notEqual(git(repo, "branch", "--list", integrationBranch), "")
 

@@ -198,6 +198,20 @@ function jsonlFiles(directory) {
   return files
 }
 
+function canonicalPath(value) {
+  const absolute = path.resolve(value)
+  try {
+    return fs.realpathSync.native(absolute)
+  } catch {
+    return absolute
+  }
+}
+
+function isInsidePath(parent, candidate) {
+  const relative = path.relative(canonicalPath(parent), canonicalPath(candidate))
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+}
+
 function nativeAgentEvidence(codexHome, evidenceReader) {
   const evidence = []
   for (const file of jsonlFiles(path.join(codexHome, "sessions"))) {
@@ -671,7 +685,7 @@ function main() {
         assert.equal(agentEvidence.every((item) => item.multiAgentVersion === "v2"), true)
         assert.equal(agentEvidence.every((item) => item.userMessageCount === 0 && item.taskMessageCount === 1), true, "child context was not isolated")
         assert.equal(agentEvidence.every((item) => item.cwd === project), true, "child session did not inherit the intended repository context")
-        assert.equal(agentEvidence.every((item) => item.executionWorkdirs.length > 0 && item.executionWorkdirs.every((workdir) => workdir.startsWith(fireRoot))), true, "child command escaped the disposable Fire worktree root")
+        assert.equal(agentEvidence.every((item) => item.executionWorkdirs.length > 0 && item.executionWorkdirs.every((workdir) => isInsidePath(fireRoot, workdir))), true, "child command escaped the disposable Fire worktree root")
         assert.equal(agentEvidence.every((item) => item.usage && Number.isSafeInteger(item.usage.inputTokens)), true)
         const implementers = agentEvidence.filter((item) => item.agentRole === "plan_implementer")
         const reviewers = agentEvidence.filter((item) => item.agentRole === "plan_reviewer")

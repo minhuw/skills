@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { opendir, readFile } from "node:fs/promises"
+import { realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import process from "node:process"
@@ -10,27 +11,31 @@ class UsageError extends Error {}
 function parseArgs(argv) {
   const options = {
     agent: "",
+    workdir: "",
     codexHome: process.env.CODEX_HOME || path.join(homedir(), ".codex"),
     pretty: false,
   }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === "--pretty") options.pretty = true
-    else if (["--agent", "--agent-id", "--codex-home"].includes(argument)) {
+    else if (["--agent", "--agent-id", "--workdir", "--codex-home"].includes(argument)) {
       const value = argv[index + 1]
       if (!value || value.startsWith("--")) throw new UsageError(`${argument} requires a value`)
       index += 1
       if (["--agent", "--agent-id"].includes(argument)) options.agent = value
+      else if (argument === "--workdir") options.workdir = path.resolve(value)
       else options.codexHome = path.resolve(value)
     } else if (["--help", "-h"].includes(argument)) options.help = true
     else throw new UsageError(`Unknown argument: ${argument}`)
   }
-  if (!options.help && !options.agent) throw new UsageError("--agent is required")
+  if (!options.help && Boolean(options.agent) === Boolean(options.workdir)) {
+    throw new UsageError("exactly one of --agent or --workdir is required")
+  }
   return options
 }
 
 function usage() {
-  return `Usage: read-codex-agent-evidence.mjs --agent <id-or-canonical-task-name> [--codex-home <path>] [--pretty]\n`
+  return `Usage: read-codex-agent-evidence.mjs (--agent <id-or-canonical-task-name> | --workdir <absolute-path>) [--codex-home <path>] [--pretty]\n`
 }
 
 async function *jsonlFiles(directory) {
@@ -69,10 +74,20 @@ function toolWorkdirs(input) {
   return workdirs
 }
 
-function parseSession(text, agent, file) {
+function canonicalPath(value) {
+  const absolute = path.resolve(value)
+  try {
+    return realpathSync.native(absolute)
+  } catch {
+    return absolute
+  }
+}
+
+function parseSession(text, options, file) {
   let meta = null
   let context = null
   let tokenUsage = null
+  let lastEventAt = null
   let userMessageCount = 0
   let taskMessageCount = 0
   let taskComplete = false
@@ -87,10 +102,9 @@ function parseSession(text, agent, file) {
     } catch {
       continue
     }
+    if (typeof event.timestamp === "string") lastEventAt = event.timestamp
     if (event.type === "session_meta") {
-      const payload = event.payload || {}
-      const spawn = payload.source?.subagent?.thread_spawn || {}
-      if ([payload.id, payload.session_id, payload.agent_path, spawn.agent_path].includes(agent)) meta = payload
+      meta = event.payload || {}
     }
     if (event.type === "turn_context") context = event.payload || null
     if (event.type === "event_msg" && event.payload?.type === "user_message") userMessageCount += 1
@@ -122,9 +136,18 @@ function parseSession(text, agent, file) {
   }
   if (!meta) return null
   const spawn = meta.source?.subagent?.thread_spawn || {}
+  const aliases = [meta.id, meta.session_id, meta.agent_path, spawn.agent_path]
+  const cwd = context?.cwd || meta.cwd || null
+  if (options.agent && !aliases.includes(options.agent)) return null
+  if (options.workdir) {
+    const matchingWorkdir = [cwd, ...executionWorkdirs].some((candidate) => (
+      typeof candidate === "string" && canonicalPath(candidate) === canonicalPath(options.workdir)
+    ))
+    if (!matchingWorkdir) return null
+  }
   return {
     ok: true,
-    lookup: agent,
+    lookup: options.agent || options.workdir,
     agentId: meta.id || meta.session_id || null,
     transcript: file,
     threadSource: meta.thread_source || null,
@@ -138,8 +161,9 @@ function parseSession(text, agent, file) {
     effort: context?.effort || null,
     sandbox: context?.sandbox_policy?.type || null,
     approvalPolicy: context?.approval_policy || null,
-    cwd: context?.cwd || meta.cwd || null,
+    cwd,
     executionWorkdirs: [...executionWorkdirs],
+    lastEventAt,
     userMessageCount,
     taskMessageCount,
     terminal: {
@@ -152,12 +176,26 @@ function parseSession(text, agent, file) {
 }
 
 async function findEvidence(options) {
-  const sessions = path.join(options.codexHome, "sessions")
-  for await (const file of jsonlFiles(sessions)) {
-    const evidence = parseSession(await readFile(file, "utf8"), options.agent, file)
-    if (evidence) return evidence
+  const matches = []
+  for (const directory of ["sessions", "archived_sessions"]) {
+    for await (const file of jsonlFiles(path.join(options.codexHome, directory))) {
+      const evidence = parseSession(await readFile(file, "utf8"), options, file)
+      if (!evidence) continue
+      if (options.agent) return evidence
+      matches.push(evidence)
+    }
   }
-  return { ok: false, lookup: options.agent, error: "No persisted Codex session matched the agent ID or canonical task name" }
+  if (options.workdir && matches.length > 0) {
+    matches.sort((left, right) => String(right.lastEventAt).localeCompare(String(left.lastEventAt)))
+    return { ok: true, lookup: options.workdir, workdir: options.workdir, agents: matches }
+  }
+  return {
+    ok: false,
+    lookup: options.agent || options.workdir,
+    error: options.agent
+      ? "No persisted Codex session matched the agent ID or canonical task name"
+      : "No persisted Codex session used the requested worktree",
+  }
 }
 
 const options = parseArgs(process.argv.slice(2))

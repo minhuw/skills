@@ -68,7 +68,7 @@ plan-herder/<run-id>/<plan-id>-rescue-<attempt>
 
 The coordinator creates branches and worktrees. When the host can spawn directly into a supplied isolated worktree, use that facility. Otherwise create the Git worktree first and pass its absolute path to the agent.
 
-Lock a candidate, staging, or rescue worktree with `git worktree lock --reason plan-herder:<run-id>:<plan-id>:<role>` while an agent can still access it. Only the root coordinator may unlock it, and only after the agent is terminal and no retry can reuse that session. A lock is a cleanup lease, not lifecycle state; Plans remains the sole plan-state owner.
+Lock a candidate, staging, or rescue worktree with `git worktree lock --reason plan-herder:<run-id>:<plan-id>:<role>:<attempt-id>:<task-name>` while an agent can still access it. Use the stable attempt ID and requested task name so a resumed coordinator can identify the prior owner before it has native agent state. Only the root coordinator may unlock it, and only after the agent is terminal and no retry can reuse that session. A lock is a cleanup lease, not lifecycle state; Plans remains the sole plan-state owner.
 
 For a Codex attempt, call the native Multi-Agent V2 spawn tool with:
 
@@ -82,6 +82,10 @@ Omit `model`, `reasoning_effort`, and `service_tier`. The custom agent definitio
 Keep the coordinator shell anchored in the user's stable original checkout or another stable directory. Execute every Git command with `git -C <absolute-worktree>` and every non-Git command with an explicit tool workdir or scoped `(cd <absolute-worktree> && ...)` subshell. Never depend on an ambient `cwd`, and never remove or recreate the directory containing the coordinator process.
 
 Keep one candidate branch per plan. On resume, inspect an existing candidate branch and its commits rather than overwriting it. Recreate a missing worktree from the branch when necessary.
+
+Before creating any candidate, staging, or rescue branch, inventory the recognized branches and worktrees for that plan. Reuse an existing artifact when its branch, base, replay commits, cleanliness, and lease state match the lifecycle step. Never create a second staging or rescue artifact merely because the coordinator resumed, lost conversational context, or has not yet reconciled an old lock.
+
+Implementers and Savers may run in parallel, but serialize staging, review, and integration advancement across the run. From creation or validated reuse of a staging artifact until its review/integration transaction reaches a terminal result, do not advance integration for another plan. This prevents an unrelated fast-forward from invalidating several live stages and forcing branch-generating replays.
 
 ## 4. Dispatch Ready Plans
 
@@ -150,7 +154,7 @@ For each candidate:
 
 1. Record the candidate replay base and candidate HEAD. The replay base is the coordinator-recorded branch point before the implementer or Saver changed the artifact; require it to be an ancestor of candidate HEAD.
 2. Enumerate the candidate commits oldest-first with `git rev-list --reverse --first-parent <replay-base>..<candidate-head>`. Require at least one commit, and require `git rev-list --min-parents=2 <replay-base>..<candidate-head>` to be empty. A missing, ambiguous, or merge-bearing commit chain is a rescue event.
-3. Create a new staging branch/worktree from the latest integration HEAD.
+3. Reuse a clean, unlocked staging branch/worktree only when its recorded integration base, candidate HEAD, and ordered replay list exactly match this transaction and no agent can still access it. Otherwise create one new staging branch/worktree from the latest integration HEAD. Never keep two live staging transactions for the same plan.
 4. Replay the exact ordered candidate commits onto staging with `git cherry-pick`. Never use `git merge`, `--no-ff`, or `--rebase-merges` to stage a plan. Any cherry-pick conflict or empty replay is a rescue event; the coordinator resolves no substantive conflict.
 5. Prove every candidate patch is represented in staging with `git cherry <staging-head> <candidate-head>`: every emitted row must begin with `-`, with no `+` row. Also require `git rev-list --min-parents=2 <staging-base>..HEAD` to be empty so the plan adds no merge node.
 6. Confirm material behavior is limited to the plan's scope. Apply the review acceptance policy below to incidental formatting, generated artifacts caused by gates, and other nonfunctional churn instead of treating their mere presence as a failed transaction.
@@ -209,7 +213,7 @@ USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; ou
 
 Tell the reviewer never to estimate unavailable usage. Prefer structured host telemetry over the reviewer-authored `USAGE` line. Integrate only after the normalized gate is effective `APPROVE` with effective `SCOPE: PASS`, all required checks pass, and the ledger contains no `OPEN` or `NEEDS_ADJUDICATION` blocker. Verify the integration branch still points to the staging base SHA and the reviewed range contains no merge commit, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD, replay the candidate commits again, and verify the unchanged plan patch without consuming another discovery pass. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
 
-After `DONE`, prove no worker can still access that plan's candidate or staging worktrees, unlock them, and invoke the cleanup runner with `--plan <id>`. Cleanup refusal or failure is a reported maintenance warning, not a reason to roll back reviewed integration or block dependents; preserve every artifact the runner skips.
+After `DONE`, prove no worker can still access any recognized candidate, rescue, or staging artifact for that plan, unlock its worktrees, and invoke the cleanup runner with `--plan <id>`. Cleanup refusal or failure is a reported maintenance warning, not a reason to roll back reviewed integration or block dependents; preserve every artifact the runner skips.
 
 If any replay, check, review, or compare-and-advance step fails, leave integration HEAD unchanged and enter rescue.
 
@@ -325,7 +329,19 @@ Reconstruct state from:
 
 Treat saver ledger rows with outcome `INTERRUPTED` as attempts but not substantive repair rounds. Anchor the resumed cycle's initial generation to the current validated snapshot and usable candidate; prior `REPLAN` rows remain history, but their old counter buckets need not be recreated. Reconstruct review state from retained reviewer final envelopes, reviewed staging artifacts, and stable finding IDs; a resume or staging rebuild never resets the broad-review count or finding ledger. If review state cannot be reconstructed unambiguously, treat the broad-pass budget as exhausted and route any new blocker outside a proven repair delta to human adjudication rather than restarting discovery. Never infer a reset from a staging rebuild or Saver commit. Continue attempt ordinals after every prior row. When the plan is `BLOCKED` with detail `infrastructure capacity unavailable; recovery budget preserved` and the no-mutation proof still holds, resume the same generation and logical Saver round with a fresh session and restart capacity backoff at 30 seconds. Other explicit resumes start a new bounded recovery cycle but do not reset review state. Never rewrite or drop prior usage.
 
-Treat worktree locks as leases. On resume, reconcile native agent states before unlocking a stale Herder lock; keep the worktree locked whenever an agent is active, ambiguous, or could still be retried in the same session.
+Treat worktree locks as leases. On resume, reconcile native agent states before unlocking a stale Herder lock; keep the worktree locked whenever an agent is active, ambiguous, or could still be retried in the same session. On Codex, use `node <codex_evidence_reader> --workdir <absolute-worktree> --pretty` to find persisted child sessions that used the artifact, then correlate their canonical task names, roles, terminal envelopes, and attempt IDs with the structured lock reason and usage ledger.
+
+Subagent conversational context is not a resume dependency. Never ask a fresh child to continue an interrupted child's conversation, and never assume a new coordinator can attach to a child owned by another root session. Reconstruct direct state from Git, the worktree, compact gate evidence, the finding ledger, usage rows, and persisted child telemetry; every replacement child receives a fresh self-contained prompt with `fork_turns: "none"`.
+
+Classify every retained artifact before creating a branch or dispatching a child:
+
+- If its recorded owner is active, keep the lease and let the same coordinator wait. A fresh coordinator must not dispatch a competing child.
+- If the owner is terminal with a parseable envelope, record its usage, unlock the worktree, and continue from that outcome.
+- If the owner was interrupted and the worktree is clean with unchanged HEAD and tree, record `INTERRUPTED` and use a fresh agent for the same logical attempt.
+- If a dirty candidate, rescue, or staging worktree has no active owner or final envelope, preserve and lock the exact worktree, classify the prior attempt as failed, and dispatch a fresh Saver there. Never reset, clean, stash, or replace half-finished edits merely to recover a clean branch.
+- If a clean candidate or rescue contains committed merge-free work, treat it as the usable candidate and stage those commits.
+- If a clean staging artifact still has the exact current base and replay, continue the first missing gate, review, or compare-and-advance step. Rerun evidence that cannot be reconstructed; do not create a replacement stage solely because coordinator context was compacted.
+- If ownership or mutation state remains ambiguous, keep the artifact locked and stop that plan for reconciliation instead of guessing.
 
 Reconstruct each candidate or rescue replay base with `git merge-base <artifact-head> <integration-head>`, then verify that the artifact's unique first-parent range is nonempty and merge-free before staging. Never infer the replay set from `integration..artifact`, because integration may contain unrelated plans that landed after the artifact forked.
 
@@ -362,7 +378,7 @@ node <cleanup_runner> --repo <repo_root> --plan-dir <plan_dir> --integration-bra
 
 Require the exact integration branch; never infer it for cleanup. Before mutating, prove no active or ambiguous agent can access a targeted worktree. `--dry-run` may inspect an active run but must not unlock anything.
 
-The runner owns the mechanical safety checks. It validates Plans, limits branches to the integration branch's run prefix and recognized candidate/stage/rescue names, and preserves unrecognized artifacts. By default a branch is eligible only when its plan is `DONE`, the exact completion marker is reachable, and any attached worktree is unlocked and clean. Staging tips must be ancestors of integration HEAD. Candidate and rescue tips may instead be a merge-free patch-equivalent series proven by `git cherry <integration-head> <artifact-head>` with at least one `-` row and no `+` row. Delete the worktree first, then delete the ref only if it still points to the preflight SHA.
+The runner owns the mechanical safety checks. It validates Plans, limits branches to the integration branch's run prefix and recognized candidate/stage/rescue names, and preserves unrecognized artifacts. By default a branch is eligible only when its plan is `DONE`, the exact completion marker is reachable, and any attached worktree is unlocked and clean. Classify an ancestor as `ancestor`, a merge-free artifact whose patch series is fully represented in integration as `patch-equivalent`, and every other recognized artifact for that completed plan as `superseded-by-completion`. The reachable reviewed completion marker is the authority for delivered code; unmatched failed attempts remain only while the plan is non-`DONE`. Delete the worktree first, then delete the ref only if it still points to the preflight SHA.
 
 `--include-failed` is valid only when the user explicitly supplied it and the run is stopped. It additionally makes clean, unlocked non-`DONE` candidate/stage/rescue evidence eligible even when unmerged. It never overrides a dirty, locked, missing, or unrecognized worktree and never deletes the integration branch/worktree, gate logs, plan directory, user checkout, or unrelated refs. Do not invent an `--include-failed` authorization during Fire or resume.
 

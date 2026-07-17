@@ -215,13 +215,12 @@ export function cleanupRun(input) {
       }
       if (isAncestor(repoRoot, item.head, integrationHead)) {
         proof = "ancestor"
-      } else if ((identity.kind.startsWith("candidate") || identity.kind.startsWith("rescue")) && isPatchEquivalent(repoRoot, item.head, integrationHead)) {
+      } else if (isPatchEquivalent(repoRoot, item.head, integrationHead)) {
         proof = "patch-equivalent"
       } else {
-        skipped.push({ branch: item.branch, plan: plan.id, status: plan.status, reason: "artifact-not-reachable-from-integration" })
-        continue
+        proof = "superseded-by-completion"
       }
-      mode = "integrated"
+      mode = "completed-plan"
     } else if (input.includeFailed) {
       mode = "failed-evidence"
     } else {
@@ -251,7 +250,7 @@ export function cleanupRun(input) {
       mode,
       proof,
       worktree: state.path,
-      operations: [...(state.path ? ["remove-worktree"] : []), mode === "integrated" ? "delete-proven-branch" : "delete-failed-evidence-branch"],
+      operations: [...(state.path ? ["remove-worktree"] : []), mode === "completed-plan" ? "delete-completed-plan-artifact" : "delete-failed-evidence-branch"],
     })
   }
 

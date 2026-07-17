@@ -13,11 +13,18 @@ const reader = path.join(scriptDir, "read-codex-agent-evidence.mjs")
 const gateRunner = path.join(scriptDir, "run-gate.mjs")
 const root = await mkdtemp(path.join(tmpdir(), "herder-agent-evidence-test-"))
 const sessions = path.join(root, "sessions", "2026", "07", "15")
+const archivedSessions = path.join(root, "archived_sessions")
+const candidateReal = path.join(root, "candidate-real")
+const candidateAlias = path.join(root, "candidate-alias")
 const agentId = "019f0000-0000-7000-8000-000000000001"
 const interruptedAgentId = "019f0000-0000-7000-8000-000000000002"
+const priorAgentId = "019f0000-0000-7000-8000-000000000003"
 
 try {
   await mkdir(sessions, { recursive: true })
+  await mkdir(archivedSessions, { recursive: true })
+  await mkdir(candidateReal)
+  await symlink(candidateReal, candidateAlias)
   const events = [
     {
       type: "session_meta",
@@ -32,7 +39,7 @@ try {
     {
       type: "turn_context",
       payload: {
-        cwd: "/tmp/candidate",
+        cwd: candidateReal,
         model: "gpt-5.6-luna",
         effort: "max",
         multi_agent_version: "v2",
@@ -45,7 +52,7 @@ try {
       payload: {
         type: "custom_tool_call",
         name: "exec",
-        input: 'const r = await tools.exec_command({ cmd: "npm test", workdir: "/tmp/candidate" });',
+        input: `const r = await tools.exec_command({ cmd: "npm test", workdir: ${JSON.stringify(candidateReal)} });`,
       },
     },
     { type: "event_msg", payload: { type: "user_message", message: "self-contained plan" } },
@@ -56,9 +63,24 @@ try {
         info: { total_token_usage: { input_tokens: 101, cached_input_tokens: 20, output_tokens: 31, reasoning_output_tokens: 11 } },
       },
     },
-    { type: "event_msg", payload: { type: "task_complete", last_agent_message: "STATUS: COMPLETE" } },
+    { timestamp: "2026-07-15T12:00:00Z", type: "event_msg", payload: { type: "task_complete", last_agent_message: "STATUS: COMPLETE" } },
   ]
   await writeFile(path.join(sessions, "rollout.jsonl"), `${events.map(JSON.stringify).join("\n")}\n`)
+
+  const priorEvents = [
+    {
+      type: "session_meta",
+      payload: {
+        id: priorAgentId,
+        parent_thread_id: "prior-parent",
+        thread_source: "subagent",
+        source: { subagent: { thread_spawn: { agent_path: "/root/prior-001", agent_role: "plan_saver" } } },
+      },
+    },
+    { type: "turn_context", payload: { cwd: candidateReal, model: "gpt-5.6-sol", effort: "xhigh" } },
+    { timestamp: "2026-07-14T12:00:00Z", type: "event_msg", payload: { type: "task_complete" } },
+  ]
+  await writeFile(path.join(archivedSessions, "rollout-prior.jsonl"), `${priorEvents.map(JSON.stringify).join("\n")}\n`)
 
   const interruptedEvents = [
     {
@@ -97,7 +119,7 @@ try {
   assert.equal(evidence.effort, "max")
   assert.equal(evidence.multiAgentVersion, "v2")
   assert.equal(evidence.sandbox, "workspace-write")
-  assert.deepEqual(evidence.executionWorkdirs, ["/tmp/candidate"])
+  assert.deepEqual(evidence.executionWorkdirs, [candidateReal])
   assert.equal(evidence.userMessageCount, 1)
   assert.equal(evidence.taskMessageCount, 0)
   assert.deepEqual(evidence.terminal, {
@@ -115,6 +137,15 @@ try {
 
   const byTask = JSON.parse(execFileSync(process.execPath, [reader, "--agent", "/root/run-001", "--codex-home", root], { encoding: "utf8" }))
   assert.equal(byTask.agentId, agentId)
+
+  const byWorkdir = JSON.parse(execFileSync(process.execPath, [reader, "--workdir", candidateAlias, "--codex-home", root], { encoding: "utf8" }))
+  assert.equal(byWorkdir.ok, true)
+  assert.equal(byWorkdir.workdir, candidateAlias)
+  assert.deepEqual(byWorkdir.agents.map((item) => item.agentId), [agentId, priorAgentId])
+
+  const archived = JSON.parse(execFileSync(process.execPath, [reader, "--agent-id", priorAgentId, "--codex-home", root], { encoding: "utf8" }))
+  assert.equal(archived.agentRole, "plan_saver")
+  assert.equal(archived.transcript, path.join(archivedSessions, "rollout-prior.jsonl"))
 
   const interrupted = JSON.parse(execFileSync(process.execPath, [reader, "--agent-id", interruptedAgentId, "--codex-home", root], { encoding: "utf8" }))
   assert.equal(interrupted.agentRole, "plan_saver")
@@ -166,6 +197,11 @@ try {
   assert.match(protocol, /infrastructure capacity unavailable; recovery budget preserved/)
   assert.doesNotMatch(protocol, /at most two same-round interruption restarts/)
   assert.match(protocol, /git worktree lock --reason plan-herder:/)
+  assert.match(protocol, /serialize staging, review, and integration advancement/i)
+  assert.match(protocol, /Never ask a fresh child to continue an interrupted child's conversation/)
+  assert.match(protocol, /--workdir <absolute-worktree>/)
+  assert.match(protocol, /dirty candidate, rescue, or staging worktree.*exact worktree/i)
+  assert.match(protocol, /superseded-by-completion/)
   assert.match(protocol, /Proof-based automatic cleanup may remove clean `DONE` artifacts/)
   assert.match(protocol, /never deletes the integration branch\/worktree, gate logs, plan directory, user checkout, or unrelated refs/)
 
