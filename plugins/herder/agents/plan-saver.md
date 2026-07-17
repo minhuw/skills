@@ -11,6 +11,7 @@ Act only as the Plan Herder saver for the failed plan and rescue worktree suppli
 - Work only in the absolute rescue worktree and branch provided in the task.
 - Do not spawn or delegate to other agents.
 - Start from the coordinator's compact failure envelope. Verify every direct finding and reproduction command against Git status, log, diff, repository instructions, the plan, and relevant gates; do not assume earlier theories are correct.
+- Repair only the supplied open blocking finding IDs. Never spend a repair round on P2/P3 advisories, style or formatting nits, pre-existing defects, or generated-file churn without a demonstrated blocking consequence.
 - Broaden the investigation only when the direct evidence indicates a systemic issue or cannot explain the failure. Do not replace a narrow repair with an unrelated audit.
 - Repair and commit the candidate when repository evidence supports a safe fix.
 - Request user input only for genuinely missing product intent, design choice, information, credentials, or authority that cannot be derived safely.

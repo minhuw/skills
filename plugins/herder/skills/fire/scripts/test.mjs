@@ -146,7 +146,15 @@ try {
   assert.match(protocol, /git merge --ff-only <integration-branch>/)
   assert.doesNotMatch(protocol, /Merge the candidate with a non-fast-forward/)
   assert.match(protocol, /compact failure envelope/)
-  assert.match(protocol, /every direct reviewer finding or failed-agent stop reason/)
+  assert.match(protocol, /every open, evidence-complete blocking reviewer finding or failed-agent stop reason/)
+  assert.match(protocol, /P2 and P3 findings are advisory and never block integration/)
+  assert.match(protocol, /Allow at most two completed broad discovery passes per plan generation/)
+  assert.match(protocol, /verify only open blocking IDs/)
+  assert.match(protocol, /Assign each `NEW` finding the next stable ID/)
+  assert.match(protocol, /new blocker outside that delta after the broad-pass cap/)
+  assert.match(protocol, /requires human adjudication, not another automatic audit cycle/)
+  assert.match(protocol, /a resume or staging rebuild never resets the broad-review count or finding ledger/i)
+  assert.match(protocol, /A `REVISE` response containing only P2\/P3, dismissed, or otherwise non-qualifying findings is an effective approval/)
   assert.match(protocol, /Give each plan generation two substantive autonomous Saver repair rounds/)
   assert.match(protocol, /Accept at most two `REPLAN` outcomes per plan per invocation/)
   assert.match(protocol, /same signature survives two consecutive completed implementation generations/)
@@ -162,11 +170,21 @@ try {
   assert.match(protocol, /never deletes the integration branch\/worktree, gate logs, plan directory, user checkout, or unrelated refs/)
 
   const pluginRoot = path.resolve(scriptDir, "..", "..", "..")
+  const codexReviewer = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_reviewer.toml"), "utf8")
+  const claudeReviewer = await readFile(path.join(pluginRoot, "agents", "plan-reviewer.md"), "utf8")
+  for (const profile of [codexReviewer, claudeReviewer]) {
+    assert.match(profile, /P2\/P3 findings are advisory and never block approval/)
+    assert.match(profile, /In .*VERIFICATION.* mode, verify the supplied open finding IDs and inspect only the repair delta/)
+    assert.match(profile, /Every blocking finding must identify an exact changed file and line/)
+    assert.match(profile, /Return .*REVISE.* only when at least one evidence-complete blocking finding is open/)
+  }
+
   const codexSaver = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_saver.toml"), "utf8")
   const claudeSaver = await readFile(path.join(pluginRoot, "agents", "plan-saver.md"), "utf8")
   for (const profile of [codexSaver, claudeSaver]) {
     assert.match(profile, /compact failure envelope/)
     assert.match(profile, /Verify every direct finding and reproduction command/)
+    assert.match(profile, /Repair only the supplied open blocking finding IDs/)
     assert.match(profile, /Do not replace a narrow repair with an unrelated audit/)
   }
 

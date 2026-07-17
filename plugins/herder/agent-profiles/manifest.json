@@ -13,12 +13,12 @@
         {
           "source": "agent-profiles/codex/plan_reviewer.toml",
           "target": "plan_reviewer.toml",
-          "sha256": "0428602f2ca4c10d76132a4aa846e3b32e743de3c9002c628cc5cd190e14be2c"
+          "sha256": "a67cb3ddf38c234e7455151cac288d5c7ff8ee16cded734468a9fb324b9eb89e"
         },
         {
           "source": "agent-profiles/codex/plan_saver.toml",
           "target": "plan_saver.toml",
-          "sha256": "46cc12c8fcc960a5ff88d9fee894c321360e93d2ecc0524a00e6927328f0347e"
+          "sha256": "6c883f00e36ba878ff46c5291473fdb0ea424d081d0a05b486f2b71d8b7fa4ee"
         }
       ]
     },
@@ -33,12 +33,12 @@
         {
           "source": "agents/plan-reviewer.md",
           "identifier": "herder:plan-reviewer",
-          "sha256": "76a84210bab2b0e00bbbbb2940e3cf42d1bbf60d4f3a780493eeda3a0caf7c4d"
+          "sha256": "a0a4ce90b92a67e3286f59f0db6fd57dbfa7a4069c869847d67280cfcf06d38b"
         },
         {
           "source": "agents/plan-saver.md",
           "identifier": "herder:plan-saver",
-          "sha256": "0ead5cc7d6c048a3ac149ca92fe84913a4033dd75554413684f1642ea5a4f599"
+          "sha256": "94ae319277026a3b6109fa425ee2c28f1b9912e97c7042dd9e6530ba28b1b5ef"
         }
       ]
     }

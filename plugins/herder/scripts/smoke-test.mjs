@@ -555,6 +555,10 @@ function main() {
     assert.match(fireProtocolText, /For transient capacity, do not increment any retry, interruption, clarification, replan, or recovery bound/)
     assert.match(fireProtocolText, /30 seconds, 60 seconds, 120 seconds, and 300 seconds/)
     assert.match(fireProtocolText, /at most two same-round non-capacity interruption restarts/)
+    assert.match(fireProtocolText, /P2 and P3 findings are advisory and never block integration/)
+    assert.match(fireProtocolText, /Allow at most two completed broad discovery passes per plan generation/)
+    assert.match(fireProtocolText, /Assign each `NEW` finding the next stable ID/)
+    assert.match(fireProtocolText, /requires human adjudication, not another automatic audit cycle/)
     assert.doesNotMatch(fireProtocolText, /Merge the candidate with a non-fast-forward/)
     assert.match(validateText, /herder:validate \[<plan-dir>\] \[--fix\]/)
     assert.match(validateText, /herder-plans\.mjs/)
@@ -605,7 +609,10 @@ function main() {
       for (const profile of ["plan_implementer", "plan_reviewer", "plan_saver"]) {
         assert.equal(fs.existsSync(path.join(codexHome, "agents", `${profile}.toml`)), true, `missing installed profile ${profile}`)
       }
-      assert.match(fs.readFileSync(path.join(codexHome, "agents", "plan_reviewer.toml"), "utf8"), /sandbox_mode = "read-only"/)
+      const installedReviewer = fs.readFileSync(path.join(codexHome, "agents", "plan_reviewer.toml"), "utf8")
+      assert.match(installedReviewer, /sandbox_mode = "read-only"/)
+      assert.match(installedReviewer, /P2\/P3 findings are advisory and never block approval/)
+      assert.match(installedReviewer, /In VERIFICATION mode, verify the supplied open finding IDs and inspect only the repair delta/)
 
       if (options.live) {
         const opened = runCodex("01-grill-intake", `Use $herder:grill to plan a --version flag for this tiny CLI. Print only the package version followed by one newline, preserve the no-argument output, and add no dependencies. Use your recommendations for any remaining decisions. Follow the skill exactly: inspect the repository, summarize the shared understanding, ask for final confirmation, and do not edit yet.`, context, { ephemeral: false })
