@@ -37,23 +37,27 @@ function parseArguments(argv) {
     plan: null,
     dryRun: false,
     includeFailed: false,
+    finalize: false,
+    handoffTarget: null,
     pretty: false,
   }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
-    if (["--dry-run", "--include-failed", "--pretty"].includes(argument)) {
+    if (["--dry-run", "--include-failed", "--finalize", "--pretty"].includes(argument)) {
       if (argument === "--dry-run") options.dryRun = true
       else if (argument === "--include-failed") options.includeFailed = true
+      else if (argument === "--finalize") options.finalize = true
       else options.pretty = true
       continue
     }
-    if (["--repo", "--plan-dir", "--integration-branch", "--plan"].includes(argument)) {
+    if (["--repo", "--plan-dir", "--integration-branch", "--plan", "--handoff-target"].includes(argument)) {
       const value = takeValue(argv, index, argument)
       index += 1
       if (argument === "--repo") options.repo = value
       else if (argument === "--plan-dir") options.planDir = value
       else if (argument === "--integration-branch") options.integrationBranch = value
-      else options.plan = value
+      else if (argument === "--plan") options.plan = value
+      else options.handoffTarget = value
       continue
     }
     fail(`Unknown argument: ${argument}`)
@@ -65,6 +69,8 @@ function parseArguments(argv) {
   ]) {
     if (!value) fail(`${name} is required`)
   }
+  if (options.finalize && options.plan) fail("--finalize cannot be combined with --plan")
+  if (options.handoffTarget && !options.finalize) fail("--handoff-target requires --finalize")
   return options
 }
 
@@ -88,12 +94,15 @@ function parseIntegrationBranch(branch) {
   return match[1]
 }
 
-function parseWorktrees(repoRoot) {
-  const output = runGit(repoRoot, ["worktree", "list", "--porcelain", "-z"]).stdout
+export function parseWorktreeRecords(output, nulDelimited) {
   const records = []
-  for (const rawRecord of output.split("\0\0").filter(Boolean)) {
+  const rawRecords = nulDelimited
+    ? output.split("\0\0")
+    : output.split(/(?:\r?\n){2,}/)
+  for (const rawRecord of rawRecords.filter((record) => record.trim())) {
     const record = { path: "", branch: "", locked: false }
-    for (const field of rawRecord.split("\0").filter(Boolean)) {
+    const fields = nulDelimited ? rawRecord.split("\0") : rawRecord.split(/\r?\n/)
+    for (const field of fields.filter(Boolean)) {
       if (field.startsWith("worktree ")) record.path = field.slice("worktree ".length)
       else if (field.startsWith("branch refs/heads/")) record.branch = field.slice("branch refs/heads/".length)
       else if (field === "locked" || field.startsWith("locked ")) record.locked = true
@@ -101,6 +110,15 @@ function parseWorktrees(repoRoot) {
     if (record.path) records.push(record)
   }
   return records
+}
+
+function parseWorktrees(repoRoot) {
+  const nulResult = runGit(repoRoot, ["worktree", "list", "--porcelain", "-z"], { allowFailure: true })
+  if (nulResult.status === 0) return parseWorktreeRecords(nulResult.stdout, true)
+
+  // Git 2.34 and older do not support `git worktree list -z`.
+  const output = runGit(repoRoot, ["worktree", "list", "--porcelain"]).stdout
+  return parseWorktreeRecords(output, false)
 }
 
 function listRunBranches(repoRoot, runId) {
@@ -145,17 +163,50 @@ function isPatchEquivalent(repoRoot, artifactHead, integrationHead) {
   return rows.length > 0 && rows.every((row) => /^- [0-9a-f]+$/.test(row))
 }
 
-function completionMarkers(repoRoot, integrationBranch) {
-  const output = runGit(repoRoot, ["log", "--format=%H%x09%s", integrationBranch]).stdout
-  const markers = new Set()
-  for (const line of output.split(/\r?\n/).filter(Boolean)) {
+function listCompletionRefs(repoRoot, runId) {
+  const prefix = `refs/plan-herder/${runId}/completed/`
+  const output = runGit(repoRoot, [
+    "for-each-ref",
+    "--format=%(refname)%09%(objectname)",
+    prefix,
+  ]).stdout
+  return output.split(/\r?\n/).filter(Boolean).map((line) => {
     const separator = line.indexOf("\t")
-    if (separator === -1) continue
-    const subject = line.slice(separator + 1)
-    const match = subject.match(/^plan-herder\((\d{3,})\): mark plan done$/)
-    if (match) markers.add(match[1])
+    if (separator === -1) fail(`Cannot parse completion ref record: ${JSON.stringify(line)}`)
+    const ref = line.slice(0, separator)
+    const target = line.slice(separator + 1)
+    const relative = ref.slice(prefix.length)
+    return { ref, target, relative, plan: /^\d{3,}$/.test(relative) ? relative : null }
+  })
+}
+
+function completionProofs(repoRoot, integrationBranch, integrationHead, completionRefs) {
+  const privatePlans = new Set()
+  const completedPlans = new Set()
+  for (const item of completionRefs) {
+    if (!item.plan) continue
+    privatePlans.add(item.plan)
+    if (isAncestor(repoRoot, item.target, integrationHead)) completedPlans.add(item.plan)
   }
-  return markers
+
+  // Compatibility for runs completed before private completion refs were introduced.
+  const output = runGit(repoRoot, [
+    "log",
+    "-z",
+    "--format=%H%x00%s%x00%(trailers:key=Plan-Herder-Complete,valueonly)",
+    integrationBranch,
+  ]).stdout
+  const fields = output.split("\0")
+  for (let index = 0; index + 2 < fields.length; index += 3) {
+    const subject = fields[index + 1]
+    const legacy = subject.match(/^plan-herder\((\d{3,})\): mark plan done$/)
+    if (legacy && !privatePlans.has(legacy[1])) completedPlans.add(legacy[1])
+    for (const value of fields[index + 2].split(/\r?\n/)) {
+      const trailer = value.trim().match(/^(\d{3,})$/)
+      if (trailer && !privatePlans.has(trailer[1])) completedPlans.add(trailer[1])
+    }
+  }
+  return completedPlans
 }
 
 function worktreeStatus(repoRoot, worktree) {
@@ -185,15 +236,29 @@ export function cleanupRun(input) {
   const integrationHead = runGit(repoRoot, ["rev-parse", integrationRef]).stdout.trim()
   const graph = buildGraph(planDir)
   const planFilter = input.plan ? canonicalPlanId(input.plan) : null
+  if (input.finalize && planFilter) fail("--finalize cannot be combined with --plan")
   if (planFilter && !graph.plans.some((plan) => plan.id === planFilter)) fail(`Plan ${planFilter} is not indexed in ${graph.readme}`)
 
   const plans = new Map(graph.plans.map((plan) => [plan.id, plan]))
-  const markers = completionMarkers(repoRoot, input.integrationBranch)
+  const completionRefs = listCompletionRefs(repoRoot, runId)
+  const completionProofsForRun = completionProofs(repoRoot, input.integrationBranch, integrationHead, completionRefs)
   const worktrees = new Map(parseWorktrees(repoRoot).filter((item) => item.branch).map((item) => [item.branch, item]))
   const actions = []
   const skipped = []
+  const runBranches = listRunBranches(repoRoot, runId)
 
-  for (const item of listRunBranches(repoRoot, runId)) {
+  let handoffTarget = null
+  let handoffTargetHead = null
+  if (input.handoffTarget) {
+    if (input.handoffTarget === input.integrationBranch) fail("--handoff-target must differ from --integration-branch")
+    runGit(repoRoot, ["check-ref-format", "--branch", input.handoffTarget])
+    const handoffRef = `refs/heads/${input.handoffTarget}`
+    runGit(repoRoot, ["show-ref", "--verify", handoffRef])
+    handoffTarget = input.handoffTarget
+    handoffTargetHead = runGit(repoRoot, ["rev-parse", handoffRef]).stdout.trim()
+  }
+
+  for (const item of runBranches) {
     const identity = artifactIdentity(item.relative)
     if (!identity) {
       skipped.push({ branch: item.branch, reason: "unrecognized-run-artifact" })
@@ -209,8 +274,8 @@ export function cleanupRun(input) {
     let mode
     let proof = null
     if (plan.status === "DONE") {
-      if (!markers.has(plan.id)) {
-        skipped.push({ branch: item.branch, plan: plan.id, status: plan.status, reason: "completion-marker-missing" })
+      if (!completionProofsForRun.has(plan.id)) {
+        skipped.push({ branch: item.branch, plan: plan.id, status: plan.status, reason: "completion-proof-missing" })
         continue
       }
       if (isAncestor(repoRoot, item.head, integrationHead)) {
@@ -221,7 +286,7 @@ export function cleanupRun(input) {
         proof = "superseded-by-completion"
       }
       mode = "completed-plan"
-    } else if (input.includeFailed) {
+    } else if (input.includeFailed || (input.finalize && plan.status === "REJECTED")) {
       mode = "failed-evidence"
     } else {
       skipped.push({ branch: item.branch, plan: plan.id, status: plan.status, reason: "preserved-non-done-evidence" })
@@ -254,12 +319,126 @@ export function cleanupRun(input) {
     })
   }
 
+  const finalization = {
+    requested: Boolean(input.finalize),
+    eligible: false,
+    blockers: [],
+    refsPlanned: [],
+    refsRemoved: [],
+  }
+  if (input.finalize) {
+    const terminal = new Set(["DONE", "REJECTED"])
+    const allPlansTerminal = graph.plans.every((plan) => terminal.has(plan.status))
+    const alreadyFinalized = allPlansTerminal && runBranches.length === 0 && completionRefs.length === 0
+    for (const plan of graph.plans) {
+      if (!terminal.has(plan.status)) {
+        finalization.blockers.push({ reason: "plan-not-terminal", plan: plan.id, status: plan.status })
+      } else if (!alreadyFinalized && plan.status === "DONE" && !completionProofsForRun.has(plan.id)) {
+        finalization.blockers.push({ reason: "completion-proof-missing", plan: plan.id, status: plan.status })
+      }
+    }
+
+    const removableBranches = new Set(actions.map((action) => action.branch))
+    for (const item of runBranches) {
+      if (!removableBranches.has(item.branch)) {
+        const skip = skipped.find((candidate) => candidate.branch === item.branch)
+        finalization.blockers.push({
+          reason: "run-artifact-would-remain",
+          branch: item.branch,
+          detail: skip?.reason ?? "not-eligible",
+        })
+      }
+    }
+
+    for (const item of completionRefs) {
+      const plan = item.plan ? plans.get(item.plan) : null
+      if (!item.plan || !plan || plan.status !== "DONE") {
+        finalization.blockers.push({ reason: "unrecognized-completion-ref", ref: item.ref })
+        continue
+      }
+      if (!isAncestor(repoRoot, item.target, integrationHead)) {
+        finalization.blockers.push({ reason: "completion-ref-not-reachable", ref: item.ref, target: item.target })
+        continue
+      }
+      finalization.refsPlanned.push({ ref: item.ref, target: item.target, plan: item.plan })
+    }
+    finalization.eligible = finalization.blockers.length === 0
+  }
+
+  const integrationWorktree = worktrees.get(input.integrationBranch)
+  const handoff = {
+    requested: Boolean(handoffTarget),
+    targetBranch: handoffTarget,
+    targetHead: handoffTargetHead,
+    eligible: false,
+    blockers: [],
+    integrationWorktree: integrationWorktree?.path ?? null,
+    removed: false,
+  }
+  if (handoffTarget) {
+    if (!finalization.eligible) {
+      handoff.blockers.push({ reason: "finalization-ineligible" })
+    }
+    if (!isAncestor(repoRoot, integrationHead, handoffTargetHead)) {
+      handoff.blockers.push({
+        reason: "handoff-target-does-not-contain-integration",
+        targetBranch: handoffTarget,
+        targetHead: handoffTargetHead,
+        integrationHead,
+      })
+    }
+    if (integrationWorktree) {
+      const integrationPath = fs.existsSync(integrationWorktree.path)
+        ? fs.realpathSync(integrationWorktree.path)
+        : integrationWorktree.path
+      if (integrationPath === repoRoot) {
+        handoff.blockers.push({ reason: "integration-is-user-checkout", worktree: integrationWorktree.path })
+      } else {
+        const state = worktreeStatus(repoRoot, integrationWorktree)
+        if (state.locked) handoff.blockers.push({ reason: "integration-worktree-locked", worktree: state.path })
+        else if (state.missing) handoff.blockers.push({ reason: "integration-worktree-missing", worktree: state.path })
+        else if (!state.clean) handoff.blockers.push({ reason: "integration-worktree-dirty", worktree: state.path })
+      }
+    }
+    handoff.eligible = handoff.blockers.length === 0
+  }
+
   const removed = []
   if (!input.dryRun) {
     for (const action of actions) {
       if (action.worktree) runGit(repoRoot, ["worktree", "remove", "--", action.worktree])
       runGit(repoRoot, ["update-ref", "-d", `refs/heads/${action.branch}`, action.head])
       removed.push(action)
+    }
+    if (finalization.eligible) {
+      const remainingBranches = listRunBranches(repoRoot, runId)
+      if (remainingBranches.length > 0) {
+        fail(`Cannot finalize while run artifact branches remain: ${remainingBranches.map((item) => item.branch).join(", ")}`)
+      }
+      const currentCompletionRefs = listCompletionRefs(repoRoot, runId)
+      const expectedRefs = finalization.refsPlanned.map((item) => `${item.ref}\t${item.target}`).sort()
+      const currentRefs = currentCompletionRefs.map((item) => `${item.ref}\t${item.target}`).sort()
+      if (JSON.stringify(currentRefs) !== JSON.stringify(expectedRefs)) {
+        fail("Cannot finalize because completion refs changed after preflight")
+      }
+      for (const item of finalization.refsPlanned) {
+        runGit(repoRoot, ["update-ref", "-d", item.ref, item.target])
+        finalization.refsRemoved.push(item)
+      }
+      const remainingCompletionRefs = listCompletionRefs(repoRoot, runId)
+      if (remainingCompletionRefs.length > 0) {
+        fail(`Cannot finalize while completion refs remain: ${remainingCompletionRefs.map((item) => item.ref).join(", ")}`)
+      }
+    }
+    if (handoff.eligible) {
+      const currentTargetHead = runGit(repoRoot, ["rev-parse", `refs/heads/${handoffTarget}`]).stdout.trim()
+      if (!isAncestor(repoRoot, integrationHead, currentTargetHead)) {
+        fail(`Cannot remove integration because ${handoffTarget} no longer contains ${integrationHead}`)
+      }
+      if (integrationWorktree) runGit(repoRoot, ["worktree", "remove", "--", integrationWorktree.path])
+      runGit(repoRoot, ["update-ref", "-d", integrationRef, integrationHead])
+      handoff.targetHead = currentTargetHead
+      handoff.removed = true
     }
   }
 
@@ -272,12 +451,19 @@ export function cleanupRun(input) {
     plan: planFilter,
     dryRun: Boolean(input.dryRun),
     includeFailed: Boolean(input.includeFailed),
+    finalize: Boolean(input.finalize),
+    handoffTarget,
     actions,
     removed,
     skipped,
+    finalization,
+    handoff,
     preserved: {
-      integrationBranch: input.integrationBranch,
-      integrationWorktree: worktrees.get(input.integrationBranch)?.path ?? null,
+      integrationBranch: handoff.removed ? null : input.integrationBranch,
+      integrationWorktree: handoff.removed ? null : integrationWorktree?.path ?? null,
+      completionRefs: input.finalize && finalization.eligible && !input.dryRun
+        ? null
+        : `refs/plan-herder/${runId}/completed/`,
       logs: true,
     },
   }

@@ -167,13 +167,24 @@ try {
   assert.equal(JSON.parse(missing.stdout).ok, false)
 
   const protocol = await readFile(path.join(scriptDir, "..", "references", "orchestration-protocol.md"), "utf8")
-  assert.match(protocol, /wait_agent.*timeout_ms: 600000/)
+  assert.match(protocol, /wait_agent.*timeout_ms: 1800000/)
   assert.match(protocol, /timeout caps idle wakeups, not result-delivery latency/)
   assert.match(protocol, /do not reread transcripts, request status, or call `list_agents`/)
   assert.match(protocol, /node <gate_runner> --cwd/)
   assert.match(protocol, /returns no command output on success or failure/)
   assert.match(protocol, /Replay the exact ordered candidate commits onto staging with `git cherry-pick`/)
   assert.match(protocol, /Never use `git merge`, `--no-ff`, or `--rebase-merges` to stage a plan/)
+  assert.match(protocol, /git update-ref refs\/plan-herder\/<run-id>\/completed\/<id> <approved-head> ""/)
+  assert.match(protocol, /Do not add Herder metadata to a commit subject or body/)
+  assert.match(protocol, /A crash may occur after the integration fast-forward but before the completion ref is written/)
+  assert.match(protocol, /Never infer approval merely because an unmarked commit is present on integration/)
+  assert.match(protocol, /invoke the cleanup runner with `--finalize`/)
+  assert.match(protocol, /delete each completion ref with its preflight target as the expected old value/)
+  assert.match(protocol, /A finalized run with every plan terminal, no run artifacts, and no completion refs is already complete/)
+  assert.match(protocol, /--finalize --handoff-target <branch>/)
+  assert.match(protocol, /integration HEAD to be an ancestor of the named local target branch immediately before deletion/)
+  assert.doesNotMatch(protocol, /git commit --amend --no-edit --no-verify --trailer "Plan-Herder-Complete: <id>"/)
+  assert.doesNotMatch(protocol, /git commit --allow-empty -m "plan-herder\(<id>\): mark plan done"/)
   assert.match(protocol, /git merge --ff-only <integration-branch>/)
   assert.doesNotMatch(protocol, /Merge the candidate with a non-fast-forward/)
   assert.match(protocol, /compact failure envelope/)
@@ -203,7 +214,7 @@ try {
   assert.match(protocol, /dirty candidate, rescue, or staging worktree.*exact worktree/i)
   assert.match(protocol, /superseded-by-completion/)
   assert.match(protocol, /Proof-based automatic cleanup may remove clean `DONE` artifacts/)
-  assert.match(protocol, /never deletes the integration branch\/worktree, gate logs, plan directory, user checkout, or unrelated refs/)
+  assert.match(protocol, /Only the separately requested, proof-complete `--finalize --handoff-target` operation may delete integration state/)
 
   const pluginRoot = path.resolve(scriptDir, "..", "..", "..")
   const codexReviewer = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_reviewer.toml"), "utf8")
@@ -222,6 +233,19 @@ try {
     assert.match(profile, /Verify every direct finding and reproduction command/)
     assert.match(profile, /Repair only the supplied open blocking finding IDs/)
     assert.match(profile, /Do not replace a narrow repair with an unrelated audit/)
+    assert.match(profile, /Write every commit subject and body solely in repository and domain terms/)
+    assert.match(profile, /Never mention Herder, plan IDs, worker roles/)
+  }
+
+  const codexImplementer = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_implementer.toml"), "utf8")
+  const claudeImplementer = await readFile(path.join(pluginRoot, "agents", "plan-implementer.md"), "utf8")
+  for (const profile of [codexImplementer, claudeImplementer, codexReviewer, claudeReviewer, codexSaver, claudeSaver]) {
+    assert.match(profile, /longest event-driven or blocking process wait the host supports/)
+    assert.match(profile, /A quiet process is not a failure/)
+  }
+  for (const profile of [codexImplementer, claudeImplementer]) {
+    assert.match(profile, /Write every commit subject and body solely in repository and domain terms/)
+    assert.match(profile, /Never mention Herder, plan IDs, worker roles/)
   }
 
   const gateWorktree = path.join(root, "gate-worktree")

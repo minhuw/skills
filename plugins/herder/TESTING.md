@@ -25,7 +25,7 @@ claude plugin validate plugins/herder --strict
 git diff --check
 ```
 
-The Fire script tests cover native agent-evidence extraction by agent and worktree, coordinator gate isolation, severity-gated review convergence, stable finding ledgers, bounded broad discovery, targeted verification, compact Saver failure envelopes, per-generation recovery guards, uncounted transient-capacity backoff, bounded non-capacity interruptions, linear cherry-pick integration, and fail-closed cleanup. The cleanup fixture proves dry-run behavior, complete clean/unlocked `DONE` artifact cleanup (including superseded failed attempts), default preservation of non-`DONE` evidence, explicit clean failed-evidence deletion, and preservation of dirty, locked, unrecognized, markerless, integration, and log state.
+The Fire script tests cover native agent-evidence extraction by agent and worktree, coordinator gate isolation, severity-gated review convergence, stable finding ledgers, bounded broad discovery, targeted verification, compact Saver failure envelopes, per-generation recovery guards, uncounted transient-capacity backoff, bounded non-capacity interruptions, repository-native linear cherry-pick history with private completion refs, and fail-closed cleanup. The cleanup fixtures prove private-ref, trailer, and legacy-marker recognition, absence of Herder metadata from new commit history, dry-run behavior, complete clean/unlocked `DONE` artifact cleanup (including superseded failed attempts), default preservation of non-`DONE` evidence, explicit clean failed-evidence deletion, refusal to finalize incomplete or artifact-bearing runs, successful terminal-run completion-ref deletion, and preservation of dirty, locked, unrecognized, proofless, integration, and log state.
 
 Use `uv run --with pyyaml python ...` when the validation scripts' Python environment does not already contain PyYAML.
 
@@ -98,7 +98,7 @@ This high-cost mode creates a plan with Improve and executes it through native C
 - Every child transcript reports Multi-Agent V2 with one `NEW_TASK` envelope and no user-history messages, proving coordinator history was not forked. Its command evidence must stay under the disposable candidate, staging, or integration worktree root.
 - Exact native per-child transcript telemetry is recorded as numeric `codex-multi-agent-v2-transcript` usage rows.
 - Transcript evidence distinguishes a real final response from `task_complete` without an envelope, allowing a clean classifier/transport interruption to be recorded as `INTERRUPTED` and restarted without consuming a substantive saver round.
-- Fire uses native `wait_agent` as a ten-minute event-driven long poll rather than routine status polling, and coordinator verification calls use `run-gate.mjs` so passing command bodies do not enter the coordinator transcript.
+- Fire uses native `wait_agent` as a thirty-minute event-driven long poll rather than routine status polling, and coordinator verification calls use `run-gate.mjs` so passing command bodies do not enter the coordinator transcript.
 - The integration branch passes tests while the source branch and checkout remain unchanged.
 
 ```bash

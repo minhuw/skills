@@ -94,7 +94,7 @@ At each scheduling pass:
 1. Run `node <plan_manager> ready <plan_dir> --pretty` from the stable coordination checkout.
    Its `ready` list contains dependency-satisfied `TODO` plans only. Route `blocked` plans to Saver and reconstruct `inProgress` plans through resume semantics; never treat either list as fresh implementer work.
 2. Select actionable plans whose dependencies are all `DONE`.
-3. Find each dependency's coordinator completion commit by its exact `plan-herder(<id>): mark plan done` subject.
+3. Resolve each dependency's coordinator completion commit from `refs/plan-herder/<run-id>/completed/<id>`. For backward compatibility, accept a reachable commit with the exact `Plan-Herder-Complete: <id>` trailer or exact `plan-herder(<id>): mark plan done` subject, but never create either legacy history marker in a new transaction.
 4. Verify every completion commit is an ancestor of integration HEAD.
 5. Create the candidate branch from that exact integration HEAD and record the candidate base SHA.
 6. Verify the dependency commits are ancestors of the candidate base.
@@ -115,6 +115,7 @@ Give the resolved implementer role (`plan_implementer` through Codex Multi-Agent
 - an instruction never to edit `herder-plans/README.md` or any plan status;
 - the stable attempt ID and resolved model/effort attribution;
 - a requirement to stay in scope, honor STOP conditions, run every gate, and commit all intended changes;
+- a requirement for every commit subject and body to describe only the repository change and its reason, without Herder, plan IDs, roles, candidate/staging/review/rescue terminology, or orchestration metadata;
 - a requirement to summarize checks without pasting command logs;
 - this exact response shape:
 
@@ -132,7 +133,7 @@ Tell the worker to use `unknown` for values not explicitly exposed by the host a
 
 ### Coordinator wait discipline
 
-After dispatching Codex workers, call native `wait_agent` with `timeout_ms: 600000`. It is a long poll: any agent update, including completion, ends the wait immediately; otherwise the timeout supplies a ten-minute heartbeat. The timeout caps idle wakeups, not result-delivery latency. Process every queued update before waiting again.
+After dispatching Codex workers, call native `wait_agent` with `timeout_ms: 1800000`. It is a long poll: any agent update, including completion, ends the wait immediately; otherwise the timeout supplies a thirty-minute heartbeat. The timeout caps idle wakeups, not result-delivery latency. Process every queued update before waiting again.
 
 A timeout is not a state change. If no local scheduling or integration work became ready, do not reread transcripts, request status, or call `list_agents`; issue the next long wait. Use `list_agents` only for initial bookkeeping or reconciliation after an ambiguous, missing, or contradictory terminal event. On Claude Code, use its native blocking agent wait with the same event-first behavior.
 
@@ -159,8 +160,9 @@ For each candidate:
 5. Prove every candidate patch is represented in staging with `git cherry <staging-head> <candidate-head>`: every emitted row must begin with `-`, with no `+` row. Also require `git rev-list --min-parents=2 <staging-base>..HEAD` to be empty so the plan adds no merge node.
 6. Confirm material behavior is limited to the plan's scope. Apply the review acceptance policy below to incidental formatting, generated artifacts caused by gates, and other nonfunctional churn instead of treating their mere presence as a failed transaction.
 7. Run every plan done criterion and the applicable project-wide gates in the staging worktree.
-8. Create an empty coordinator completion-marker commit with `git commit --allow-empty -m "plan-herder(<id>): mark plan done"`.
-9. Record the staging worktree's clean status and tree SHA, dispatch `plan-reviewer` against the complete staging diff from the pre-plan integration SHA to staging HEAD, and prove both are unchanged after review. Any reviewer mutation is a failed review even if its verdict says APPROVE.
+8. Record the staging worktree's clean status and tree SHA, dispatch `plan-reviewer` against the complete staging diff from the pre-plan integration SHA to staging HEAD, and prove both are unchanged after review. Any reviewer mutation is a failed review even if its verdict says APPROVE.
+
+Do not add Herder metadata to a commit subject or body. Candidate and repair commits must describe only the repository change and its reason; do not mention Herder, plan IDs, worker roles, candidates, staging, review, rescue, or orchestration.
 
 ### Review acceptance and convergence
 
@@ -211,7 +213,9 @@ RATIONALE: <concise>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Tell the reviewer never to estimate unavailable usage. Prefer structured host telemetry over the reviewer-authored `USAGE` line. Integrate only after the normalized gate is effective `APPROVE` with effective `SCOPE: PASS`, all required checks pass, and the ledger contains no `OPEN` or `NEEDS_ADJUDICATION` blocker. Verify the integration branch still points to the staging base SHA and the reviewed range contains no merge commit, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD, replay the candidate commits again, and verify the unchanged plan patch without consuming another discovery pass. Record staging HEAD as the plan's completion commit, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the reachable marker before continuing.
+Tell the reviewer never to estimate unavailable usage. Prefer structured host telemetry over the reviewer-authored `USAGE` line. Integrate only after the normalized gate is effective `APPROVE` with effective `SCOPE: PASS`, all required checks pass, and the ledger contains no `OPEN` or `NEEDS_ADJUDICATION` blocker. Verify the integration branch still points to the staging base SHA and the reviewed range contains no merge commit, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD, replay the candidate commits again, and verify the unchanged plan patch without consuming another discovery pass.
+
+After the fast-forward, require integration HEAD to equal the approved staging HEAD. Record that commit with `git update-ref refs/plan-herder/<run-id>/completed/<id> <approved-head> ""`; the empty expected old value requires the private ref not to exist. On resume, an existing ref is idempotent only when it already names the same approved commit; a conflicting target is a reconciliation failure. Verify the ref target is an ancestor of integration HEAD, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the private completion ref before continuing. Completion refs are local coordination metadata: never turn them into branches or tags, include them in commit messages, or push them unless the user explicitly requests Herder metadata transfer.
 
 After `DONE`, prove no worker can still access any recognized candidate, rescue, or staging artifact for that plan, unlock its worktrees, and invoke the cleanup runner with `--plan <id>`. Cleanup refusal or failure is a reported maintenance warning, not a reason to roll back reviewed integration or block dependents; preserve every artifact the runner skips.
 
@@ -245,6 +249,7 @@ Give the resolved saver role (`plan_saver` through Codex Multi-Agent V2 or `herd
   - each exact reproduction command when known, plus compact `run-gate.mjs` evidence (fingerprint, exit status, duration, log SHA/path) without raw output; and
   - the finding ledger, completed broad-review count, ordered repair delta, prior Saver outcomes in this generation, and remaining review/generation/replan budget;
 - the expected outcome: inspect Git/repository state, reproduce relevant gates, repair and commit if possible, or classify the blocker;
+- a requirement for every repair commit subject and body to describe only the repository change and its reason, without Herder, plan IDs, roles, candidate/staging/review/rescue terminology, or orchestration metadata;
 - the user's answer when resuming after `NEEDS_INPUT`;
 - the stable attempt ID and resolved model/effort attribution.
 
@@ -322,7 +327,7 @@ Use `plan_manager usage <plan_dir> --pretty` for reporting. Its token subtotal i
 Reconstruct state from:
 
 - `node <plan_manager> status <plan_dir> --pretty`;
-- completion commits containing `plan-herder(<id>):`;
+- private completion refs under `refs/plan-herder/<run-id>/completed/`, plus reachable trailer or exact-subject markers already present from older Herder versions;
 - candidate and staging branch names;
 - branch ancestry and worktree cleanliness.
 - the manager-generated usage ledger and existing attempt IDs.
@@ -347,13 +352,17 @@ Reconstruct each candidate or rescue replay base with `git merge-base <artifact-
 
 For `IN PROGRESS`, inspect its candidate branch. If it contains committed work, stage and review it; if it has no usable work, dispatch a fresh implementer. For `BLOCKED`, start with a saver when a rescue branch exists; otherwise create a fresh candidate from integration HEAD and let the saver investigate the plan and repository.
 
-Never trust a `DONE` row alone. Verify its completion marker is reachable from integration HEAD and re-run cheap done criteria when resuming. If a marker is missing or verification fails, transition it to `BLOCKED` through Plans and enter rescue before allowing dependents to start. Conversely, if a reachable marker exists while the index is not DONE, reconcile that status before dispatching dependents. Continue role ordinals after the highest recorded attempt; never duplicate or rewrite a prior usage row.
+Never trust a `DONE` row alone. Verify its run-scoped completion ref names a commit reachable from integration HEAD and re-run cheap done criteria when resuming. Accept a reachable trailer or exact-subject marker only for backward compatibility. If completion proof is missing or verification fails, transition it to `BLOCKED` through Plans and enter rescue before allowing dependents to start. Conversely, if a valid completion ref exists while the index is not DONE, reconcile that status before dispatching dependents. Continue role ordinals after the highest recorded attempt; never duplicate or rewrite a prior usage row.
+
+A crash may occur after the integration fast-forward but before the completion ref is written. Recover that narrow gap only when retained evidence proves a clean staging HEAD received effective `APPROVE`, all required gates passed, its reviewed tree is unchanged, and that exact staged commit is an ancestor of current integration HEAD. Then create the missing private ref with the normal absent-old-value guard and reconcile `DONE`. Never infer approval merely because an unmarked commit is present on integration; if any review or gate evidence is missing or ambiguous, stop that plan for reconciliation.
 
 ## 9. Completion
 
-The run succeeds when every plan is `DONE` or `REJECTED`, all dependency markers are ancestors of integration HEAD, the final project-wide gates pass, and the final reviewer ledger contains no evidence-complete P0/P1 cross-plan integration regression. P2/P3 final-audit findings are advisory and cannot fail the run.
+The run succeeds when every plan is `DONE` or `REJECTED`, all dependency completion refs resolve to ancestors of integration HEAD, the final project-wide gates pass, and the final reviewer ledger contains no evidence-complete P0/P1 cross-plan integration regression. P2/P3 final-audit findings are advisory and cannot fail the run.
 
 Apply the same stable ledger and two-broad-pass cap to the final cross-plan audit. If a final gate or qualifying audit blocker fails, create an integration-rescue branch/worktree from integration HEAD and send `plan-saver` a synthetic plan containing the failing final criterion and expected integrated behavior. Treat any repair as a new transaction: stage it from the unchanged integration HEAD, run all final gates, and use targeted verification after the broad-pass cap before advancing integration. A new blocker outside the repair delta after the cap requires human adjudication, not another automatic audit cycle.
+
+After successful final gates and audit, prove no agent can access a run artifact and invoke the cleanup runner with `--finalize`. Finalization first removes every eligible candidate, stage, and rescue branch/worktree, then re-inventories the run and deletes its private completion refs only if no run artifact remains. A dirty, locked, missing, unrecognized, nonterminal, or unverifiable artifact makes finalization ineligible and preserves all completion refs. Report that maintenance warning without rolling back the completed integration branch.
 
 Do not merge, push, publish, or deploy. Proof-based automatic cleanup may remove clean `DONE` artifacts; preserve blocked/failed candidate and rescue evidence unless the user explicitly requests `--include-failed`. Report:
 
@@ -366,20 +375,26 @@ Do not merge, push, publish, or deploy. Proof-based automatic cleanup may remove
 - advisory findings and any finding awaiting human adjudication, grouped by stable ID;
 - preserved branches needing attention.
 
-Fire never merges into the user's branch. When its original target branch still points to the run's base commit, report `git merge --ff-only <integration-branch>` as the normal handoff; this adds the reviewed linear commits and completion markers without a merge node. If the target branch moved, report that fast-forward is unavailable and require a fresh replay/review cycle on the new target. Never recommend a non-fast-forward merge, rebasing the user's branch, or removing completion markers to force the handoff.
+Fire never merges into the user's branch. When its original target branch still points to the run's base commit, report `git merge --ff-only <integration-branch>` as the normal handoff; this adds only ordinary reviewed repository commits, with no Herder merge nodes, marker commits, trailers, tags, or messages. Private completion refs remain local and are not transferred by the fast-forward. If the target branch moved, report that fast-forward is unavailable and require a fresh replay/review cycle on the new target. Never recommend a non-fast-forward merge or rebasing the user's branch to force the handoff.
+
+After the user completes that fast-forward, report `herder:fire cleanup <plan-dir> --integration-branch <integration-branch> --finalize --handoff-target <target-branch>` as the explicit post-handoff cleanup. This command never performs a merge. It removes the integration worktree and exact branch ref only after the normal finalization checks pass, the named local target branch contains the integration commit, and the integration worktree is clean, unlocked, present, and distinct from the user's checkout. A failed proof preserves the integration state.
 
 ## 10. Cleanup
 
 Cleanup is a Fire coordinator operation, never a worker role. For automatic post-`DONE` cleanup or explicit `herder:fire cleanup`, invoke:
 
 ```text
-node <cleanup_runner> --repo <repo_root> --plan-dir <plan_dir> --integration-branch <branch> [--plan <id>] [--dry-run] [--include-failed] --pretty
+node <cleanup_runner> --repo <repo_root> --plan-dir <plan_dir> --integration-branch <branch> [--plan <id>] [--dry-run] [--include-failed] [--finalize] [--handoff-target <branch>] --pretty
 ```
 
-Require the exact integration branch; never infer it for cleanup. Before mutating, prove no active or ambiguous agent can access a targeted worktree. `--dry-run` may inspect an active run but must not unlock anything.
+Add `--finalize` only for whole-run cleanup; it cannot be combined with `--plan`. `--handoff-target` requires `--finalize` and means the handoff has already occurred; the runner must never advance the target branch. Require the exact integration branch and handoff target; never infer either. Before mutating, prove no active or ambiguous agent can access a targeted worktree. `--dry-run` may inspect an active run but must not unlock anything.
 
-The runner owns the mechanical safety checks. It validates Plans, limits branches to the integration branch's run prefix and recognized candidate/stage/rescue names, and preserves unrecognized artifacts. By default a branch is eligible only when its plan is `DONE`, the exact completion marker is reachable, and any attached worktree is unlocked and clean. Classify an ancestor as `ancestor`, a merge-free artifact whose patch series is fully represented in integration as `patch-equivalent`, and every other recognized artifact for that completed plan as `superseded-by-completion`. The reachable reviewed completion marker is the authority for delivered code; unmatched failed attempts remain only while the plan is non-`DONE`. Delete the worktree first, then delete the ref only if it still points to the preflight SHA.
+The runner owns the mechanical safety checks. It validates Plans, limits branches to the integration branch's run prefix and recognized candidate/stage/rescue names, and preserves unrecognized artifacts. By default a branch is eligible only when its plan is `DONE`, its run-scoped private completion ref names an ancestor of integration HEAD, and any attached worktree is unlocked and clean. Reachable trailer and exact-subject markers remain valid for runs created by older Herder versions. Classify an ancestor as `ancestor`, a merge-free artifact whose patch series is fully represented in integration as `patch-equivalent`, and every other recognized artifact for that completed plan as `superseded-by-completion`. The resolved reviewed completion commit is the authority for delivered code; unmatched failed attempts remain only while the plan is non-`DONE`. Delete the worktree first, then delete the branch ref only if it still points to the preflight SHA; preserve private completion refs for resume and status evidence.
 
-`--include-failed` is valid only when the user explicitly supplied it and the run is stopped. It additionally makes clean, unlocked non-`DONE` candidate/stage/rescue evidence eligible even when unmerged. It never overrides a dirty, locked, missing, or unrecognized worktree and never deletes the integration branch/worktree, gate logs, plan directory, user checkout, or unrelated refs. Do not invent an `--include-failed` authorization during Fire or resume.
+For `--finalize`, additionally require every indexed plan to be `DONE` or `REJECTED`, every `DONE` plan to have valid completion proof, every private completion ref to be recognized and reachable, and every run artifact branch to be in the current removal set. Finalization makes clean, unlocked, recognized `REJECTED` artifacts eligible without exposing `BLOCKED`, `TODO`, or `IN PROGRESS` evidence; logs and transcripts remain. Remove branches/worktrees first, re-list the run namespace, and delete each completion ref with its preflight target as the expected old value only when the second inventory is empty. Preserve integration, its worktree, logs, plans, legacy history markers, and all completion refs whenever any prerequisite fails. A finalized run with every plan terminal, no run artifacts, and no completion refs is already complete; on a later `resume`, rerun final project gates rather than recreating plan workers or refs.
+
+For `--finalize --handoff-target <branch>`, accept both the transaction that is finalizing now and an already-finalized run with every plan terminal, no run artifacts, and no completion refs. Require the integration HEAD to be an ancestor of the named local target branch immediately before deletion. If the integration branch has an attached worktree, require it to be clean, unlocked, present, and different from the repository path supplied as the user's checkout. Remove that worktree first, then delete the integration branch only with its preflight SHA as the expected old value. A failed proof preserves both; a concurrent branch move after worktree removal leaves the changed branch intact.
+
+`--include-failed` is valid only when the user explicitly supplied it and the run is stopped. It additionally makes clean, unlocked non-`DONE` candidate/stage/rescue evidence eligible even when unmerged. It never overrides a dirty, locked, missing, or unrecognized worktree and never deletes the integration branch/worktree, gate logs, plan directory, user checkout, or unrelated refs. Only the separately requested, proof-complete `--finalize --handoff-target` operation may delete integration state. Do not invent either authorization during Fire or resume.
 
 For explicit cleanup, report every planned/removed artifact and every preserved artifact with its reason. For automatic cleanup, retain the compact result in the run report. Never ask an implementer, reviewer, Saver, or plan producer to remove Git state.

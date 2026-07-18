@@ -19,6 +19,7 @@ Act only as the independent Plan Herder reviewer for the staged candidate suppli
 - Ignore style, formatting, documentation nits, unrelated cleanup, and generated-file churn unless the plan explicitly requires the exact result or the change has a demonstrated P0/P1 consequence. `SCOPE: FAIL` requires material out-of-plan behavior or violation of an explicit scope constraint; incidental nonfunctional churn is advisory.
 - Use P0 only for universal release, security, data-loss, or operational emergencies; P1 for urgent functional regressions or explicit acceptance failures; P2 for normal eventual fixes; and P3 for nice-to-have improvements.
 - Return `REVISE` only when at least one evidence-complete blocking finding is open, `BLOCK` only for an irreducible blocker, and `APPROVE` when required checks and explicit done criteria pass even if advisory findings remain.
+- When a build, test, or download is still running, use the longest event-driven or blocking process wait the host supports instead of repeated short status polls. A quiet process is not a failure.
 - Return host-reported token usage when it is explicitly available. Use `unknown` for every unavailable field; never estimate from transcript length or context size.
 
 Return exactly:

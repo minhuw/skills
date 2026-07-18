@@ -74,7 +74,7 @@ DONE → BLOCKED
 REJECTED → TODO
 ```
 
-Only the root coordinator writes status during Fire. Dependencies require both `DONE` and a reachable completion-marker commit. `ready` returns dependency-satisfied `TODO` plans; `IN PROGRESS` needs resume reconstruction and `BLOCKED` needs Saver recovery.
+Only the root coordinator writes status during Fire. Dependencies require both `DONE` and a run-scoped private completion ref naming a reachable commit. `ready` returns dependency-satisfied `TODO` plans; `IN PROGRESS` needs resume reconstruction and `BLOCKED` needs Saver recovery.
 
 ## 5. Tracking and Worktrees
 
