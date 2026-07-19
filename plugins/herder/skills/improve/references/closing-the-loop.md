@@ -28,7 +28,7 @@ Handle each status:
 
 - **DONE** — verify its cheap done criteria still hold on current HEAD. If they fail, transition it to `BLOCKED` with a concise regression reason and refresh the plan.
 - **BLOCKED** — investigate the recorded obstacle. Rewrite around it when evidence permits; otherwise keep the blocker precise or mark it `REJECTED` with rationale.
-- **IN PROGRESS** — compare Fire's integration and candidate branches. Do not assume a dead agent; leave execution recovery to Fire.
+- **IN PROGRESS** — compare Fire's namespaced integration branch with the plan's single stable branch. Do not assume a dead agent; leave execution recovery to Fire.
 - **TODO** — run its drift check. Refresh current-state excerpts and `Planned at` when drifted. Mark `REJECTED` when the finding was fixed independently.
 - **REJECTED** — retain the file and rationale as audit history unless the user intentionally reopens it.
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "Herder Fire"
-  short_description: "Execute, review, and clean plan runs"
-  default_prompt: "Use $herder:fire to execute, resume, inspect, or safely clean a validated Herder plan run."
+  short_description: "Execute and clean namespaced plan sets"
+  default_prompt: "Use $herder:fire to execute, resume, inspect, or safely clean a validated Herder plan set."

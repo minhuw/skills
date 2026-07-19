@@ -452,7 +452,7 @@ Users need a deterministic version string for bug reports and scripts. The exact
 
 ## Git workflow
 
-- Use a disposable Herder candidate branch created by Fire.
+- Use the stable plan branch/worktree created by Fire.
 - Make one logical commit using the repository's observed conventional style, for example \`feat: add version flag\`.
 - Do not push or open a pull request.
 
@@ -565,20 +565,22 @@ function main() {
     assert.match(fireText, /--finalize/)
     assert.match(fireText, /Only the root coordinator may invoke the cleanup runner/)
     assert.match(fireText, /Keep integration history linear/)
-    assert.match(fireProtocolText, /Replay the exact ordered candidate commits onto staging with `git cherry-pick`/)
+    assert.match(fireProtocolText, /Each plan has exactly one stable branch and at most one worktree/)
+    assert.match(fireProtocolText, /herder\/<plan-name>\/integration/)
+    assert.match(fireProtocolText, /git rebase --onto <integration-head> <recorded-base>/)
     assert.match(fireProtocolText, /wait_agent.*timeout_ms: 1800000/)
-    assert.match(fireProtocolText, /refs\/plan-herder\/<run-id>\/completed\/<id>/)
+    assert.match(fireProtocolText, /refs\/plan-herder\/<plan_name>\/completed\/<id>/)
     assert.match(fireProtocolText, /Do not add Herder metadata to a commit subject or body/)
     assert.doesNotMatch(fireProtocolText, /git commit --amend --no-edit --no-verify --trailer/)
-    assert.match(fireProtocolText, /git merge --ff-only <integration-branch>/)
+    assert.match(fireProtocolText, /git merge --ff-only <plan-branch>/)
+    assert.match(fireProtocolText, /git merge --ff-only herder\/<plan-name>\/integration/)
     assert.match(fireProtocolText, /For transient capacity, do not increment any retry, interruption, clarification, replan, or recovery bound/)
     assert.match(fireProtocolText, /30 seconds, 60 seconds, 120 seconds, and 300 seconds/)
     assert.match(fireProtocolText, /at most two same-round non-capacity interruption restarts/)
     assert.match(fireProtocolText, /P2 and P3 findings are advisory and never block integration/)
-    assert.match(fireProtocolText, /Allow at most two completed broad discovery passes per plan generation/)
+    assert.match(fireProtocolText, /Allow at most two completed broad discovery passes per generation/)
     assert.match(fireProtocolText, /Assign each `NEW` finding the next stable ID/)
-    assert.match(fireProtocolText, /requires human adjudication, not another automatic audit cycle/)
-    assert.doesNotMatch(fireProtocolText, /Merge the candidate with a non-fast-forward/)
+    assert.match(fireProtocolText, /Do not restart broad discovery/)
     assert.match(validateText, /herder:validate \[<plan-dir>\] \[--fix\]/)
     assert.match(validateText, /herder-plans\.mjs/)
     assert.match(validateText, /strictly read-only/)
@@ -589,6 +591,8 @@ function main() {
     assert.equal(fs.existsSync(evidenceReader), true, "missing installed Codex Multi-Agent V2 evidence reader")
     const cleanupRunner = path.join(installedPath, "skills", "fire", "scripts", "cleanup-run.mjs")
     assert.equal(fs.existsSync(cleanupRunner), true, "missing installed Fire cleanup runner")
+    const namespaceRunner = path.join(installedPath, "skills", "fire", "scripts", "namespace-run.mjs")
+    assert.equal(fs.existsSync(namespaceRunner), true, "missing installed Fire namespace runner")
 
     const manager = path.join(installedPath, "skills", "plans", "scripts", "herder-plans.mjs")
     const initialized = parseJson(run("node", [manager, "init", "herder-plans", "--pretty"], { cwd: project }).stdout, "plans init")
@@ -713,8 +717,9 @@ function main() {
         const fireTranscript = fs.readFileSync(path.join(transcripts, "02-fire-run.jsonl"), "utf8")
         assert.doesNotMatch(fireTranscript, /run-codex-worker\.mjs/)
         assert.match(fireTranscript, /run-gate\.mjs/, "Fire did not isolate coordinator gate output")
+        assert.match(fireTranscript, /namespace-run\.mjs/, "Fire did not run deterministic namespace preflight")
 
-        const integrationBranches = run("git", ["branch", "--list", "plan-herder/integration-*", "--format=%(refname:short)"], { cwd: project }).stdout.trim().split(/\r?\n/).filter(Boolean)
+        const integrationBranches = run("git", ["branch", "--list", "herder/herder-plans/integration", "--format=%(refname:short)"], { cwd: project }).stdout.trim().split(/\r?\n/).filter(Boolean)
         assert.equal(integrationBranches.length, 1)
         const integrationBranch = integrationBranches[0]
         const integrationMergeNodes = run("git", ["rev-list", "--min-parents=2", `${originalHead}..${integrationBranch}`], { cwd: project }).stdout.trim()

@@ -33,7 +33,7 @@ function parseArguments(argv) {
   const options = {
     repo: null,
     planDir: null,
-    integrationBranch: null,
+    planName: null,
     plan: null,
     dryRun: false,
     includeFailed: false,
@@ -50,12 +50,12 @@ function parseArguments(argv) {
       else options.pretty = true
       continue
     }
-    if (["--repo", "--plan-dir", "--integration-branch", "--plan", "--handoff-target"].includes(argument)) {
+    if (["--repo", "--plan-dir", "--plan-name", "--plan", "--handoff-target"].includes(argument)) {
       const value = takeValue(argv, index, argument)
       index += 1
       if (argument === "--repo") options.repo = value
       else if (argument === "--plan-dir") options.planDir = value
-      else if (argument === "--integration-branch") options.integrationBranch = value
+      else if (argument === "--plan-name") options.planName = value
       else if (argument === "--plan") options.plan = value
       else options.handoffTarget = value
       continue
@@ -65,7 +65,6 @@ function parseArguments(argv) {
   for (const [name, value] of [
     ["--repo", options.repo],
     ["--plan-dir", options.planDir],
-    ["--integration-branch", options.integrationBranch],
   ]) {
     if (!value) fail(`${name} is required`)
   }
@@ -86,12 +85,15 @@ function isInside(parent, candidate) {
   return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
 }
 
-function parseIntegrationBranch(branch) {
-  const match = String(branch).match(/^plan-herder\/integration-([A-Za-z0-9][A-Za-z0-9._-]*)$/)
-  if (!match || match[1].includes("..") || match[1].endsWith(".") || match[1].endsWith(".lock")) {
-    fail(`Integration branch must match plan-herder/integration-<run-id>: ${JSON.stringify(branch)}`)
+function resolvePlanName(planDir, inputName) {
+  const name = String(inputName ?? path.basename(planDir))
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)
+    || name.includes("..")
+    || name.endsWith(".")
+    || name.endsWith(".lock")) {
+    fail(`Plan-set name must be a lowercase Git-safe basename: ${JSON.stringify(name)}`)
   }
-  return match[1]
+  return name
 }
 
 export function parseWorktreeRecords(output, nulDelimited) {
@@ -121,8 +123,8 @@ function parseWorktrees(repoRoot) {
   return parseWorktreeRecords(output, false)
 }
 
-function listRunBranches(repoRoot, runId) {
-  const prefix = `plan-herder/${runId}/`
+function listPlanBranches(repoRoot, planName) {
+  const prefix = `herder/${planName}/`
   const output = runGit(repoRoot, [
     "for-each-ref",
     "--format=%(refname:lstrip=2)%09%(objectname)",
@@ -136,10 +138,10 @@ function listRunBranches(repoRoot, runId) {
   })
 }
 
-function artifactIdentity(relative) {
-  const match = relative.match(/^(\d{3,})-(candidate(?:-replan-\d+)?|stage-\d+|rescue(?:-\d+)?)$/)
+function planBranchIdentity(relative) {
+  const match = relative.match(/^(\d{3,})$/)
   if (!match) return null
-  return { plan: match[1], kind: match[2] }
+  return { plan: match[1], kind: "plan" }
 }
 
 function isAncestor(repoRoot, ancestor, descendant) {
@@ -163,8 +165,8 @@ function isPatchEquivalent(repoRoot, artifactHead, integrationHead) {
   return rows.length > 0 && rows.every((row) => /^- [0-9a-f]+$/.test(row))
 }
 
-function listCompletionRefs(repoRoot, runId) {
-  const prefix = `refs/plan-herder/${runId}/completed/`
+function listCompletionRefs(repoRoot, planName) {
+  const prefix = `refs/plan-herder/${planName}/completed/`
   const output = runGit(repoRoot, [
     "for-each-ref",
     "--format=%(refname)%09%(objectname)",
@@ -177,6 +179,40 @@ function listCompletionRefs(repoRoot, runId) {
     const target = line.slice(separator + 1)
     const relative = ref.slice(prefix.length)
     return { ref, target, relative, plan: /^\d{3,}$/.test(relative) ? relative : null }
+  })
+}
+
+function listCoordinationRefs(repoRoot, planName) {
+  const prefix = `refs/plan-herder/${planName}/`
+  const output = runGit(repoRoot, [
+    "for-each-ref",
+    "--format=%(refname)%09%(objectname)",
+    prefix,
+  ]).stdout
+  return output.split(/\r?\n/).filter(Boolean).map((line) => {
+    const separator = line.indexOf("\t")
+    if (separator === -1) fail(`Cannot parse coordination ref record: ${JSON.stringify(line)}`)
+    const ref = line.slice(0, separator)
+    const target = line.slice(separator + 1)
+    const relative = ref.slice(prefix.length)
+    let kind = null
+    let plan = null
+    if (relative === "base") kind = "base"
+    else {
+      const completed = relative.match(/^completed\/(\d{3,})$/)
+      const checkpoint = relative.match(/^checkpoints\/(\d{3,})\/(\d+)-(\d+)$/)
+      const runCheckpoint = relative.match(/^checkpoints\/RUN\/(\d+)$/)
+      if (completed) {
+        kind = "completed"
+        plan = completed[1]
+      } else if (checkpoint) {
+        kind = "checkpoint"
+        plan = checkpoint[1]
+      } else if (runCheckpoint) {
+        kind = "run-checkpoint"
+      }
+    }
+    return { ref, target, relative, kind, plan }
   })
 }
 
@@ -229,9 +265,10 @@ export function cleanupRun(input) {
   const planDir = fs.realpathSync(planCandidate)
   if (!isInside(repoRoot, planDir)) fail(`Plan directory must be inside the repository: ${planDir}`)
 
-  const runId = parseIntegrationBranch(input.integrationBranch)
-  runGit(repoRoot, ["check-ref-format", "--branch", input.integrationBranch])
-  const integrationRef = `refs/heads/${input.integrationBranch}`
+  const planName = resolvePlanName(planCandidate, input.planName)
+  const integrationBranch = `herder/${planName}/integration`
+  runGit(repoRoot, ["check-ref-format", "--branch", integrationBranch])
+  const integrationRef = `refs/heads/${integrationBranch}`
   runGit(repoRoot, ["show-ref", "--verify", integrationRef])
   const integrationHead = runGit(repoRoot, ["rev-parse", integrationRef]).stdout.trim()
   const graph = buildGraph(planDir)
@@ -240,17 +277,18 @@ export function cleanupRun(input) {
   if (planFilter && !graph.plans.some((plan) => plan.id === planFilter)) fail(`Plan ${planFilter} is not indexed in ${graph.readme}`)
 
   const plans = new Map(graph.plans.map((plan) => [plan.id, plan]))
-  const completionRefs = listCompletionRefs(repoRoot, runId)
-  const completionProofsForRun = completionProofs(repoRoot, input.integrationBranch, integrationHead, completionRefs)
+  const coordinationRefs = listCoordinationRefs(repoRoot, planName)
+  const completionRefs = listCompletionRefs(repoRoot, planName)
+  const completionProofsForRun = completionProofs(repoRoot, integrationBranch, integrationHead, completionRefs)
   const worktrees = new Map(parseWorktrees(repoRoot).filter((item) => item.branch).map((item) => [item.branch, item]))
   const actions = []
   const skipped = []
-  const runBranches = listRunBranches(repoRoot, runId)
+  const planBranches = listPlanBranches(repoRoot, planName).filter((item) => item.relative !== "integration")
 
   let handoffTarget = null
   let handoffTargetHead = null
   if (input.handoffTarget) {
-    if (input.handoffTarget === input.integrationBranch) fail("--handoff-target must differ from --integration-branch")
+    if (input.handoffTarget === integrationBranch) fail("--handoff-target must differ from the integration branch")
     runGit(repoRoot, ["check-ref-format", "--branch", input.handoffTarget])
     const handoffRef = `refs/heads/${input.handoffTarget}`
     runGit(repoRoot, ["show-ref", "--verify", handoffRef])
@@ -258,10 +296,10 @@ export function cleanupRun(input) {
     handoffTargetHead = runGit(repoRoot, ["rev-parse", handoffRef]).stdout.trim()
   }
 
-  for (const item of runBranches) {
-    const identity = artifactIdentity(item.relative)
+  for (const item of planBranches) {
+    const identity = planBranchIdentity(item.relative)
     if (!identity) {
-      skipped.push({ branch: item.branch, reason: "unrecognized-run-artifact" })
+      skipped.push({ branch: item.branch, reason: "unrecognized-plan-branch" })
       continue
     }
     if (planFilter && identity.plan !== planFilter) continue
@@ -315,7 +353,7 @@ export function cleanupRun(input) {
       mode,
       proof,
       worktree: state.path,
-      operations: [...(state.path ? ["remove-worktree"] : []), mode === "completed-plan" ? "delete-completed-plan-artifact" : "delete-failed-evidence-branch"],
+      operations: [...(state.path ? ["remove-worktree"] : []), mode === "completed-plan" ? "delete-completed-plan-branch" : "delete-failed-evidence-branch"],
     })
   }
 
@@ -329,7 +367,10 @@ export function cleanupRun(input) {
   if (input.finalize) {
     const terminal = new Set(["DONE", "REJECTED"])
     const allPlansTerminal = graph.plans.every((plan) => terminal.has(plan.status))
-    const alreadyFinalized = allPlansTerminal && runBranches.length === 0 && completionRefs.length === 0
+    const alreadyFinalized = allPlansTerminal && planBranches.length === 0 && coordinationRefs.length === 0
+    if (!alreadyFinalized && !coordinationRefs.some((item) => item.kind === "base")) {
+      finalization.blockers.push({ reason: "base-ref-missing", ref: `refs/plan-herder/${planName}/base` })
+    }
     for (const plan of graph.plans) {
       if (!terminal.has(plan.status)) {
         finalization.blockers.push({ reason: "plan-not-terminal", plan: plan.id, status: plan.status })
@@ -339,33 +380,50 @@ export function cleanupRun(input) {
     }
 
     const removableBranches = new Set(actions.map((action) => action.branch))
-    for (const item of runBranches) {
+    for (const item of planBranches) {
       if (!removableBranches.has(item.branch)) {
         const skip = skipped.find((candidate) => candidate.branch === item.branch)
         finalization.blockers.push({
-          reason: "run-artifact-would-remain",
+          reason: "plan-branch-would-remain",
           branch: item.branch,
           detail: skip?.reason ?? "not-eligible",
         })
       }
     }
 
-    for (const item of completionRefs) {
-      const plan = item.plan ? plans.get(item.plan) : null
-      if (!item.plan || !plan || plan.status !== "DONE") {
-        finalization.blockers.push({ reason: "unrecognized-completion-ref", ref: item.ref })
+    for (const item of coordinationRefs) {
+      if (!item.kind) {
+        finalization.blockers.push({ reason: "unrecognized-coordination-ref", ref: item.ref })
         continue
       }
-      if (!isAncestor(repoRoot, item.target, integrationHead)) {
-        finalization.blockers.push({ reason: "completion-ref-not-reachable", ref: item.ref, target: item.target })
-        continue
+      if (item.kind === "base") {
+        if (!isAncestor(repoRoot, item.target, integrationHead)) {
+          finalization.blockers.push({ reason: "base-ref-not-reachable", ref: item.ref, target: item.target })
+          continue
+        }
+      } else if (item.plan) {
+        const plan = plans.get(item.plan)
+        if (!plan) {
+          finalization.blockers.push({ reason: "coordination-ref-plan-not-indexed", ref: item.ref, plan: item.plan })
+          continue
+        }
+        if (item.kind === "completed") {
+          if (plan.status !== "DONE") {
+            finalization.blockers.push({ reason: "completion-ref-plan-not-done", ref: item.ref, plan: item.plan })
+            continue
+          }
+          if (!isAncestor(repoRoot, item.target, integrationHead)) {
+            finalization.blockers.push({ reason: "completion-ref-not-reachable", ref: item.ref, target: item.target })
+            continue
+          }
+        }
       }
-      finalization.refsPlanned.push({ ref: item.ref, target: item.target, plan: item.plan })
+      finalization.refsPlanned.push({ ref: item.ref, target: item.target, kind: item.kind, ...(item.plan ? { plan: item.plan } : {}) })
     }
     finalization.eligible = finalization.blockers.length === 0
   }
 
-  const integrationWorktree = worktrees.get(input.integrationBranch)
+  const integrationWorktree = worktrees.get(integrationBranch)
   const handoff = {
     requested: Boolean(handoffTarget),
     targetBranch: handoffTarget,
@@ -411,23 +469,23 @@ export function cleanupRun(input) {
       removed.push(action)
     }
     if (finalization.eligible) {
-      const remainingBranches = listRunBranches(repoRoot, runId)
+      const remainingBranches = listPlanBranches(repoRoot, planName).filter((item) => item.relative !== "integration")
       if (remainingBranches.length > 0) {
-        fail(`Cannot finalize while run artifact branches remain: ${remainingBranches.map((item) => item.branch).join(", ")}`)
+        fail(`Cannot finalize while plan branches remain: ${remainingBranches.map((item) => item.branch).join(", ")}`)
       }
-      const currentCompletionRefs = listCompletionRefs(repoRoot, runId)
+      const currentCoordinationRefs = listCoordinationRefs(repoRoot, planName)
       const expectedRefs = finalization.refsPlanned.map((item) => `${item.ref}\t${item.target}`).sort()
-      const currentRefs = currentCompletionRefs.map((item) => `${item.ref}\t${item.target}`).sort()
+      const currentRefs = currentCoordinationRefs.map((item) => `${item.ref}\t${item.target}`).sort()
       if (JSON.stringify(currentRefs) !== JSON.stringify(expectedRefs)) {
-        fail("Cannot finalize because completion refs changed after preflight")
+        fail("Cannot finalize because coordination refs changed after preflight")
       }
       for (const item of finalization.refsPlanned) {
         runGit(repoRoot, ["update-ref", "-d", item.ref, item.target])
         finalization.refsRemoved.push(item)
       }
-      const remainingCompletionRefs = listCompletionRefs(repoRoot, runId)
-      if (remainingCompletionRefs.length > 0) {
-        fail(`Cannot finalize while completion refs remain: ${remainingCompletionRefs.map((item) => item.ref).join(", ")}`)
+      const remainingCoordinationRefs = listCoordinationRefs(repoRoot, planName)
+      if (remainingCoordinationRefs.length > 0) {
+        fail(`Cannot finalize while coordination refs remain: ${remainingCoordinationRefs.map((item) => item.ref).join(", ")}`)
       }
     }
     if (handoff.eligible) {
@@ -445,9 +503,9 @@ export function cleanupRun(input) {
   return {
     repoRoot,
     planDir,
-    integrationBranch: input.integrationBranch,
+    planName,
+    integrationBranch,
     integrationHead,
-    runId,
     plan: planFilter,
     dryRun: Boolean(input.dryRun),
     includeFailed: Boolean(input.includeFailed),
@@ -459,11 +517,11 @@ export function cleanupRun(input) {
     finalization,
     handoff,
     preserved: {
-      integrationBranch: handoff.removed ? null : input.integrationBranch,
+      integrationBranch: handoff.removed ? null : integrationBranch,
       integrationWorktree: handoff.removed ? null : integrationWorktree?.path ?? null,
-      completionRefs: input.finalize && finalization.eligible && !input.dryRun
+      coordinationRefs: input.finalize && finalization.eligible && !input.dryRun
         ? null
-        : `refs/plan-herder/${runId}/completed/`,
+        : `refs/plan-herder/${planName}/`,
       logs: true,
     },
   }

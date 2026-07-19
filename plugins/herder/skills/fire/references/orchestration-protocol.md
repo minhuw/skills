@@ -1,122 +1,114 @@
 # Plan Herder Orchestration Protocol
 
-Use this protocol for every `fire` and `resume` run. The coordinator owns scheduling and integration. Agents own bounded candidate work; no child agent may spawn another child.
+Use this protocol for every `fire` and `resume` run. The coordinator owns scheduling and integration. Agents own bounded work on one stable branch/worktree per plan; no child agent may spawn another child.
 
 ## Contents
 
-1. Establish the run
+1. Establish the plan set
 2. Preflight without mutation
-3. Branch and worktree layout
+3. Branch, worktree, and lease layout
 4. Dispatch ready plans
-5. Transactional integration
-6. Rescue before escalation
+5. Restack, verify, review, and integrate
+6. Recover before escalation
 7. Usage accounting
 8. Resume semantics
 9. Completion
 10. Cleanup
 
-## 1. Establish the Run
+## 1. Establish the Plan Set
 
 Resolve:
 
 - `repo_root`: absolute repository root.
 - `plan_dir`: absolute Herder plan directory, normally `<repo_root>/herder-plans`.
-- `plan_manager`: absolute path to `skills/plans/scripts/herder-plans.mjs` inside the installed plugin.
-- `codex_evidence_reader`: on Codex, the absolute path to `skills/fire/scripts/read-codex-agent-evidence.mjs` inside the installed plugin.
-- `gate_runner`: absolute path to `skills/fire/scripts/run-gate.mjs` inside the installed plugin.
-- `base_commit`: current `HEAD` for a new run, or current integration HEAD for a resumed run.
-- `run_id`: a filesystem- and branch-safe UTC timestamp or the suffix of the resumed integration branch.
-- `integration_branch`: explicit argument or `plan-herder/integration-<run_id>`.
-- `worktree_root`: a temporary directory outside the user's checkout.
-- `gate_log_root`: `<worktree_root>/logs`, outside every integration, candidate, staging, and rescue worktree.
-- `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume.
-- `recovery_state`: per-plan generation IDs, substantive saver rounds, clarification cycles, bounded non-capacity interruption restarts, transient-capacity backoff state, accepted replans, and compact failure signatures for the current invocation.
-- `review_state`: per-plan-generation broad-pass count, reviewed artifact SHAs, ordered repair deltas, and a coordinator-owned stable finding ledger. Use a separate ledger with the same rules for the final cross-plan audit.
-- `candidate_replay`: the coordinator-recorded replay-base SHA, candidate HEAD, and ordered merge-free commit list for each candidate or rescue artifact.
+- `plan_name`: explicit `--plan-name`, otherwise the basename of `plan_dir`; require a lowercase Git-safe basename matching `[a-z0-9][a-z0-9._-]*` with no `..`, trailing `.`, or trailing `.lock`.
+- `namespace`: `herder/<plan_name>`.
+- `integration_branch`: `herder/<plan_name>/integration`.
+- `plan_branch(<id>)`: `herder/<plan_name>/<id>`.
+- `base_ref`: `refs/plan-herder/<plan_name>/base`.
+- `completion_ref(<id>)`: `refs/plan-herder/<plan_name>/completed/<id>`.
+- `checkpoint_ref(<id>, <generation>, <ordinal>)`: `refs/plan-herder/<plan_name>/checkpoints/<id>/<generation>-<ordinal>`.
+- `plan_manager`, `namespace_runner`, `codex_evidence_reader`, `gate_runner`, and `cleanup_runner`: absolute paths to the installed plugin scripts.
+- `base_commit`: current user-checkout `HEAD` for a new plan set, or `base_ref` for resume.
+- `worktree_root`: a directory outside the user's checkout, with integration at `<worktree_root>/<plan_name>/integration` and plans at `<worktree_root>/<plan_name>/<id>`.
+- `gate_log_root`: `<worktree_root>/<plan_name>/logs`, outside every Git worktree.
+- `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume. Use attempt IDs `<plan-name>-<plan-id|RUN>-<role>-<ordinal>`; never reuse an ID.
+- `recovery_state`: per-plan generation IDs, substantive Saver rounds, clarification cycles, bounded non-capacity interruption restarts, transient-capacity backoff state, accepted replans, and compact failure signatures.
+- `review_state`: per-plan-generation broad-pass count, exact reviewed base/HEAD/tree/status, ordered repair deltas, and a coordinator-owned stable finding ledger. Use a separate ledger with the same rules for the final cross-plan audit.
 
-Read applicable repository instructions before dispatch. Inspect the user's checkout but do not clean, stash, reset, stage, or commit it.
-
-For a new run, refuse an already-existing integration branch rather than repurposing it. For a resumed run, refuse a missing branch. Create or reopen an integration worktree for that branch.
-
-Treat `plan_dir` as coordinator-owned local state. It is Git-ignored by default and must not be copied into integration, candidate, staging, or rescue branches. Obtain individual immutable dispatch snapshots through `plan_manager snapshot`.
+Read applicable repository instructions before dispatch. Inspect the user's checkout but do not clean, stash, reset, stage, or commit it. Treat `plan_dir` as coordinator-owned local state; it may be Git-ignored and must not be copied into execution worktrees. Obtain immutable worker input through `plan_manager snapshot`.
 
 ## 2. Preflight Without Mutation
 
-Complete all checks before creating branches or worktrees:
+Complete every check before creating a ref, branch, or worktree:
 
 1. Confirm `git rev-parse --show-toplevel` and `git worktree list` succeed.
 2. Run `node <plan_manager> validate <plan_dir> --pretty` and reject graph errors.
 3. Confirm every indexed non-rejected plan file exists and is readable.
-4. Resolve the three logical roles and their configured model/effort values. On Codex, require a live Multi-Agent V2 spawn schema in the `herder_agents` namespace containing both `agent_type` and `fork_turns`, and inspect the installed `plan_implementer`, `plan_reviewer`, and `plan_saver` definitions. Each must pin its expected model and effort. Never use a task name as a substitute for `agent_type`, and never perform a speculative model call during preflight. On Claude Code probe `herder:plan-implementer`, `herder:plan-reviewer`, and `herder:plan-saver`; a probe may only return `AVAILABLE`, is a usage-bearing `RUN` attempt, and must be recorded even when preflight later fails. Retain the configured values for usage attribution and replace them with host-reported effective values only when available.
-5. Determine the repository-wide verification commands from repository instructions, CI configuration, and plan command tables. Do not guess commands when the plans specify them.
-6. Check that branch names and intended worktree locations do not collide.
+4. Run `node <namespace_runner> --repo <repo_root> --plan-dir <plan_dir> [--plan-name <plan_name>] --mode <fire|resume> --pretty`.
+5. For fresh `fire`, require the complete branch and private-ref namespace to be unused. For `resume`, require the integration branch and base ref, and reject unknown, unindexed, parent-blocking, or contradictory state. A namespace conflict is a deliberate stop: report every conflict and tell the user to inspect it, explicitly resume it, clean it, or choose another name. Never invent a timestamp, adopt a branch, delete evidence, or overwrite a ref.
+6. Resolve the three logical roles and their configured model/effort values. On Codex, require a live Multi-Agent V2 spawn schema in the `herder_agents` namespace containing both `agent_type` and `fork_turns`, and inspect the installed `plan_implementer`, `plan_reviewer`, and `plan_saver` definitions. Each must pin its expected model and effort. Never use a task name as a substitute for `agent_type`, and never perform a speculative model call during preflight. On Claude Code, probe the three native roles; a probe may only return `AVAILABLE`, is a usage-bearing `RUN` attempt, and must be recorded even when preflight later fails.
+7. Determine repository-wide verification commands from repository instructions, CI configuration, and plan command tables. Do not guess commands when plans specify them.
+8. Check intended worktree paths for collisions and confirm the host permission profile permits writes to Git metadata.
 
-Also confirm that the host permission profile permits writes to Git metadata before mutation. Some Codex `workspace-write` profiles protect `.git`, which prevents `git worktree add` even when ordinary repository files are writable. In a controlled disposable environment, select an adequate permission profile before launching the run; otherwise stop at preflight and report the required permission rather than partially creating the run.
+For a fresh plan set, create `base_ref` and the integration branch in one compare-and-swap `git update-ref --stdin` transaction whose expected old values are absent. If another process wins the namespace after preflight, the transaction must fail without replacing either ref. Then add the integration worktree from the existing branch. For resume, verify `base_ref` is an ancestor of integration HEAD and reopen a missing integration worktree without moving the branch.
 
-If the Codex V2 interface, a Codex custom profile, or a Claude role probe is unavailable, report the missing feature, logical role, model, effort, or host identifier. On Codex direct the user to `$herder:install`; do not fall back to nested `codex exec` or a generic agent.
+If the Codex V2 interface, a custom profile, Git metadata permission, or a Claude role probe is unavailable, stop before mutation and report the missing capability. On Codex direct the user to `$herder:install`; never fall back to nested `codex exec` or a generic agent.
 
-## 3. Branch and Worktree Layout
+## 3. Branch, Worktree, and Lease Layout
 
-Use names equivalent to:
+The only local branches Fire owns for a plan set are:
 
 ```text
-plan-herder/integration-<run-id>
-plan-herder/<run-id>/<plan-id>-candidate
-plan-herder/<run-id>/<plan-id>-stage-<attempt>
-plan-herder/<run-id>/<plan-id>-rescue-<attempt>
+herder/<plan-name>/integration
+herder/<plan-name>/<plan-id>
 ```
 
-The coordinator creates branches and worktrees. When the host can spawn directly into a supplied isolated worktree, use that facility. Otherwise create the Git worktree first and pass its absolute path to the agent.
+Each plan has exactly one stable branch and at most one worktree for its entire lifecycle. Implementer, reviewer, Saver, and a resumed coordinator use that same branch/worktree serially. Role, phase, attempt, generation, and failure are ledger state, not branch names. Never create candidate, stage, rescue, retry, generation, or timestamp branches.
 
-Lock a candidate, staging, or rescue worktree with `git worktree lock --reason plan-herder:<run-id>:<plan-id>:<role>:<attempt-id>:<task-name>` while an agent can still access it. Use the stable attempt ID and requested task name so a resumed coordinator can identify the prior owner before it has native agent state. Only the root coordinator may unlock it, and only after the agent is terminal and no retry can reuse that session. A lock is a cleanup lease, not lifecycle state; Plans remains the sole plan-state owner.
+Create a plan branch from the exact current integration HEAD with an absent-old-value `git update-ref` guard, then add its worktree. Recreate a missing worktree from the existing branch; never create a replacement branch for a missing directory.
 
-For a Codex attempt, call the native Multi-Agent V2 spawn tool with:
+Lock a plan worktree with `git worktree lock --reason plan-herder:<plan-name>:<plan-id>:<role>:<attempt-id>:<task-name>` while an agent can still access it. Use the stable attempt ID and requested task name so resume can identify the prior owner. Only the root coordinator may unlock, and only after the agent is terminal and no retry can reuse that session. A lock is a cleanup lease, not lifecycle state.
 
-- a unique, stable `task_name` based on the run, plan, role, and ordinal;
+For a Codex attempt, call native Multi-Agent V2 with:
+
+- a unique stable `task_name` based on plan name, plan ID, role, and ordinal;
 - `agent_type` equal to `plan_implementer`, `plan_reviewer`, or `plan_saver`;
-- `fork_turns: "none"` so unrelated coordinator history is not copied;
+- `fork_turns: "none"`;
 - one self-contained initial message containing the complete role prompt and immutable plan snapshot.
 
-Omit `model`, `reasoning_effort`, and `service_tier`. The custom agent definition owns those values. Use the returned canonical task name for follow-up, wait, interrupt, and final-result handling. Treat spawn failure, terminal failure, or a native terminal state without a response envelope as an attempt failure for usage accounting, then apply Section 6 before deciding whether a saver repair round was consumed. A merely quiet running worker is not a failed attempt; continue the event-driven wait unless the user supplied a deadline. Preserve the native child transcript as execution evidence when the host exposes it.
+Omit model, reasoning-effort, and service-tier overrides. Use the returned canonical task name for follow-up, waits, interruption, and evidence. Treat spawn failure, terminal failure, or a terminal native state without a response envelope as an attempt failure, then apply Section 6 before deciding whether it consumed a Saver round. A quiet running worker is not a failed attempt.
 
-Keep the coordinator shell anchored in the user's stable original checkout or another stable directory. Execute every Git command with `git -C <absolute-worktree>` and every non-Git command with an explicit tool workdir or scoped `(cd <absolute-worktree> && ...)` subshell. Never depend on an ambient `cwd`, and never remove or recreate the directory containing the coordinator process.
-
-Keep one candidate branch per plan. On resume, inspect an existing candidate branch and its commits rather than overwriting it. Recreate a missing worktree from the branch when necessary.
-
-Before creating any candidate, staging, or rescue branch, inventory the recognized branches and worktrees for that plan. Reuse an existing artifact when its branch, base, replay commits, cleanliness, and lease state match the lifecycle step. Never create a second staging or rescue artifact merely because the coordinator resumed, lost conversational context, or has not yet reconciled an old lock.
-
-Implementers and Savers may run in parallel, but serialize staging, review, and integration advancement across the run. From creation or validated reuse of a staging artifact until its review/integration transaction reaches a terminal result, do not advance integration for another plan. This prevents an unrelated fast-forward from invalidating several live stages and forcing branch-generating replays.
+Keep the coordinator shell anchored in the stable user checkout. Execute every Git command with `git -C <absolute-worktree>` and every non-Git command with an explicit workdir. Never remove or recreate the directory containing the coordinator process.
 
 ## 4. Dispatch Ready Plans
 
 At each scheduling pass:
 
-1. Run `node <plan_manager> ready <plan_dir> --pretty` from the stable coordination checkout.
-   Its `ready` list contains dependency-satisfied `TODO` plans only. Route `blocked` plans to Saver and reconstruct `inProgress` plans through resume semantics; never treat either list as fresh implementer work.
-2. Select actionable plans whose dependencies are all `DONE`.
-3. Resolve each dependency's coordinator completion commit from `refs/plan-herder/<run-id>/completed/<id>`. For backward compatibility, accept a reachable commit with the exact `Plan-Herder-Complete: <id>` trailer or exact `plan-herder(<id>): mark plan done` subject, but never create either legacy history marker in a new transaction.
-4. Verify every completion commit is an ancestor of integration HEAD.
-5. Create the candidate branch from that exact integration HEAD and record the candidate base SHA.
-6. Verify the dependency commits are ancestors of the candidate base.
-7. Mark every selected plan `IN PROGRESS` through `plan_manager transition` as a batch before dispatch; workers never edit the index.
-8. Dispatch up to the available concurrency limit.
+1. Run `node <plan_manager> ready <plan_dir> --pretty` from the coordination checkout. Route `blocked` plans to Saver and reconstruct `inProgress` plans through resume semantics; never treat either as fresh work.
+2. Select `TODO` plans whose dependencies are all `DONE`.
+3. Resolve every dependency from `completion_ref(<id>)` and require it to be an ancestor of integration HEAD. Accept reachable legacy completion trailers or exact-subject markers only for backward compatibility; never create them.
+4. Before mutation, require `plan_branch(<id>)` not to exist. If it exists during fresh dispatch, stop that plan for namespace reconciliation; never reset or reuse it speculatively.
+5. Create the plan branch from exact integration HEAD, record that replay base, add its worktree, and verify dependency commits are ancestors of the base.
+6. Mark selected plans `IN PROGRESS` through `plan_manager transition` as a batch before dispatch; workers never edit the index.
+7. Dispatch up to available concurrency. Independent plan implementers may run concurrently, but one plan has only one active owner.
 
-Do not serialize independent plans unnecessarily. Do not dispatch a dependent merely because a dependency's implementer finished; wait for reviewed integration and `DONE` status.
+Do not dispatch a dependent merely because an implementer finished; wait for reviewed integration, a reachable completion ref, and `DONE` status.
 
 ### Implementer prompt contract
 
-Give the resolved implementer role (`plan_implementer` through Codex Multi-Agent V2 or `herder:plan-implementer` on Claude Code):
+Give the resolved implementer:
 
-- its role and the prohibition on spawning agents;
-- the absolute candidate worktree path and branch;
-- the candidate base SHA;
-- the complete `planText` returned by `plan_manager snapshot`, always inlined;
+- its role and prohibition on spawning agents;
+- the absolute plan worktree path and branch;
+- the recorded branch base SHA;
+- complete `planText` from `snapshot`, always inlined;
 - applicable repository instructions;
-- an instruction never to edit `herder-plans/README.md` or any plan status;
+- an instruction never to edit the plan index or statuses;
 - the stable attempt ID and resolved model/effort attribution;
-- a requirement to stay in scope, honor STOP conditions, run every gate, and commit all intended changes;
-- a requirement for every commit subject and body to describe only the repository change and its reason, without Herder, plan IDs, roles, candidate/staging/review/rescue terminology, or orchestration metadata;
-- a requirement to summarize checks without pasting command logs;
+- requirements to stay in scope, honor STOP conditions, run every gate, and commit all intended changes;
+- a requirement that commit messages describe only repository changes and reasons, without Herder or orchestration metadata;
+- a requirement to summarize checks without pasting logs;
 - this exact response shape:
 
 ```text
@@ -129,79 +121,74 @@ NOTES: <material facts only>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Tell the worker to use `unknown` for values not explicitly exposed by the host and never estimate from transcript length. Structured host telemetry wins over the worker-authored `USAGE` line. Treat missing commits, dirty intended changes, unverifiable checks, STOPPED, tool errors, or a terminal attempt without a response as failure and enter rescue. Record the attempt through Plans even when no response or usage envelope returns.
+Tell the worker to use `unknown` for values not exposed by the host and never estimate. Structured host telemetry wins. Missing commits, dirty intended changes, unverifiable checks, `STOPPED`, tool errors, or a terminal attempt without a response enter recovery in the same plan worktree. Record every attempt through Plans.
 
 ### Coordinator wait discipline
 
-After dispatching Codex workers, call native `wait_agent` with `timeout_ms: 1800000`. It is a long poll: any agent update, including completion, ends the wait immediately; otherwise the timeout supplies a thirty-minute heartbeat. The timeout caps idle wakeups, not result-delivery latency. Process every queued update before waiting again.
+After dispatching Codex workers, call native `wait_agent` with `timeout_ms: 1800000`. It is a long poll: an update ends the wait immediately; otherwise the timeout supplies a thirty-minute heartbeat. The timeout caps idle wakeups, not result-delivery latency. Process every queued update before waiting again.
 
-A timeout is not a state change. If no local scheduling or integration work became ready, do not reread transcripts, request status, or call `list_agents`; issue the next long wait. Use `list_agents` only for initial bookkeeping or reconciliation after an ambiguous, missing, or contradictory terminal event. On Claude Code, use its native blocking agent wait with the same event-first behavior.
+A timeout is not a state change. If no local work became ready, do not reread transcripts, request status, or call `list_agents`; issue the next long wait. Use `list_agents` only for initial bookkeeping or reconciliation after an ambiguous, missing, or contradictory terminal event. On Claude Code, use the native blocking wait with the same event-first behavior.
 
-## 5. Transactional Integration
+## 5. Restack, Verify, Review, and Integrate
 
-Never test a candidate by first advancing the integration branch.
+Never test a plan by first advancing integration. Serialize restacking, coordinator gates, review, and integration advancement across the plan set. Once one plan enters this lane, do not advance integration for another plan until the transaction approves, enters recovery, or stops.
 
-Run every coordinator-owned verification gate, including final project-wide gates, through:
+Run every coordinator-owned verification gate through:
 
 ```text
 node <gate_runner> --cwd <absolute-worktree> --log-dir <gate_log_root>/<plan-or-RUN>/<phase> --label <stable-label> -- <command> <arguments...>
 ```
 
-Pass the exact command as argv after `--`; do not add a shell unless the specified verification command itself requires one. Never place secrets in command arguments. The runner writes combined stdout/stderr to a unique private log and returns only a command fingerprint, exit status, duration, byte count, SHA-256, and log path. It returns no command output on success or failure. Treat that compact JSON as the check result; never inline, stringify, or reread a complete gate log in coordinator context. Let Saver reproduce failed gates in its isolated context instead of feeding their output to the coordinator. Preserve the log with the failed worktree evidence. Git state-inspection commands are not verification gates and need not use the runner.
+Pass the exact argv after `--`; do not add a shell unless the command requires one. Never place secrets in arguments. The runner writes combined output to a private log and returns only fingerprint, exit status, duration, byte count, SHA-256, and log path. It returns no command output on success or failure. Never reread a full gate log into coordinator context; let Saver reproduce failures in its isolated context. Preserve logs with failed state.
 
-Run each coordinator transaction fail-fast (`set -e` or one checked command per tool call). Treat every nonzero exit as the end of that transaction; do not continue with empty or stale shell variables. Before retrying, prove that canonical integration HEAD still equals the transaction's recorded staging-base SHA.
+Run transactions fail-fast. Before retrying, prove integration HEAD still equals the recorded transaction base.
 
-For each candidate:
+For each completed plan branch:
 
-1. Record the candidate replay base and candidate HEAD. The replay base is the coordinator-recorded branch point before the implementer or Saver changed the artifact; require it to be an ancestor of candidate HEAD.
-2. Enumerate the candidate commits oldest-first with `git rev-list --reverse --first-parent <replay-base>..<candidate-head>`. Require at least one commit, and require `git rev-list --min-parents=2 <replay-base>..<candidate-head>` to be empty. A missing, ambiguous, or merge-bearing commit chain is a rescue event.
-3. Reuse a clean, unlocked staging branch/worktree only when its recorded integration base, candidate HEAD, and ordered replay list exactly match this transaction and no agent can still access it. Otherwise create one new staging branch/worktree from the latest integration HEAD. Never keep two live staging transactions for the same plan.
-4. Replay the exact ordered candidate commits onto staging with `git cherry-pick`. Never use `git merge`, `--no-ff`, or `--rebase-merges` to stage a plan. Any cherry-pick conflict or empty replay is a rescue event; the coordinator resolves no substantive conflict.
-5. Prove every candidate patch is represented in staging with `git cherry <staging-head> <candidate-head>`: every emitted row must begin with `-`, with no `+` row. Also require `git rev-list --min-parents=2 <staging-base>..HEAD` to be empty so the plan adds no merge node.
-6. Confirm material behavior is limited to the plan's scope. Apply the review acceptance policy below to incidental formatting, generated artifacts caused by gates, and other nonfunctional churn instead of treating their mere presence as a failed transaction.
-7. Run every plan done criterion and the applicable project-wide gates in the staging worktree.
-8. Record the staging worktree's clean status and tree SHA, dispatch `plan-reviewer` against the complete staging diff from the pre-plan integration SHA to staging HEAD, and prove both are unchanged after review. Any reviewer mutation is a failed review even if its verdict says APPROVE.
+1. Require its worktree to be clean, unlocked, and unowned. Record branch base, HEAD, tree SHA, and ordered merge-free commits. Require at least one commit and no merge commit.
+2. If its recorded base differs from current integration HEAD, create a unique immutable checkpoint ref naming the pre-restack HEAD with an absent-old-value guard. Restack the same checked-out plan branch in place with `git rebase --onto <integration-head> <recorded-base>`. Never merge integration into it. A conflict or interrupted rebase remains in that exact worktree and enters Saver; never abort, reset, clean, or create another branch merely to recover cleanliness.
+3. After restacking, require clean status, a merge-free unique range from the new integration base, and patch equivalence with the pre-restack checkpoint using `git cherry`. Record the new exact base, HEAD, tree, and commit list.
+4. Run every plan done criterion and applicable project-wide gate in the plan worktree.
+5. Dispatch the read-only reviewer against the complete diff from recorded integration base to plan HEAD. Record clean status and tree before dispatch; prove base, HEAD, tree, and status are unchanged afterward. Reviewer mutation is failure even when its verdict says `APPROVE`.
 
-Do not add Herder metadata to a commit subject or body. Candidate and repair commits must describe only the repository change and its reason; do not mention Herder, plan IDs, worker roles, candidates, staging, review, rescue, or orchestration.
+Do not add Herder metadata to a commit subject or body.
 
 ### Review acceptance and convergence
 
-The coordinator owns the acceptance gate. A review finding blocks integration only when it is one of:
+A finding blocks only when it is:
 
-1. a P0/P1 defect introduced by the candidate or repair diff;
-2. a failed required acceptance criterion or required verification command; or
+1. a P0/P1 defect introduced by the plan or repair diff;
+2. a failed required acceptance criterion or verification command; or
 3. a demonstrated violation of an explicit plan requirement or material scope constraint.
 
-P0 is reserved for a universal release, security, data-loss, or operational emergency. P1 is an urgent functional regression or explicit acceptance failure. P2 is a normal eventual fix and P3 is a nice-to-have improvement. P2 and P3 findings are advisory and never block integration, enter Saver, or prevent `DONE`.
+P0 is a universal release, security, data-loss, or operational emergency. P1 is an urgent functional regression or explicit acceptance failure. P2 and P3 findings are advisory and never block integration, enter Saver, or prevent `DONE`.
 
-A blocking finding must include an exact changed file and line, the triggering input/environment/scenario, reproducible evidence or a failing check, and the candidate hunk or commit that introduced it. Reject pre-existing defects, speculation, and assumptions about unstated intent as blockers. Style, formatting, documentation nits, unrelated cleanup, and generated-file churn are advisory unless the plan explicitly requires the exact result or the diff has a demonstrated P0/P1 consequence. Treat `SCOPE: FAIL` as blocking only for material out-of-plan behavior or an explicit scope violation; incidental nonfunctional churn does not make scope fail.
+A blocker must identify an exact changed file and line, triggering scenario, reproducible evidence or failing check, and introducing hunk or commit. Reject pre-existing defects, speculation, and unstated intent. Style, formatting, documentation nits, unrelated cleanup, and generated-file churn are advisory unless explicitly required or demonstrably P0/P1.
 
-Maintain a monotonic ledger for each plan generation. Assign each `NEW` finding the next stable ID (`F001`, `F002`, ...), deduplicate later reports by root cause even if lines move, and store severity, gate class, first-seen reviewed SHA, file/cause, evidence, introducing diff, and status (`OPEN`, `RESOLVED`, `ADVISORY`, `DISMISSED`, or `NEEDS_ADJUDICATION`). Pass the ledger to every later reviewer. Preserve existing IDs. A resolved finding stays resolved unless its exact scenario is reproduced on the current staged HEAD; a reproduced regression reopens the same ID. Carry advisories to the final run report without automatically creating or expanding a plan.
+Maintain a monotonic finding ledger per plan generation. Assign each `NEW` finding the next stable ID (`F001`, `F002`, ...), deduplicate by root cause, and store severity, gate class, first-seen reviewed SHA, file/cause, evidence, introducing diff, and status (`OPEN`, `RESOLVED`, `ADVISORY`, `DISMISSED`, or `NEEDS_ADJUDICATION`). Preserve IDs across restacks and resume.
 
-Use two review modes:
+Use two modes:
 
-- `DISCOVERY`: inspect the complete staged plan diff and reconcile all ledger entries. Allow at most two completed broad discovery passes per plan generation. The initial review is the first pass; after a repair, one second broad pass is allowed. A staging rebuild whose plan patch is unchanged does not earn another discovery pass.
-- `VERIFICATION`: after the second broad pass, verify only open blocking IDs and inspect the coordinator-supplied repair commit list or diff range for newly introduced regressions. Never reopen the unchanged remainder of the plan diff as a fresh audit.
+- `DISCOVERY`: inspect the complete plan diff. Allow at most two completed broad discovery passes per generation. The initial review is pass one; one post-repair broad pass is allowed. A restack whose patch is unchanged earns no new pass.
+- `VERIFICATION`: after the second broad pass, verify only open blocker IDs and inspect the repair delta for regressions.
 
-If verification finds an evidence-complete P0/P1 regression introduced by the repair delta, add it to the ledger and route it through the remaining Saver budget. If it reports a new blocker outside that delta after the broad-pass cap, record `NEEDS_ADJUDICATION`, transition the plan to `BLOCKED` with that exact evidence, and ask the user whether to accept it as a blocker or defer it; do not start another automatic broad review or Saver round for that finding. An accepted blocker resumes targeted repair and verification. A deferred finding becomes advisory and cannot prevent completion.
+If verification finds a new evidence-complete P0/P1 regression introduced by the repair delta, add it and use remaining Saver budget. A new blocker outside that delta after the cap becomes `NEEDS_ADJUDICATION`; transition the plan to `BLOCKED` and ask whether to accept or defer it. Do not restart broad discovery. A deferred finding becomes advisory.
 
-Normalize the effective gate from evidence and severity rather than blindly trusting the verdict word. A `REVISE` response containing only P2/P3, dismissed, or otherwise non-qualifying findings is an effective approval when required gates pass and effective scope is `PASS`. Only an evidence-complete open blocker can produce effective `REVISE`; reserve effective `BLOCK` for an irreducible blocker. This normalization prevents reviewer appetite from becoming an unbounded veto.
+Normalize the effective gate from evidence. A `REVISE` response containing only P2/P3, dismissed, or non-qualifying findings is effective approval when required gates and scope pass. Only an evidence-complete open blocker produces effective `REVISE`; reserve `BLOCK` for an irreducible blocker.
 
 ### Reviewer prompt contract
 
-Give the resolved reviewer role (`plan_reviewer` through Codex Multi-Agent V2 or `herder:plan-reviewer` on Claude Code):
+Give the reviewer:
 
-- its role and the prohibition on editing or spawning agents;
-- the absolute staging worktree path and branch;
-- the complete plan text;
-- the base and staged HEAD SHAs;
-- the actual checks run and their results;
-- `REVIEW MODE: DISCOVERY | VERIFICATION`, the number of completed broad passes, and the remaining broad-pass budget;
-- the complete finding ledger, or `none` on the first pass;
-- for verification, the exact repair commit SHAs or diff range and the open blocking finding IDs;
-- the stable attempt ID and resolved model/effort attribution;
-- instructions to apply the review acceptance policy above, preserve finding IDs, and respect the supplied review mode;
-- instructions to summarize checks without pasting command logs;
+- its read-only role and prohibition on editing or spawning agents;
+- the absolute plan worktree and branch;
+- complete plan text;
+- exact integration-base, plan-HEAD, and tree SHAs;
+- actual checks and compact results;
+- review mode, completed/remaining broad-pass counts, and complete finding ledger;
+- for verification, exact repair commit range and open blocker IDs;
+- stable attempt ID and model/effort attribution;
+- instructions to preserve IDs, apply the acceptance policy, and summarize without log dumps;
 - this exact response shape:
 
 ```text
@@ -213,49 +200,31 @@ RATIONALE: <concise>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Tell the reviewer never to estimate unavailable usage. Prefer structured host telemetry over the reviewer-authored `USAGE` line. Integrate only after the normalized gate is effective `APPROVE` with effective `SCOPE: PASS`, all required checks pass, and the ledger contains no `OPEN` or `NEEDS_ADJUDICATION` blocker. Verify the integration branch still points to the staging base SHA and the reviewed range contains no merge commit, then fast-forward it to staging HEAD. If it moved, discard/rebuild staging from the new integration HEAD, replay the candidate commits again, and verify the unchanged plan patch without consuming another discovery pass.
+Integrate only after effective `APPROVE`, effective scope `PASS`, all required checks pass, and no `OPEN` or `NEEDS_ADJUDICATION` blocker remains. Immediately before advancing, require integration HEAD to equal the reviewed base and the plan branch HEAD/tree/status to equal the reviewed values. Fast-forward the integration worktree with `git merge --ff-only <plan-branch>`; this must add no merge node. If integration moved, approval is invalid for advancement: checkpoint and restack the same plan branch, rerun required gates, and verify the unchanged patch without granting another discovery pass.
 
-After the fast-forward, require integration HEAD to equal the approved staging HEAD. Record that commit with `git update-ref refs/plan-herder/<run-id>/completed/<id> <approved-head> ""`; the empty expected old value requires the private ref not to exist. On resume, an existing ref is idempotent only when it already names the same approved commit; a conflicting target is a reconciliation failure. Verify the ref target is an ancestor of integration HEAD, then transition the plan to `DONE` through the plan manager. If the transition fails, stop dependency dispatch and reconcile the index from the private completion ref before continuing. Completion refs are local coordination metadata: never turn them into branches or tags, include them in commit messages, or push them unless the user explicitly requests Herder metadata transfer.
+After fast-forward, require integration HEAD to equal approved plan HEAD. Create `completion_ref(<id>)` with an absent-old-value guard, verify it is reachable, then transition the plan to `DONE`. If transition fails, stop dependency dispatch and reconcile from the private ref. After `DONE`, prove no agent can access the plan worktree, unlock it, and invoke cleanup with `--plan <id>`. Cleanup failure is a maintenance warning, not a rollback.
 
-After `DONE`, prove no worker can still access any recognized candidate, rescue, or staging artifact for that plan, unlock its worktrees, and invoke the cleanup runner with `--plan <id>`. Cleanup refusal or failure is a reported maintenance warning, not a reason to roll back reviewed integration or block dependents; preserve every artifact the runner skips.
+Any restack, gate, review, or compare-and-advance failure leaves integration unchanged and enters recovery on the same plan branch/worktree.
 
-If any replay, check, review, or compare-and-advance step fails, leave integration HEAD unchanged and enter rescue.
+## 6. Recover Before Escalation
 
-## 6. Rescue Before Escalation
+Never ask Saver to reconstruct failed work elsewhere. Dispatch it in the exact plan worktree containing committed, dirty, conflicted, or interrupted state. Do not create a recovery branch.
 
-Prepare the rescue environment; do not ask `plan-saver` to reconstruct missing candidate changes from a different checkout. Reuse the candidate branch/worktree when it safely contains the failed work. For integration-only failures, create a rescue branch/worktree from the latest integration HEAD and combine the candidate there first.
+An **agent attempt** is one host spawn and always receives a unique usage row. A **Saver repair round** is a substantive Saver result or an attempt that may have mutated the worktree. Host interruption alone is free only when every no-mutation invariant below is proven.
 
-An **agent attempt** is one host spawn and always receives a unique usage row. A **saver repair round** is a substantive saver result or a saver attempt that may have changed the rescue branch. Host interruption alone does not consume a repair round when all no-mutation invariants below are proven.
+A **plan generation** starts with an immutable plan snapshot, integration-base SHA, the stable plan branch reset for fresh implementation, an empty finding ledger, and zero broad passes. Number the initial generation `0`; increment only after accepted `REPLAN`, validated revised plan, checkpointed old HEAD, and controlled reset of the clean isolated plan branch to current integration. `REPAIRED`, restacks, clarification answers, and interrupted attempts remain in the same generation.
 
-A **plan generation** starts with an immutable plan snapshot, integration-base SHA, fresh implementer candidate, empty finding ledger, and zero completed broad review passes. Number the initial generation `0`; increment only after accepting `REPLAN`, validating the revised plan, and dispatching a fresh implementer from integration HEAD. Record the SHA-256 of the exact snapshotted `planText` with the generation. `REPAIRED`, staging rebuilds, rebases needed for unrelated integrations, clarification answers, and interrupted attempts remain in the same generation and never reset its recovery or review budget.
+Before every Saver dispatch, record integration HEAD; plan branch HEAD and tree; exact porcelain status; generation, snapshot SHA-256, repair-round number, and attempt ordinal; and any rebase state. Dirty state may contain the work Saver must recover and is ineligible for a no-cost interruption restart. Never abort a rebase, reset, clean, stash, or discard merely to make an attempt eligible.
 
-Before every saver dispatch, record:
+Give Saver only:
 
-- integration HEAD;
-- rescue branch HEAD and tree SHA;
-- the exact `git status --porcelain=v1 --untracked-files=all` result and whether it is empty; and
-- the plan-generation number, snapshot SHA-256, repair-round number, and attempt ordinal.
-
-A dirty rescue worktree may contain the failed work Saver must recover, but it is ineligible for a no-cost interruption restart. Never reset, clean, stash, or discard files merely to make an attempt eligible.
-
-Give the resolved saver role (`plan_saver` through Codex Multi-Agent V2 or `herder:plan-saver` on Claude Code) only:
-
-- the absolute rescue worktree path;
-- branch name;
-- the complete snapshotted plan text, always inlined because the plan directory may be absent from the worktree;
-- a compact failure envelope containing:
-  - failure source (`implementer`, `merge`, `gate`, `review`, or `compare-and-advance`), plan generation, snapshot SHA-256, integration-base SHA, and immutable failed HEAD/tree SHA;
-  - every open, evidence-complete blocking reviewer finding or failed-agent stop reason, preserving stable IDs, file/line evidence, and order but omitting advisories, commentary, and theories;
-  - each exact reproduction command when known, plus compact `run-gate.mjs` evidence (fingerprint, exit status, duration, log SHA/path) without raw output; and
-  - the finding ledger, completed broad-review count, ordered repair delta, prior Saver outcomes in this generation, and remaining review/generation/replan budget;
-- the expected outcome: inspect Git/repository state, reproduce relevant gates, repair and commit if possible, or classify the blocker;
-- a requirement for every repair commit subject and body to describe only the repository change and its reason, without Herder, plan IDs, roles, candidate/staging/review/rescue terminology, or orchestration metadata;
-- the user's answer when resuming after `NEEDS_INPUT`;
-- the stable attempt ID and resolved model/effort attribution.
-
-Pass direct failure evidence, not implementer/reviewer theories or raw gate output. Never pass P2/P3 advisories to Saver. Use `none` for unavailable findings or reproduction commands rather than inventing them. Tell Saver to repair only the supplied open blocking IDs, verify every direct finding or repro first, and broaden investigation only when that evidence indicates a systemic issue or cannot explain the failure. The immutable failed artifact may differ from the mutable rescue worktree; label both explicitly so Saver can compare them without guessing.
-
-Require this response shape:
+- the absolute plan worktree and branch;
+- complete snapshotted plan text;
+- a compact failure envelope containing source (`implementer`, `restack`, `gate`, `review`, or `compare-and-advance`), generation, snapshot SHA-256, integration base, immutable failed HEAD/tree, exact status/rebase state, open blocker evidence, reproduction commands, compact gate evidence, ledger, broad-pass count, repair delta, prior outcomes, and remaining budgets;
+- expected behavior: reproduce, repair and commit if possible, resolve an in-progress restack when safe, or classify the blocker;
+- the user's answer after `NEEDS_INPUT`;
+- stable attempt ID and model/effort attribution;
+- this exact response shape:
 
 ```text
 OUTCOME: REPAIRED | REPLAN | NEEDS_INPUT | TERMINAL
@@ -267,134 +236,81 @@ EVIDENCE: <concise repository/tool evidence>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Tell the saver never to estimate unavailable usage. Prefer structured host telemetry over the saver-authored `USAGE` line. Record each saver attempt separately, including one that ends in `INTERRUPTED`, `NEEDS_INPUT`, `REPLAN`, or `TERMINAL`.
+Pass direct evidence, not theories or raw gate logs. Never pass P2/P3 advisories. Tell Saver to repair supplied blockers first and broaden only when evidence is systemic or cannot explain failure. Saver never self-approves.
 
 ### Host interruption
 
-Classify a saver attempt as `INTERRUPTED` only when every condition holds:
+Classify `INTERRUPTED` only when: native host evidence proves platform/policy/transport/session failure rather than repository failure; no parseable final Saver envelope exists; integration HEAD and plan HEAD/tree exactly match pre-dispatch; and the worktree was clean before and remains clean including untracked files. Unknown or false conditions mean `FAILED`, consume the round, and preserve exact state.
 
-1. The native host state is spawn-failed, errored, aborted, disconnected, or timed out because of platform, policy/classifier, transport, or session-runtime failure—not a repository command failure or child-authored `OUTCOME`.
-2. No parseable final saver envelope exists. A transcript `task_complete` event without a final agent message is not a successful result; the native host state is authoritative.
-3. Integration HEAD, rescue HEAD, and rescue tree SHA exactly match their pre-dispatch values.
-4. The rescue worktree was clean before dispatch and remains clean afterward, including untracked files.
+For a proven interruption, record exact usage, do not increment repair or clarification counters, and use a fresh session/attempt ID with the same self-contained prompt. Never resume the interrupted child conversation.
 
-If any condition is unknown or false, record `FAILED`, consume the repair round, preserve the branch, and continue normal rescue handling. Do not infer safety from a missing response alone.
-
-For every proven interruption:
-
-1. Record exact available usage with outcome `INTERRUPTED` under a new attempt ID.
-2. Do not increment the saver repair-round or user-clarification counters.
-3. Never reuse or resume the interrupted agent session. Any retry uses a fresh agent session for the same round with the next role attempt ordinal and `fork_turns: "none"`. Give it the normal self-contained Saver prompt plus only the fact that the previous host attempt ended before any repository mutation; do not replay classifier text, partial conversation, or prior theories.
-
-After the no-mutation proof, classify the interruption reason from explicit native host evidence:
-
-- **Transient capacity**: the host explicitly reports temporary capacity, overload, retryable rate pressure, or concurrency exhaustion. Never infer capacity from a quiet worker, generic timeout, disconnect, or missing response.
-- **Non-retryable infrastructure**: the host explicitly reports invalid credentials, authorization/configuration failure, exhausted non-renewing quota, or another condition that cannot recover by waiting.
-- **Other host interruption**: any remaining platform, policy/classifier, transport, timeout, disconnect, or session-runtime failure.
-
-Handle the class as follows:
-
-- For transient capacity, do not increment any retry, interruption, clarification, replan, or recovery bound. Keep the rescue lease and logical Saver round intact, then start a fresh Saver after backoff delays of 30 seconds, 60 seconds, 120 seconds, and 300 seconds, remaining capped at 300 seconds for later capacity interruptions. Use a host delayed-wakeup or wait facility when available; never spin or reuse the failed session. Continue until a fresh attempt reaches a non-capacity outcome, the user cancels, a user-supplied deadline expires, or the host cannot keep the run alive.
-- If a capacity wait must stop because of cancellation, deadline, or host lifecycle, transition the plan to `BLOCKED` with detail `infrastructure capacity unavailable; recovery budget preserved`, keep the branch and worktree, and report that `resume` continues the same generation and logical Saver round. Do not describe this as exhausting any retry or repair limit.
-- For non-retryable infrastructure, transition immediately to the same infrastructure `BLOCKED` state without consuming substantive recovery budget.
-- For other host interruptions, permit at most two same-round non-capacity interruption restarts. If both restarts are interrupted, transition the plan to `BLOCKED` with an infrastructure/policy reason, preserve the unused substantive recovery budget in the report, and stop that plan. Do not describe this as exhausting the Saver repair limit.
-
-Every restarted spawn is still an independently attributable usage attempt. Never reuse an interrupted agent session or attempt ID.
+- For transient capacity, do not increment any retry, interruption, clarification, replan, or recovery bound. Use fresh Saver sessions after 30 seconds, 60 seconds, 120 seconds, and 300 seconds, capped at 300 seconds. Never infer capacity from quiet, timeout, disconnect, or missing response. If cancellation/deadline/host lifecycle stops waiting, transition to `BLOCKED — infrastructure capacity unavailable; recovery budget preserved` and retain the same branch/worktree.
+- For explicitly non-retryable infrastructure, transition immediately to the same infrastructure `BLOCKED` state without consuming substantive recovery.
+- For other host interruption, allow at most two same-round non-capacity interruption restarts, then block with infrastructure/policy reason while preserving unused substantive budget.
 
 Handle outcomes:
 
-- `REPAIRED`: treat the rescue branch as the new candidate and retain the coordinator-recorded rescue branch point as its replay base. Record the repair commits as the next review delta, repeat transactional staging and all checks, then select `DISCOVERY` or `VERIFICATION` from the generation's broad-pass count. The saver never self-approves.
-- `REPLAN`: validate the evidence and the replan guards below. If accepted, revise the coordinator's plan file and index, validate them through Plans, discard stale staging, increment the plan generation, reset only that new generation's recovery counters, and dispatch a fresh implementer from the new integration HEAD. Do not commit the local plan directory into execution branches.
-- `NEEDS_INPUT`: ensure the question is irreducible and focused, then ask the user exactly that question. Continue unrelated ready plans. After the answer, refresh the rescue branch onto the latest integration HEAD when necessary and automatically dispatch `plan-saver` again with the answer.
-- `TERMINAL`: transition the plan to `BLOCKED` through Plans with a one-line reason and report it; do not fabricate a question.
+- `REPAIRED`: record repair commits/delta and rerun restack if necessary, all gates, and `DISCOVERY` or `VERIFICATION` according to the existing broad-pass count.
+- `REPLAN`: validate evidence and guards. If accepted, revise/validate the plan, create a unique checkpoint for current HEAD, require clean unowned worktree, reset the same isolated plan branch to exact integration HEAD, increment generation, and dispatch a fresh implementer. This controlled reset is permitted only after the checkpoint succeeds; never reset dirty or ambiguously owned state.
+- `NEEDS_INPUT`: ask the one irreducible question, continue unrelated plans, then automatically redispatch Saver in the same worktree with the answer.
+- `TERMINAL`: transition to `BLOCKED` with a one-line reason.
 
-Give each plan generation two substantive autonomous Saver repair rounds and two user clarification cycles. `INTERRUPTED` usage rows do not count toward either bound. A successfully accepted `REPLAN` therefore gives the fresh implementation generation its own budget; it does not erase prior usage or attempt ordinals.
-
-Bound replanning separately. Accept at most two `REPLAN` outcomes per plan per invocation. Derive a compact failure signature from the failure source plus normalized direct findings, or from failing command fingerprints and exit statuses when findings are absent; exclude generation numbers and commit SHAs. If the same signature survives two consecutive completed implementation generations, reject another `REPLAN` for that signature: Saver must repair it, return `NEEDS_INPUT`, or classify it `TERMINAL`. If a rejected `REPLAN` leaves a substantive round in the current generation, redispatch a fresh Saver with the guard result; otherwise transition the plan to `BLOCKED`.
-
-After a generation's substantive, clarification, non-capacity interruption-restart, or replan bound is exhausted, transition the plan to `BLOCKED`, preserve the rescue branch, and report the generation plus the exact bound or repeated signature that ended the run. Transient capacity interruptions never exhaust this bound; they stop only under the capacity rules above. A new explicit `resume` invocation may authorize another bounded cycle.
+Give each generation two substantive autonomous Saver rounds and two clarification cycles. Accept at most two `REPLAN` outcomes per plan per invocation. Derive compact failure signatures without generation numbers or SHAs. If the same signature survives two consecutive completed generations, reject another replan for it. When a bound is exhausted, transition to `BLOCKED`, preserve the single plan branch/worktree, and report the exact bound. A new explicit resume authorizes another bounded recovery cycle but does not reset review state.
 
 ## 7. Usage Accounting
 
-The root coordinator is the only usage-ledger writer. After every agent attempt reaches a terminal host state, call `plan_manager record-usage` before taking the next lifecycle action. Use an idempotent attempt ID such as `<run-id>-<plan-id>-<role>-<ordinal>`; increment the ordinal for every interruption restart, including capacity retries, and use plan `RUN` for a final cross-plan reviewer or integration-rescue agent. Record the normalized outcome, including `INTERRUPTED`, so attempt count and substantive recovery count can be reconstructed separately.
+The root coordinator is the only usage-ledger writer. After every terminal attempt, call `record-usage` before the next lifecycle action. Continue ordinals across resume and new invocations for the same plan directory. Use plan `RUN` for final-audit attempts. Record normalized outcomes including `INTERRUPTED`.
 
-Attribute the configured model and effort resolved before dispatch. Prefer host-reported effective model/effort and structured usage over configured values and the worker's envelope when those fields are exposed. On Codex, after a child reaches a terminal state, run `node <codex_evidence_reader> --agent <returned-canonical-task-name> --pretty`. Require its `agentRole` to match the requested custom profile and its `multiAgentVersion` to be `v2`; a mismatch is a routing failure. Use its `terminal.taskComplete`, `terminal.turnAborted`, and `terminal.finalEnvelopePresent` fields together with the native agent state when classifying interruptions; `taskComplete` alone is insufficient. When its `usage` is present, copy the exact fields and source `codex-multi-agent-v2-transcript`. If no uniquely attributable terminal usage exists, record every token field as `unknown` with source `unknown`. On Claude, copy structured host telemetry when available and otherwise use `unknown`. Never tokenize transcripts, subtract coordinator totals, or infer hidden reasoning.
+Prefer host-reported effective routing and structured usage. On Codex, after terminal state run `node <codex_evidence_reader> --agent <canonical-task-name> --pretty`; require matching role and `multiAgentVersion: v2`. Use terminal fields plus native state; `taskComplete` alone is insufficient. Copy exact transcript usage when uniquely attributable, otherwise record all fields/source as `unknown`. Never tokenize transcripts, subtract coordinator totals, or infer reasoning.
 
-Use `plan_manager usage <plan_dir> --pretty` for reporting. Its token subtotal is input plus output for attempts where both are known; cached-input and reasoning columns are details, not additional tokens. Always report coverage beside subtotals. The README ledger covers recorded Herder attempts, not unobservable coordinator, platform, or retry overhead.
+Use `plan_manager usage` for reporting. Always report coverage beside known subtotals; the ledger excludes unobservable coordinator/platform overhead.
 
 ## 8. Resume Semantics
 
-Reconstruct state from:
+Run namespace preflight in `resume` mode, then reconstruct from Plans status, `base_ref`, completion/checkpoint refs, the exact integration/plan branches, worktree leases/status/rebase state, persisted child evidence, gate evidence, reviewer envelopes, finding IDs, and usage rows. Conversation history is never a dependency; every replacement child receives a fresh self-contained prompt.
 
-- `node <plan_manager> status <plan_dir> --pretty`;
-- private completion refs under `refs/plan-herder/<run-id>/completed/`, plus reachable trailer or exact-subject markers already present from older Herder versions;
-- candidate and staging branch names;
-- branch ancestry and worktree cleanliness.
-- the manager-generated usage ledger and existing attempt IDs.
+Treat locks as leases. On Codex, run `node <codex_evidence_reader> --workdir <absolute-worktree> --pretty` and correlate the structured lock reason with persisted child evidence. If owner is active, keep the lease and let the owning coordinator wait; a fresh coordinator must not dispatch competition. If terminal with a parseable envelope, record usage and continue. If interrupted with proven clean unchanged state, record `INTERRUPTED` and use a fresh agent. If ownership remains ambiguous, preserve the lock and stop that plan.
 
-Treat saver ledger rows with outcome `INTERRUPTED` as attempts but not substantive repair rounds. Anchor the resumed cycle's initial generation to the current validated snapshot and usable candidate; prior `REPLAN` rows remain history, but their old counter buckets need not be recreated. Reconstruct review state from retained reviewer final envelopes, reviewed staging artifacts, and stable finding IDs; a resume or staging rebuild never resets the broad-review count or finding ledger. If review state cannot be reconstructed unambiguously, treat the broad-pass budget as exhausted and route any new blocker outside a proven repair delta to human adjudication rather than restarting discovery. Never infer a reset from a staging rebuild or Saver commit. Continue attempt ordinals after every prior row. When the plan is `BLOCKED` with detail `infrastructure capacity unavailable; recovery budget preserved` and the no-mutation proof still holds, resume the same generation and logical Saver round with a fresh session and restart capacity backoff at 30 seconds. Other explicit resumes start a new bounded recovery cycle but do not reset review state. Never rewrite or drop prior usage.
+Classify each retained plan branch:
 
-Treat worktree locks as leases. On resume, reconcile native agent states before unlocking a stale Herder lock; keep the worktree locked whenever an agent is active, ambiguous, or could still be retried in the same session. On Codex, use `node <codex_evidence_reader> --workdir <absolute-worktree> --pretty` to find persisted child sessions that used the artifact, then correlate their canonical task names, roles, terminal envelopes, and attempt IDs with the structured lock reason and usage ledger.
+- Dirty, conflicted, or rebasing with no active owner: preserve exact worktree and dispatch Saver there; never abort or replace it.
+- Clean with merge-free unique commits not yet completed: reconstruct its base/checkpoint, then restack if needed, gate, and review.
+- Clean with no unique commits and `IN PROGRESS`: dispatch a fresh implementer only when evidence proves no prior mutation was lost; otherwise stop for reconciliation.
+- `BLOCKED`: dispatch Saver on the existing plan branch. If the branch is absent, create it only when the ledger and evidence prove no failed work existed; otherwise stop.
+- Valid completion ref reachable from integration: reconcile `DONE` before dependencies. `DONE` without proof or with failed cheap verification transitions to `BLOCKED` and recovery.
 
-Subagent conversational context is not a resume dependency. Never ask a fresh child to continue an interrupted child's conversation, and never assume a new coordinator can attach to a child owned by another root session. Reconstruct direct state from Git, the worktree, compact gate evidence, the finding ledger, usage rows, and persisted child telemetry; every replacement child receives a fresh self-contained prompt with `fork_turns: "none"`.
+Reconstruct review state from reviewer envelopes and exact reviewed base/HEAD/tree. Resume or restack never resets broad-pass count or ledger. If reconstruction is ambiguous, treat broad discovery as exhausted and send new outside-delta blockers to human adjudication. Continue all ordinals and never rewrite usage.
 
-Classify every retained artifact before creating a branch or dispatching a child:
-
-- If its recorded owner is active, keep the lease and let the same coordinator wait. A fresh coordinator must not dispatch a competing child.
-- If the owner is terminal with a parseable envelope, record its usage, unlock the worktree, and continue from that outcome.
-- If the owner was interrupted and the worktree is clean with unchanged HEAD and tree, record `INTERRUPTED` and use a fresh agent for the same logical attempt.
-- If a dirty candidate, rescue, or staging worktree has no active owner or final envelope, preserve and lock the exact worktree, classify the prior attempt as failed, and dispatch a fresh Saver there. Never reset, clean, stash, or replace half-finished edits merely to recover a clean branch.
-- If a clean candidate or rescue contains committed merge-free work, treat it as the usable candidate and stage those commits.
-- If a clean staging artifact still has the exact current base and replay, continue the first missing gate, review, or compare-and-advance step. Rerun evidence that cannot be reconstructed; do not create a replacement stage solely because coordinator context was compacted.
-- If ownership or mutation state remains ambiguous, keep the artifact locked and stop that plan for reconciliation instead of guessing.
-
-Reconstruct each candidate or rescue replay base with `git merge-base <artifact-head> <integration-head>`, then verify that the artifact's unique first-parent range is nonempty and merge-free before staging. Never infer the replay set from `integration..artifact`, because integration may contain unrelated plans that landed after the artifact forked.
-
-For `IN PROGRESS`, inspect its candidate branch. If it contains committed work, stage and review it; if it has no usable work, dispatch a fresh implementer. For `BLOCKED`, start with a saver when a rescue branch exists; otherwise create a fresh candidate from integration HEAD and let the saver investigate the plan and repository.
-
-Never trust a `DONE` row alone. Verify its run-scoped completion ref names a commit reachable from integration HEAD and re-run cheap done criteria when resuming. Accept a reachable trailer or exact-subject marker only for backward compatibility. If completion proof is missing or verification fails, transition it to `BLOCKED` through Plans and enter rescue before allowing dependents to start. Conversely, if a valid completion ref exists while the index is not DONE, reconcile that status before dispatching dependents. Continue role ordinals after the highest recorded attempt; never duplicate or rewrite a prior usage row.
-
-A crash may occur after the integration fast-forward but before the completion ref is written. Recover that narrow gap only when retained evidence proves a clean staging HEAD received effective `APPROVE`, all required gates passed, its reviewed tree is unchanged, and that exact staged commit is an ancestor of current integration HEAD. Then create the missing private ref with the normal absent-old-value guard and reconcile `DONE`. Never infer approval merely because an unmarked commit is present on integration; if any review or gate evidence is missing or ambiguous, stop that plan for reconciliation.
+A crash may occur after the integration fast-forward but before the completion ref is written. Recover only when evidence proves exact plan HEAD/tree received effective approval, every gate passed, no mutation followed, and that exact commit is current/reachable integration. Then create the missing ref with absent-old-value guard and reconcile `DONE`. Never infer approval merely because an unmarked commit is present on integration.
 
 ## 9. Completion
 
-The run succeeds when every plan is `DONE` or `REJECTED`, all dependency completion refs resolve to ancestors of integration HEAD, the final project-wide gates pass, and the final reviewer ledger contains no evidence-complete P0/P1 cross-plan integration regression. P2/P3 final-audit findings are advisory and cannot fail the run.
+The plan set succeeds when every plan is `DONE` or `REJECTED`, every dependency completion ref is reachable from integration, final project-wide gates pass, and the final reviewer ledger has no qualifying cross-plan blocker. P2/P3 findings remain advisory.
 
-Apply the same stable ledger and two-broad-pass cap to the final cross-plan audit. If a final gate or qualifying audit blocker fails, create an integration-rescue branch/worktree from integration HEAD and send `plan-saver` a synthetic plan containing the failing final criterion and expected integrated behavior. Treat any repair as a new transaction: stage it from the unchanged integration HEAD, run all final gates, and use targeted verification after the broad-pass cap before advancing integration. A new blocker outside the repair delta after the cap requires human adjudication, not another automatic audit cycle.
+Apply the same finding ledger and two-broad-pass cap to the final audit. After plan scheduling is terminal, a final gate/audit repair may operate directly in the isolated integration worktree to avoid another branch: first create a unique `checkpoints/RUN/<ordinal>` ref for integration HEAD, stop all plan dispatch, and give Saver a synthetic plan. Treat added repair commits as unapproved until all final gates and reviewer approval succeed. If interruption leaves dirty or unapproved integration state, preserve and resume that exact worktree; never hand it off. Only final approved integration may be reported as complete.
 
-After successful final gates and audit, prove no agent can access a run artifact and invoke the cleanup runner with `--finalize`. Finalization first removes every eligible candidate, stage, and rescue branch/worktree, then re-inventories the run and deletes its private completion refs only if no run artifact remains. A dirty, locked, missing, unrecognized, nonterminal, or unverifiable artifact makes finalization ineligible and preserves all completion refs. Report that maintenance warning without rolling back the completed integration branch.
+After successful final gates/audit, prove no agent can access a plan worktree and invoke fail-closed `--finalize`. Finalization removes every eligible plan branch/worktree, re-inventories the namespace, and deletes recognized private coordination refs only when no plan branch remains. Dirty, locked, missing, unrecognized, nonterminal, or unverifiable state preserves refs and reports a maintenance warning without rolling back approved integration.
 
-Do not merge, push, publish, or deploy. Proof-based automatic cleanup may remove clean `DONE` artifacts; preserve blocked/failed candidate and rescue evidence unless the user explicitly requests `--include-failed`. Report:
+Never merge, push, publish, or deploy. Report integration branch/worktree, final SHA, plan outcomes, checks and compact log evidence, usage/coverage, advisory/adjudication findings, and preserved branches.
 
-- integration branch and absolute worktree;
-- final commit SHA;
-- plans completed/rejected/blocked;
-- final verification commands and results;
-- compact gate evidence and retained log paths;
-- usage subtotals and coverage by plan, role, and model/effort;
-- advisory findings and any finding awaiting human adjudication, grouped by stable ID;
-- preserved branches needing attention.
+Fire never merges into the user's branch. When the intended target still points to `base_ref`, report `git merge --ff-only herder/<plan-name>/integration`. If it moved, report that fast-forward is unavailable and require a fresh replay/review cycle on the new target. Never recommend a non-fast-forward merge or rebasing the user's branch to force handoff.
 
-Fire never merges into the user's branch. When its original target branch still points to the run's base commit, report `git merge --ff-only <integration-branch>` as the normal handoff; this adds only ordinary reviewed repository commits, with no Herder merge nodes, marker commits, trailers, tags, or messages. Private completion refs remain local and are not transferred by the fast-forward. If the target branch moved, report that fast-forward is unavailable and require a fresh replay/review cycle on the new target. Never recommend a non-fast-forward merge or rebasing the user's branch to force the handoff.
-
-After the user completes that fast-forward, report `herder:fire cleanup <plan-dir> --integration-branch <integration-branch> --finalize --handoff-target <target-branch>` as the explicit post-handoff cleanup. This command never performs a merge. It removes the integration worktree and exact branch ref only after the normal finalization checks pass, the named local target branch contains the integration commit, and the integration worktree is clean, unlocked, present, and distinct from the user's checkout. A failed proof preserves the integration state.
+After the user fast-forwards, report `herder:fire cleanup <plan-dir> [--plan-name <name>] --finalize --handoff-target <target-branch>`. It never performs the merge. It removes integration only after proving the named target contains integration and the integration worktree is clean, unlocked, present, and not the user checkout.
 
 ## 10. Cleanup
 
-Cleanup is a Fire coordinator operation, never a worker role. For automatic post-`DONE` cleanup or explicit `herder:fire cleanup`, invoke:
+Cleanup is coordinator-only. Invoke:
 
 ```text
-node <cleanup_runner> --repo <repo_root> --plan-dir <plan_dir> --integration-branch <branch> [--plan <id>] [--dry-run] [--include-failed] [--finalize] [--handoff-target <branch>] --pretty
+node <cleanup_runner> --repo <repo_root> --plan-dir <plan_dir> [--plan-name <name>] [--plan <id>] [--dry-run] [--include-failed] [--finalize] [--handoff-target <branch>] --pretty
 ```
 
-Add `--finalize` only for whole-run cleanup; it cannot be combined with `--plan`. `--handoff-target` requires `--finalize` and means the handoff has already occurred; the runner must never advance the target branch. Require the exact integration branch and handoff target; never infer either. Before mutating, prove no active or ambiguous agent can access a targeted worktree. `--dry-run` may inspect an active run but must not unlock anything.
+The runner derives the exact integration branch from the validated plan name. `--finalize` cannot combine with `--plan`; `--handoff-target` requires `--finalize`. Before mutation, prove no active or ambiguous agent can access targeted worktrees. Dry run never unlocks.
 
-The runner owns the mechanical safety checks. It validates Plans, limits branches to the integration branch's run prefix and recognized candidate/stage/rescue names, and preserves unrecognized artifacts. By default a branch is eligible only when its plan is `DONE`, its run-scoped private completion ref names an ancestor of integration HEAD, and any attached worktree is unlocked and clean. Reachable trailer and exact-subject markers remain valid for runs created by older Herder versions. Classify an ancestor as `ancestor`, a merge-free artifact whose patch series is fully represented in integration as `patch-equivalent`, and every other recognized artifact for that completed plan as `superseded-by-completion`. The resolved reviewed completion commit is the authority for delivered code; unmatched failed attempts remain only while the plan is non-`DONE`. Delete the worktree first, then delete the branch ref only if it still points to the preflight SHA; preserve private completion refs for resume and status evidence.
+The runner recognizes only `herder/<plan-name>/<indexed-id>` plan branches plus exact integration. By default, a plan branch is eligible only when status is `DONE`, its completion proof is reachable, and its worktree is clean/unlocked. Delete worktree first, then branch with its preflight SHA as expected old value. Preserve clean non-`DONE` branches unless the user explicitly supplied `--include-failed` while the run is stopped; that flag never overrides dirty, locked, missing, unknown, integration, logs, plans, or user-checkout protection.
 
-For `--finalize`, additionally require every indexed plan to be `DONE` or `REJECTED`, every `DONE` plan to have valid completion proof, every private completion ref to be recognized and reachable, and every run artifact branch to be in the current removal set. Finalization makes clean, unlocked, recognized `REJECTED` artifacts eligible without exposing `BLOCKED`, `TODO`, or `IN PROGRESS` evidence; logs and transcripts remain. Remove branches/worktrees first, re-list the run namespace, and delete each completion ref with its preflight target as the expected old value only when the second inventory is empty. Preserve integration, its worktree, logs, plans, legacy history markers, and all completion refs whenever any prerequisite fails. A finalized run with every plan terminal, no run artifacts, and no completion refs is already complete; on a later `resume`, rerun final project gates rather than recreating plan workers or refs.
+Finalization additionally requires every plan terminal, every `DONE` proof reachable, every private ref recognized, and every plan branch removable. Remove plan branches/worktrees, re-list, then delete private refs with exact expected targets. Preserve integration, logs, plans, and all refs whenever any prerequisite fails. An already-finalized plan set with all plans terminal, no plan branches, and no private refs is idempotently complete; later resume reruns final gates without recreating workers.
 
-For `--finalize --handoff-target <branch>`, accept both the transaction that is finalizing now and an already-finalized run with every plan terminal, no run artifacts, and no completion refs. Require the integration HEAD to be an ancestor of the named local target branch immediately before deletion. If the integration branch has an attached worktree, require it to be clean, unlocked, present, and different from the repository path supplied as the user's checkout. Remove that worktree first, then delete the integration branch only with its preflight SHA as the expected old value. A failed proof preserves both; a concurrent branch move after worktree removal leaves the changed branch intact.
+For `--finalize --handoff-target`, require integration HEAD to be an ancestor of the local target immediately before deletion. Remove a clean distinct integration worktree first, then delete its exact branch with preflight SHA. Any failed proof or concurrent move preserves changed state.
 
-`--include-failed` is valid only when the user explicitly supplied it and the run is stopped. It additionally makes clean, unlocked non-`DONE` candidate/stage/rescue evidence eligible even when unmerged. It never overrides a dirty, locked, missing, or unrecognized worktree and never deletes the integration branch/worktree, gate logs, plan directory, user checkout, or unrelated refs. Only the separately requested, proof-complete `--finalize --handoff-target` operation may delete integration state. Do not invent either authorization during Fire or resume.
-
-For explicit cleanup, report every planned/removed artifact and every preserved artifact with its reason. For automatic cleanup, retain the compact result in the run report. Never ask an implementer, reviewer, Saver, or plan producer to remove Git state.
+Report every planned/removed item and every preservation reason. Never ask a worker to clean Git state.

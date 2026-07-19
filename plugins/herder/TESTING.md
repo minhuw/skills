@@ -10,6 +10,8 @@ From the marketplace repository root:
 node plugins/herder/skills/plans/scripts/test.mjs
 node plugins/herder/skills/install/scripts/test.mjs
 node plugins/herder/skills/fire/scripts/test.mjs
+node plugins/herder/skills/fire/scripts/namespace-test.mjs
+node plugins/herder/skills/fire/scripts/branch-model-test.mjs
 node plugins/herder/skills/fire/scripts/cleanup-test.mjs
 
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/plans
@@ -25,7 +27,7 @@ claude plugin validate plugins/herder --strict
 git diff --check
 ```
 
-The Fire script tests cover native agent-evidence extraction by agent and worktree, coordinator gate isolation, severity-gated review convergence, stable finding ledgers, bounded broad discovery, targeted verification, compact Saver failure envelopes, per-generation recovery guards, uncounted transient-capacity backoff, bounded non-capacity interruptions, repository-native linear cherry-pick history with private completion refs, and fail-closed cleanup. The cleanup fixtures prove private-ref, trailer, and legacy-marker recognition, absence of Herder metadata from new commit history, dry-run behavior, complete clean/unlocked `DONE` artifact cleanup (including superseded failed attempts), default preservation of non-`DONE` evidence, explicit clean failed-evidence deletion, refusal to finalize incomplete or artifact-bearing runs, successful terminal-run completion-ref deletion, and preservation of dirty, locked, unrecognized, proofless, integration, and log state.
+The Fire script tests cover native agent-evidence extraction by agent and worktree, coordinator gate isolation, namespaced collision preflight, one stable branch/worktree per plan, in-place checkpointed restacking, severity-gated review convergence, stable finding ledgers, bounded recovery, repository-native linear history, private completion/checkpoint refs, and fail-closed cleanup. The namespace fixtures prove directory-derived names, explicit-name isolation, fresh-run collision refusal, resume validation, and parent/unknown branch protection. Cleanup fixtures prove exact plan-branch recognition, private-ref validation, absence of Herder metadata from new commit history, dry-run behavior, clean/unlocked `DONE` cleanup, default preservation of non-`DONE` evidence, explicit failed-evidence deletion, terminal finalization, and preservation of dirty, locked, unknown, proofless, integration, and log state.
 
 Use `uv run --with pyyaml python ...` when the validation scripts' Python environment does not already contain PyYAML.
 
@@ -94,8 +96,8 @@ Use `--workspace` and `--auth-file` exactly as in the general live test. The tra
 This high-cost mode creates a plan with Improve and executes it through native Codex Multi-Agent V2. The isolated Codex configuration pins the main scheduler to Sol/max, enables `multi_agent_v2`, and gives the coordinator only the workspace-write roots needed for disposable worktrees and Git metadata. The test installs the native profiles in a fresh session, then verifies:
 
 - Fire dispatches `agent_type` with `fork_turns: "none"` and never invokes the removed `codex exec` worker adapter.
-- Implementers run Luna/max and reviewers run Sol/xhigh. The installed reviewer profile requests read-only; the transcript also records whether the coordinator's inherited runtime permission override superseded it, while Fire proves the reviewer left the staged tree unchanged.
-- Every child transcript reports Multi-Agent V2 with one `NEW_TASK` envelope and no user-history messages, proving coordinator history was not forked. Its command evidence must stay under the disposable candidate, staging, or integration worktree root.
+- Implementers run Luna/max and reviewers run Sol/xhigh. The installed reviewer profile requests read-only; the transcript also records whether the coordinator's inherited runtime permission override superseded it, while Fire proves the reviewer left the plan branch unchanged.
+- Every child transcript reports Multi-Agent V2 with one `NEW_TASK` envelope and no user-history messages, proving coordinator history was not forked. Its command evidence must stay under the disposable plan or integration worktree root.
 - Exact native per-child transcript telemetry is recorded as numeric `codex-multi-agent-v2-transcript` usage rows.
 - Transcript evidence distinguishes a real final response from `task_complete` without an envelope, allowing a clean classifier/transport interruption to be recorded as `INTERRUPTED` and restarted without consuming a substantive saver round.
 - Fire uses native `wait_agent` as a thirty-minute event-driven long poll rather than routine status polling, and coordinator verification calls use `run-gate.mjs` so passing command bodies do not enter the coordinator transcript.
@@ -111,4 +113,4 @@ The transcript files are `00-install.jsonl`, `01-improve.jsonl`, and `02-fire-ru
 
 ## Release confidence
 
-Before publishing, require all deterministic checks and the local installation smoke test. Run the general live test after changes to Improve output, the Plans protocol, or Fire's consumption of plan state. Run the targeted Grill test after changes to its interview, confirmation, or plan-editing contract. Run the targeted Validate test after changes to validation, repair boundaries, or Fire-readiness reporting. Run the high-cost Fire execution mode when scheduling, worktree, model routing, usage capture, review, or rescue behavior changes materially.
+Before publishing, require all deterministic checks and the local installation smoke test. Run the general live test after changes to Improve output, the Plans protocol, or Fire's consumption of plan state. Run the targeted Grill test after changes to its interview, confirmation, or plan-editing contract. Run the targeted Validate test after changes to validation, repair boundaries, or Fire-readiness reporting. Run the high-cost Fire execution mode when scheduling, namespace, worktree, model routing, usage capture, review, or recovery behavior changes materially.
