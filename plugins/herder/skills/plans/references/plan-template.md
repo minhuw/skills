@@ -105,9 +105,9 @@ executor's environment. Skip the section otherwise.)
 
 ## Git workflow
 
-(Filled from recon — match the repo's observed conventions.)
+(Commit style is filled from recon; branch and worktree ownership are fixed by Fire.)
 
-- Branch: follow the repo's branch-naming convention; otherwise use `herder/NNN-<slug>`
+- Branch: use the exact branch/worktree assigned by Herder Fire; never create or switch branches.
 - Commit per step or per logical unit; message style: <match repo, e.g. conventional commits — include an example from `git log`>
 - Do NOT push or open a PR unless the operator instructed it.
 
@@ -213,7 +213,7 @@ After writing a draft, reread the saved plan from disk as if the planning sessio
 1. **Intent or finding coverage** — "Why this matters", accepted decisions, non-goals, steps, tests, and done criteria all describe the same requested outcome or vetted finding. The draft introduces no unconfirmed product decision.
 2. **Evidence** — current-state claims, file paths, symbols, excerpts, commands, dependencies, and conventions are verified against the repository rather than guessed. No secret value appears; name only its location and credential type.
 3. **Executability** — a model new to the repository can execute the plan using only the plan and repository. Remove placeholders, "as discussed", vague references such as "the relevant module", judgment-only checks such as "make sure it works", and any hidden interview or audit context.
-4. **Internal consistency** — Scope, drift-check paths, steps, test plan, done criteria, STOP conditions, dependencies, and the index agree. Every step names exact files or symbols and ends with a command plus expected result.
+4. **Internal consistency** — Scope, drift-check paths, Git workflow, steps, test plan, done criteria, STOP conditions, dependencies, and the index agree. The Git workflow delegates branch/worktree ownership to Herder Fire, and every step names exact files or symbols and ends with a command plus expected result.
 5. **Domain model** — accepted terminology, glossary changes, and ADR obligations are durable and consistent across current state, scope, ordered steps, and done criteria. Do not hide them in conversation history.
 6. **Plan shape** — the draft is one coherent, independently testable unit. Its steps are small enough to verify, ordered by dependency, and explicit about inputs, outputs, and boundaries where those are not obvious.
 

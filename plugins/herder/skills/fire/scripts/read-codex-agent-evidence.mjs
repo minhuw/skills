@@ -74,13 +74,56 @@ function toolWorkdirs(input) {
   return workdirs
 }
 
-function canonicalPath(value) {
-  const absolute = path.resolve(value)
-  try {
-    return realpathSync.native(absolute)
-  } catch {
-    return absolute
+function applyPatchEvidence(name, input) {
+  if (typeof input !== "string") return { calls: 0, unresolvedCalls: 0, paths: [] }
+  const decoded = input.replaceAll("\\r\\n", "\n").replaceAll("\\n", "\n")
+  const blockPattern = /\*\*\* Begin Patch\s*\n([\s\S]*?)\n\*\*\* End Patch/g
+  const blocks = [...decoded.matchAll(blockPattern)]
+  const directCall = name === "apply_patch"
+  const wrappedCalls = directCall ? 0 : [...decoded.replace(blockPattern, "").matchAll(/\btools\.apply_patch\s*\(/g)].length
+  const calls = directCall ? 1 : wrappedCalls
+  if (calls === 0) return { calls: 0, unresolvedCalls: 0, paths: [] }
+
+  const paths = []
+  let resolvedBlocks = 0
+  for (const block of blocks) {
+    const targetPattern = /^\*\*\* (?:(Add|Update|Delete) File: |(Move) to: )(.+?)\s*$/gm
+    let targetCount = 0
+    for (const match of block[1].matchAll(targetPattern)) {
+      const target = match[3].trim()
+      if (target) {
+        paths.push(target)
+        targetCount += 1
+      }
+    }
+    if (targetCount > 0) resolvedBlocks += 1
   }
+  return {
+    calls,
+    unresolvedCalls: Math.max(0, calls - resolvedBlocks),
+    paths,
+  }
+}
+
+function canonicalPath(value, base = process.cwd()) {
+  const absolute = path.resolve(base, value)
+  let candidate = absolute
+  const suffix = []
+  while (true) {
+    try {
+      return path.join(realpathSync.native(candidate), ...suffix)
+    } catch {
+      const parent = path.dirname(candidate)
+      if (parent === candidate) return absolute
+      suffix.unshift(path.basename(candidate))
+      candidate = parent
+    }
+  }
+}
+
+function isAtOrInside(parent, candidate) {
+  const relative = path.relative(parent, candidate)
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
 }
 
 function parseSession(text, options, file) {
@@ -94,6 +137,9 @@ function parseSession(text, options, file) {
   let turnAborted = false
   let finalEnvelopePresent = false
   const executionWorkdirs = new Set()
+  const rawApplyPatchPaths = new Set()
+  let applyPatchCalls = 0
+  let unresolvedApplyPatchCalls = 0
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim().startsWith("{")) continue
     let event
@@ -129,6 +175,10 @@ function parseSession(text, options, file) {
     }
     if (event.type === "response_item" && event.payload?.type === "custom_tool_call") {
       for (const workdir of toolWorkdirs(event.payload.input)) executionWorkdirs.add(workdir)
+      const patchEvidence = applyPatchEvidence(event.payload.name, event.payload.input)
+      applyPatchCalls += patchEvidence.calls
+      unresolvedApplyPatchCalls += patchEvidence.unresolvedCalls
+      for (const target of patchEvidence.paths) rawApplyPatchPaths.add(target)
     }
     if (event.type === "event_msg" && event.payload?.type === "token_count") {
       tokenUsage = safeTokenUsage(event.payload.info?.total_token_usage) || tokenUsage
@@ -138,10 +188,12 @@ function parseSession(text, options, file) {
   const spawn = meta.source?.subagent?.thread_spawn || {}
   const aliases = [meta.id, meta.session_id, meta.agent_path, spawn.agent_path]
   const cwd = context?.cwd || meta.cwd || null
+  const applyPatchPaths = [...rawApplyPatchPaths].map((target) => canonicalPath(target, cwd || process.cwd()))
   if (options.agent && !aliases.includes(options.agent)) return null
   if (options.workdir) {
-    const matchingWorkdir = [cwd, ...executionWorkdirs].some((candidate) => (
-      typeof candidate === "string" && canonicalPath(candidate) === canonicalPath(options.workdir)
+    const requestedWorkdir = canonicalPath(options.workdir)
+    const matchingWorkdir = [cwd, ...executionWorkdirs, ...applyPatchPaths].some((candidate) => (
+      typeof candidate === "string" && isAtOrInside(requestedWorkdir, canonicalPath(candidate))
     ))
     if (!matchingWorkdir) return null
   }
@@ -163,6 +215,10 @@ function parseSession(text, options, file) {
     approvalPolicy: context?.approval_policy || null,
     cwd,
     executionWorkdirs: [...executionWorkdirs],
+    applyPatchCalls,
+    applyPatchPaths: [...new Set(applyPatchPaths)],
+    unresolvedApplyPatchCalls,
+    mutationEvidenceComplete: unresolvedApplyPatchCalls === 0,
     lastEventAt,
     userMessageCount,
     taskMessageCount,

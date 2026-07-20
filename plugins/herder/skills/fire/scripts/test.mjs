@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import process from "node:process"
@@ -25,6 +25,7 @@ try {
   await mkdir(archivedSessions, { recursive: true })
   await mkdir(candidateReal)
   await symlink(candidateReal, candidateAlias)
+  const candidateCanonical = await realpath(candidateReal)
   const events = [
     {
       type: "session_meta",
@@ -55,6 +56,34 @@ try {
         input: `const r = await tools.exec_command({ cmd: "npm test", workdir: ${JSON.stringify(candidateReal)} });`,
       },
     },
+    {
+      type: "response_item",
+      payload: {
+        type: "custom_tool_call",
+        name: "exec",
+        input: `const patch = ${JSON.stringify(`*** Begin Patch
+*** Update File: ${path.join(candidateAlias, "source.txt")}
+*** Move to: ${path.join(candidateAlias, "moved.txt")}
+@@
+-old
++new
++const example = tools.apply_patch(otherPatch)
+*** Add File: relative.txt
++new
+*** End Patch`)}; text(await tools.apply_patch(patch));`,
+      },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "custom_tool_call",
+        name: "apply_patch",
+        input: `*** Begin Patch
+*** Add File: ${path.join(candidateAlias, "direct.txt")}
++direct
+*** End Patch`,
+      },
+    },
     { type: "event_msg", payload: { type: "user_message", message: "self-contained plan" } },
     {
       type: "event_msg",
@@ -77,7 +106,7 @@ try {
         source: { subagent: { thread_spawn: { agent_path: "/root/prior-001", agent_role: "plan_saver" } } },
       },
     },
-    { type: "turn_context", payload: { cwd: candidateReal, model: "gpt-5.6-sol", effort: "xhigh" } },
+    { type: "turn_context", payload: { cwd: path.join(candidateReal, "nested"), model: "gpt-5.6-sol", effort: "xhigh" } },
     { timestamp: "2026-07-14T12:00:00Z", type: "event_msg", payload: { type: "task_complete" } },
   ]
   await writeFile(path.join(archivedSessions, "rollout-prior.jsonl"), `${priorEvents.map(JSON.stringify).join("\n")}\n`)
@@ -108,6 +137,14 @@ try {
         info: { total_token_usage: { input_tokens: 55, cached_input_tokens: 34, output_tokens: 8, reasoning_output_tokens: 3 } },
       },
     },
+    {
+      type: "response_item",
+      payload: {
+        type: "custom_tool_call",
+        name: "exec",
+        input: "const patch = recoverPatch(); text(await tools.apply_patch(patch));",
+      },
+    },
     { type: "event_msg", payload: { type: "task_complete" } },
   ]
   await writeFile(path.join(sessions, "rollout-interrupted.jsonl"), `${interruptedEvents.map(JSON.stringify).join("\n")}\n`)
@@ -120,6 +157,15 @@ try {
   assert.equal(evidence.multiAgentVersion, "v2")
   assert.equal(evidence.sandbox, "workspace-write")
   assert.deepEqual(evidence.executionWorkdirs, [candidateReal])
+  assert.equal(evidence.applyPatchCalls, 2)
+  assert.deepEqual(evidence.applyPatchPaths, [
+    path.join(candidateCanonical, "source.txt"),
+    path.join(candidateCanonical, "moved.txt"),
+    path.join(candidateCanonical, "relative.txt"),
+    path.join(candidateCanonical, "direct.txt"),
+  ])
+  assert.equal(evidence.unresolvedApplyPatchCalls, 0)
+  assert.equal(evidence.mutationEvidenceComplete, true)
   assert.equal(evidence.userMessageCount, 1)
   assert.equal(evidence.taskMessageCount, 0)
   assert.deepEqual(evidence.terminal, {
@@ -154,6 +200,10 @@ try {
     turnAborted: false,
     finalEnvelopePresent: false,
   })
+  assert.equal(interrupted.applyPatchCalls, 1)
+  assert.deepEqual(interrupted.applyPatchPaths, [])
+  assert.equal(interrupted.unresolvedApplyPatchCalls, 1)
+  assert.equal(interrupted.mutationEvidenceComplete, false)
   assert.deepEqual(interrupted.usage, {
     inputTokens: 55,
     cachedInputTokens: 34,
@@ -170,6 +220,11 @@ try {
   assert.match(protocol, /wait_agent.*timeout_ms: 1800000/)
   assert.match(protocol, /timeout caps idle wakeups, not result-delivery latency/)
   assert.match(protocol, /do not reread transcripts, request status, or call `list_agents`/)
+  assert.match(protocol, /node <checkout_guard> --repo <repo_root> --exclude <plan_dir> --pretty/)
+  assert.match(protocol, /--expect <checkout_state_token>/)
+  assert.match(protocol, /mutationEvidenceComplete: true/)
+  assert.match(protocol, /unresolvedApplyPatchCalls: 0/)
+  assert.match(protocol, /every canonical `applyPatchPaths` entry inside it/)
   assert.match(protocol, /node <gate_runner> --cwd/)
   assert.match(protocol, /returns no command output on success or failure/)
   assert.match(protocol, /herder\/<plan-name>\/integration/)
@@ -251,6 +306,9 @@ try {
   for (const profile of [codexImplementer, claudeImplementer]) {
     assert.match(profile, /Write every commit subject and body solely in repository and domain terms/)
     assert.match(profile, /Never mention Herder, plan IDs, worker roles/)
+  }
+  for (const profile of [codexImplementer, claudeImplementer, codexSaver, claudeSaver]) {
+    assert.match(profile, /absolute apply-patch targets inside that worktree/)
   }
 
   const gateWorktree = path.join(root, "gate-worktree")

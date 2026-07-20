@@ -12,7 +12,7 @@ herder-plans/
   .herder/                 # optional runtime artifacts; never plan truth
 ```
 
-Do not require YAML execution configuration, a database, or `.herder/state.json`. Plans owns format, parsing, validation, and transitions; Grill and Improve produce the same format; Fire owns execution. Provenance must not alter what Fire receives or require hidden session context.
+Do not require YAML execution configuration, a database, or `.herder/state.json`. Plans owns format, parsing, validation, and transitions; Grill and Improve produce the same format; Fire owns execution, branches, and worktrees. Plans must use the canonical Fire-assigned branch instruction and never name a concrete execution branch. Provenance must not alter what Fire receives or require hidden session context.
 
 Before manager validation, reread every draft and complete [plan-template.md](plan-template.md)'s semantic Producer self-review. Validation checks structure and graph integrity, not intent or evidence quality.
 

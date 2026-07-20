@@ -51,6 +51,12 @@ Fixture state.
 
 Fixture scope.
 
+## Git workflow
+
+- Branch: use the exact branch/worktree assigned by Herder Fire; never create or switch branches.
+- Use one focused conventional commit.
+- Do not push or open a pull request.
+
 ## Steps
 
 ### Step 1: Test
@@ -223,6 +229,28 @@ try {
   const malformedPlan = path.join(malformed, "002-second.md")
   fs.writeFileSync(malformedPlan, fs.readFileSync(malformedPlan, "utf8").replace("## Maintenance notes", "## Notes"))
   expectFailure(() => buildGraph(malformed), /missing required heading "## Maintenance notes"/)
+
+  const legacyBranch = writeFixture(path.join(root, "legacy-branch"))
+  const legacyBranchPlan = path.join(legacyBranch, "002-second.md")
+  fs.writeFileSync(
+    legacyBranchPlan,
+    fs.readFileSync(legacyBranchPlan, "utf8").replace(
+      "use the exact branch/worktree assigned by Herder Fire; never create or switch branches.",
+      "use `herder/002-second`",
+    ),
+  )
+  expectFailure(() => buildGraph(legacyBranch), /must delegate branch ownership to Herder Fire/)
+
+  const misplacedBranch = writeFixture(path.join(root, "misplaced-branch"))
+  const misplacedBranchPlan = path.join(misplacedBranch, "002-second.md")
+  const canonicalBranch = "- Branch: use the exact branch/worktree assigned by Herder Fire; never create or switch branches."
+  fs.writeFileSync(
+    misplacedBranchPlan,
+    fs.readFileSync(misplacedBranchPlan, "utf8")
+      .replace(`${canonicalBranch}\n`, "")
+      .replace("## Status", `${canonicalBranch}\n\n## Status`),
+  )
+  expectFailure(() => buildGraph(misplacedBranch), /exactly one "- Branch:" instruction in "## Git workflow"/)
 
   const unindexed = writeFixture(path.join(root, "unindexed"))
   fs.writeFileSync(path.join(unindexed, "004-forgotten.md"), "# Plan 004\n\n- **Depends on**: none\n")

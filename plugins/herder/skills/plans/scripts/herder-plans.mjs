@@ -16,6 +16,7 @@ const REQUIRED_PLAN_HEADINGS = [
   "Current state",
   "Commands you will need",
   "Scope",
+  "Git workflow",
   "Steps",
   "Test plan",
   "Done criteria",
@@ -23,6 +24,7 @@ const REQUIRED_PLAN_HEADINGS = [
   "Maintenance notes",
 ]
 const REQUIRED_PLAN_METADATA = ["Priority", "Effort", "Risk", "Depends on", "Category", "Planned at"]
+const FIRE_BRANCH_INSTRUCTION = "use the exact branch/worktree assigned by Herder Fire; never create or switch branches."
 const REQUIRED_INDEX_HEADERS = ["plan", "title", "priority", "effort", "depends on", "status"]
 const USAGE_SECTION_START = "<!-- herder-usage:start -->"
 const USAGE_SECTION_END = "<!-- herder-usage:end -->"
@@ -168,6 +170,18 @@ function parsePlanFile(file, id) {
     const match = text.match(new RegExp(`^\\s*[-*]\\s+\\*\\*${escapeRegex(field)}\\*\\*:\\s*(.+?)\\s*$`, "im"))
     if (!match) fail(`Plan ${id} is missing required metadata "- **${field}**:": ${file}`)
     metadata.set(field, match[1])
+  }
+  const workflowHeading = /^##\s+Git workflow\s*$/im.exec(text)
+  const workflowTail = text.slice(workflowHeading.index + workflowHeading[0].length)
+  const nextHeadingOffset = workflowTail.search(/^##\s+/m)
+  const workflow = nextHeadingOffset === -1 ? workflowTail : workflowTail.slice(0, nextHeadingOffset)
+  const branchInstructions = [...text.matchAll(/^\s*[-*]\s+Branch:\s*(.+?)\s*$/gim)]
+  const workflowBranchInstructions = [...workflow.matchAll(/^\s*[-*]\s+Branch:\s*(.+?)\s*$/gim)]
+  if (branchInstructions.length !== 1 || workflowBranchInstructions.length !== 1) {
+    fail(`Plan ${id} must contain exactly one "- Branch:" instruction in "## Git workflow": ${file}`)
+  }
+  if (workflowBranchInstructions[0][1].trim() !== FIRE_BRANCH_INSTRUCTION) {
+    fail(`Plan ${id} must delegate branch ownership to Herder Fire with "- Branch: ${FIRE_BRANCH_INSTRUCTION}": ${file}`)
   }
   return { dependencies: parseDependencies(metadata.get("Depends on")), text }
 }

@@ -8,7 +8,7 @@
         {
           "source": "agent-profiles/codex/plan_implementer.toml",
           "target": "plan_implementer.toml",
-          "sha256": "1ecd7afffe096a8118744863c89d4d9272d84d44042f483c416c439b4afc48ca"
+          "sha256": "14a471f3f1b17d6e915e8cd413ddf287adb4c877bd222549e559199613bbe60c"
         },
         {
           "source": "agent-profiles/codex/plan_reviewer.toml",
@@ -18,7 +18,7 @@
         {
           "source": "agent-profiles/codex/plan_saver.toml",
           "target": "plan_saver.toml",
-          "sha256": "9a7298983542e6c89d2eda857c6ccfe5b14c9368d86e75551efa4d29e30e4632"
+          "sha256": "e01798d3b162c93430a083e5c27f5391f90882f8dbccaf1cc738eb4795e58ad2"
         }
       ]
     },
@@ -28,7 +28,7 @@
         {
           "source": "agents/plan-implementer.md",
           "identifier": "herder:plan-implementer",
-          "sha256": "0b73eb911950dce0576ea5185832b06172d550e1943f4be370f09827c39f9655"
+          "sha256": "32cf77acce0cade36f70b76ad4718524859f7b3d5e53e78dc2e867560d02fc68"
         },
         {
           "source": "agents/plan-reviewer.md",
@@ -38,7 +38,7 @@
         {
           "source": "agents/plan-saver.md",
           "identifier": "herder:plan-saver",
-          "sha256": "879d6204345b3ff2671233922c950a8dc2b17c1abca1eac61e8e8c62f4c98b76"
+          "sha256": "f73c38f14e549bab02b0b8932045a3f1870a87b637fed8eb1bb4ce23b8287420"
         }
       ]
     }

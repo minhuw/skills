@@ -28,13 +28,14 @@ Resolve:
 - `base_ref`: `refs/plan-herder/<plan_name>/base`.
 - `completion_ref(<id>)`: `refs/plan-herder/<plan_name>/completed/<id>`.
 - `checkpoint_ref(<id>, <generation>, <ordinal>)`: `refs/plan-herder/<plan_name>/checkpoints/<id>/<generation>-<ordinal>`.
-- `plan_manager`, `namespace_runner`, `codex_evidence_reader`, `gate_runner`, and `cleanup_runner`: absolute paths to the installed plugin scripts.
+- `plan_manager`, `namespace_runner`, `checkout_guard`, `codex_evidence_reader`, `gate_runner`, and `cleanup_runner`: absolute paths to the installed plugin scripts.
 - `base_commit`: current user-checkout `HEAD` for a new plan set, or `base_ref` for resume.
 - `worktree_root`: a directory outside the user's checkout, with integration at `<worktree_root>/<plan_name>/integration` and plans at `<worktree_root>/<plan_name>/<id>`.
 - `gate_log_root`: `<worktree_root>/<plan_name>/logs`, outside every Git worktree.
 - `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume. Use attempt IDs `<plan-name>-<plan-id|RUN>-<role>-<ordinal>`; never reuse an ID.
 - `recovery_state`: per-plan generation IDs, substantive Saver rounds, clarification cycles, bounded non-capacity interruption restarts, transient-capacity backoff state, accepted replans, and compact failure signatures.
 - `review_state`: per-plan-generation broad-pass count, exact reviewed base/HEAD/tree/status, ordered repair deltas, and a coordinator-owned stable finding ledger. Use a separate ledger with the same rules for the final cross-plan audit.
+- `checkout_state_token`: the compact token returned by `checkout_guard` for the coordination checkout, excluding only `plan_dir`.
 
 Read applicable repository instructions before dispatch. Inspect the user's checkout but do not clean, stash, reset, stage, or commit it. Treat `plan_dir` as coordinator-owned local state; it may be Git-ignored and must not be copied into execution worktrees. Obtain immutable worker input through `plan_manager snapshot`.
 
@@ -43,13 +44,14 @@ Read applicable repository instructions before dispatch. Inspect the user's chec
 Complete every check before creating a ref, branch, or worktree:
 
 1. Confirm `git rev-parse --show-toplevel` and `git worktree list` succeed.
-2. Run `node <plan_manager> validate <plan_dir> --pretty` and reject graph errors.
-3. Confirm every indexed non-rejected plan file exists and is readable.
-4. Run `node <namespace_runner> --repo <repo_root> --plan-dir <plan_dir> [--plan-name <plan_name>] --mode <fire|resume> --pretty`.
-5. For fresh `fire`, require the complete branch and private-ref namespace to be unused. For `resume`, require the integration branch and base ref, and reject unknown, unindexed, parent-blocking, or contradictory state. A namespace conflict is a deliberate stop: report every conflict and tell the user to inspect it, explicitly resume it, clean it, or choose another name. Never invent a timestamp, adopt a branch, delete evidence, or overwrite a ref.
-6. Resolve the three logical roles and their configured model/effort values. On Codex, require a live Multi-Agent V2 spawn schema in the `herder_agents` namespace containing both `agent_type` and `fork_turns`, and inspect the installed `plan_implementer`, `plan_reviewer`, and `plan_saver` definitions. Each must pin its expected model and effort. Never use a task name as a substitute for `agent_type`, and never perform a speculative model call during preflight. On Claude Code, probe the three native roles; a probe may only return `AVAILABLE`, is a usage-bearing `RUN` attempt, and must be recorded even when preflight later fails.
-7. Determine repository-wide verification commands from repository instructions, CI configuration, and plan command tables. Do not guess commands when plans specify them.
-8. Check intended worktree paths for collisions and confirm the host permission profile permits writes to Git metadata.
+2. Run `node <checkout_guard> --repo <repo_root> --exclude <plan_dir> --pretty`; require `ok: true`, retain its `stateToken`, and never expose file contents. The guard fingerprints HEAD, symbolic branch, logical index state, Git status, and the bytes of pre-existing dirty tracked and untracked files while allowing only coordinator-owned plan-directory writes. A racing checkout fails preflight.
+3. Run `node <plan_manager> validate <plan_dir> --pretty` and reject graph errors.
+4. Confirm every indexed non-rejected plan file exists and is readable.
+5. Run `node <namespace_runner> --repo <repo_root> --plan-dir <plan_dir> [--plan-name <plan_name>] --mode <fire|resume> --pretty`.
+6. For fresh `fire`, require the complete branch and private-ref namespace to be unused. For `resume`, require the integration branch and base ref, and reject unknown, unindexed, parent-blocking, or contradictory state. A namespace conflict is a deliberate stop: report every conflict and tell the user to inspect it, explicitly resume it, clean it, or choose another name. Never invent a timestamp, adopt a branch, delete evidence, or overwrite a ref.
+7. Resolve the three logical roles and their configured model/effort values. On Codex, require a live Multi-Agent V2 spawn schema in the `herder_agents` namespace containing both `agent_type` and `fork_turns`, and inspect the installed `plan_implementer`, `plan_reviewer`, and `plan_saver` definitions. Each must pin its expected model and effort. Never use a task name as a substitute for `agent_type`, and never perform a speculative model call during preflight. On Claude Code, probe the three native roles; a probe may only return `AVAILABLE`, is a usage-bearing `RUN` attempt, and must be recorded even when preflight later fails.
+8. Determine repository-wide verification commands from repository instructions, CI configuration, and plan command tables. Do not guess commands when plans specify them.
+9. Check intended worktree paths for collisions and confirm the host permission profile permits writes to Git metadata.
 
 For a fresh plan set, create `base_ref` and the integration branch in one compare-and-swap `git update-ref --stdin` transaction whose expected old values are absent. If another process wins the namespace after preflight, the transaction must fail without replacing either ref. Then add the integration worktree from the existing branch. For resume, verify `base_ref` is an ancestor of integration HEAD and reopen a missing integration worktree without moving the branch.
 
@@ -80,6 +82,8 @@ For a Codex attempt, call native Multi-Agent V2 with:
 Omit model, reasoning-effort, and service-tier overrides. Use the returned canonical task name for follow-up, waits, interruption, and evidence. Treat spawn failure, terminal failure, or a terminal native state without a response envelope as an attempt failure, then apply Section 6 before deciding whether it consumed a Saver round. A quiet running worker is not a failed attempt.
 
 Keep the coordinator shell anchored in the stable user checkout. Execute every Git command with `git -C <absolute-worktree>` and every non-Git command with an explicit workdir. Never remove or recreate the directory containing the coordinator process.
+
+Immediately before dispatching any worker, and again after it becomes terminal before acting on its result, run `node <checkout_guard> --repo <repo_root> --exclude <plan_dir> --expect <checkout_state_token> --pretty`. Verify once more before final handoff. A mismatch cannot be attributed safely to the worker or the user: stop all new scheduling, integration, and cleanup; preserve leases, branches, worktrees, and evidence; report only the changed component names; and never restore, stage, stash, hash-dump, or rewrite the user's checkout. A later explicit resume captures a new baseline after the user has reconciled the checkout.
 
 ## 4. Dispatch Ready Plans
 
@@ -263,6 +267,8 @@ The root coordinator is the only usage-ledger writer. After every terminal attem
 
 Prefer host-reported effective routing and structured usage. On Codex, after terminal state run `node <codex_evidence_reader> --agent <canonical-task-name> --pretty`; require matching role and `multiAgentVersion: v2`. Use terminal fields plus native state; `taskComplete` alone is insufficient. Copy exact transcript usage when uniquely attributable, otherwise record all fields/source as `unknown`. Never tokenize transcripts, subtract coordinator totals, or infer reasoning.
 
+The same Codex evidence must show `mutationEvidenceComplete: true`, `unresolvedApplyPatchCalls: 0`, every recorded `executionWorkdirs` entry inside the exact assigned worktree, and every canonical `applyPatchPaths` entry inside it. A reviewer must additionally report `applyPatchCalls: 0`. Missing or escaped mutation evidence is a containment failure even if Git currently looks clean: record usage, stop integration and further dispatch, retain exact evidence, run the checkout guard, and report the breach without attempting to repair the user's checkout through Saver.
+
 Use `plan_manager usage` for reporting. Always report coverage beside known subtotals; the ledger excludes unobservable coordinator/platform overhead.
 
 ## 8. Resume Semantics
@@ -289,7 +295,7 @@ The plan set succeeds when every plan is `DONE` or `REJECTED`, every dependency 
 
 Apply the same finding ledger and two-broad-pass cap to the final audit. After plan scheduling is terminal, a final gate/audit repair may operate directly in the isolated integration worktree to avoid another branch: first create a unique `checkpoints/RUN/<ordinal>` ref for integration HEAD, stop all plan dispatch, and give Saver a synthetic plan. Treat added repair commits as unapproved until all final gates and reviewer approval succeed. If interruption leaves dirty or unapproved integration state, preserve and resume that exact worktree; never hand it off. Only final approved integration may be reported as complete.
 
-After successful final gates/audit, prove no agent can access a plan worktree and invoke fail-closed `--finalize`. Finalization removes every eligible plan branch/worktree, re-inventories the namespace, and deletes recognized private coordination refs only when no plan branch remains. Dirty, locked, missing, unrecognized, nonterminal, or unverifiable state preserves refs and reports a maintenance warning without rolling back approved integration.
+After successful final gates/audit, verify the checkout state token, prove no agent can access a plan worktree, and invoke fail-closed `--finalize`. Finalization removes every eligible plan branch/worktree, re-inventories the namespace, and deletes recognized private coordination refs only when no plan branch remains. Dirty, locked, missing, unrecognized, nonterminal, or unverifiable state preserves refs and reports a maintenance warning without rolling back approved integration.
 
 Never merge, push, publish, or deploy. Report integration branch/worktree, final SHA, plan outcomes, checks and compact log evidence, usage/coverage, advisory/adjudication findings, and preserved branches.
 

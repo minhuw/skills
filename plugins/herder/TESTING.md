@@ -10,6 +10,7 @@ From the marketplace repository root:
 node plugins/herder/skills/plans/scripts/test.mjs
 node plugins/herder/skills/install/scripts/test.mjs
 node plugins/herder/skills/fire/scripts/test.mjs
+node plugins/herder/skills/fire/scripts/checkout-state-test.mjs
 node plugins/herder/skills/fire/scripts/namespace-test.mjs
 node plugins/herder/skills/fire/scripts/branch-model-test.mjs
 node plugins/herder/skills/fire/scripts/cleanup-test.mjs
@@ -27,7 +28,7 @@ claude plugin validate plugins/herder --strict
 git diff --check
 ```
 
-The Fire script tests cover native agent-evidence extraction by agent and worktree, coordinator gate isolation, namespaced collision preflight, one stable branch/worktree per plan, in-place checkpointed restacking, severity-gated review convergence, stable finding ledgers, bounded recovery, repository-native linear history, private completion/checkpoint refs, and fail-closed cleanup. The namespace fixtures prove directory-derived names, explicit-name isolation, fresh-run collision refusal, resume validation, and parent/unknown branch protection. Cleanup fixtures prove exact plan-branch recognition, private-ref validation, absence of Herder metadata from new commit history, dry-run behavior, clean/unlocked `DONE` cleanup, default preservation of non-`DONE` evidence, explicit failed-evidence deletion, terminal finalization, and preservation of dirty, locked, unknown, proofless, integration, and log state.
+The Fire script tests cover native agent-evidence extraction by agent and worktree, canonical apply-patch mutation targets and unresolved-call detection, byte-stable checkout snapshots for tracked/index/untracked user state, coordinator gate isolation, namespaced collision preflight, one stable branch/worktree per plan, in-place checkpointed restacking, severity-gated review convergence, stable finding ledgers, bounded recovery, repository-native linear history, private completion/checkpoint refs, and fail-closed cleanup. The namespace fixtures prove directory-derived names, explicit-name isolation, fresh-run collision refusal, resume validation, and parent/unknown branch protection. Cleanup fixtures prove exact plan-branch recognition, private-ref validation, absence of Herder metadata from new commit history, dry-run behavior, clean/unlocked `DONE` cleanup, default preservation of non-`DONE` evidence, explicit failed-evidence deletion, terminal finalization, and preservation of dirty, locked, unknown, proofless, integration, and log state.
 
 Use `uv run --with pyyaml python ...` when the validation scripts' Python environment does not already contain PyYAML.
 
@@ -97,11 +98,11 @@ This high-cost mode creates a plan with Improve and executes it through native C
 
 - Fire dispatches `agent_type` with `fork_turns: "none"` and never invokes the removed `codex exec` worker adapter.
 - Implementers run Luna/max and reviewers run Sol/xhigh. The installed reviewer profile requests read-only; the transcript also records whether the coordinator's inherited runtime permission override superseded it, while Fire proves the reviewer left the plan branch unchanged.
-- Every child transcript reports Multi-Agent V2 with one `NEW_TASK` envelope and no user-history messages, proving coordinator history was not forked. Its command evidence must stay under the disposable plan or integration worktree root.
+- Every child transcript reports Multi-Agent V2 with one `NEW_TASK` envelope and no user-history messages, proving coordinator history was not forked. Its command workdirs and canonical apply-patch targets must stay under the disposable plan or integration worktree root, and every patch call must resolve from transcript evidence.
 - Exact native per-child transcript telemetry is recorded as numeric `codex-multi-agent-v2-transcript` usage rows.
 - Transcript evidence distinguishes a real final response from `task_complete` without an envelope, allowing a clean classifier/transport interruption to be recorded as `INTERRUPTED` and restarted without consuming a substantive saver round.
 - Fire uses native `wait_agent` as a thirty-minute event-driven long poll rather than routine status polling, and coordinator verification calls use `run-gate.mjs` so passing command bodies do not enter the coordinator transcript.
-- The integration branch passes tests while the source branch and checkout remain unchanged.
+- The integration branch passes tests while the checkout guard proves the source branch, logical index, pre-existing dirty tracked bytes, and untracked bytes remain unchanged.
 
 ```bash
 node plugins/herder/scripts/smoke-test.mjs \

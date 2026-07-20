@@ -39,6 +39,7 @@ Resolve the plugin root as two directories above this skill. Use:
 ```text
 <plugin-root>/skills/plans/scripts/herder-plans.mjs
 <plugin-root>/skills/fire/scripts/namespace-run.mjs
+<plugin-root>/skills/fire/scripts/checkout-state.mjs
 <plugin-root>/skills/fire/scripts/read-codex-agent-evidence.mjs
 <plugin-root>/skills/fire/scripts/run-gate.mjs
 <plugin-root>/skills/fire/scripts/cleanup-run.mjs
@@ -65,7 +66,9 @@ Claude uses the native role identifiers shipped with the plugin.
 ## Hard Boundaries
 
 - Preserve the user's branch, index, source changes, and untracked files. Plans status and usage updates are the only coordination-checkout writes.
+- Before mutation, capture the checkout guard's compact state token with the plan directory excluded. Verify it immediately before and after every worker attempt and before final handoff; any mismatch is an unattributed preservation breach that stops scheduling without restoring or rewriting user state.
 - Keep integration and each plan isolated in their own worktrees. Implementer, reviewer, Saver, and resume use the same `herder/<plan-name>/<id>` branch/worktree serially; never create candidate, staging, rescue, attempt, or generation branches. Never push, open a PR, deploy, publish, or merge into the user's branch. Delete plan branches only through the cleanup runner's proof-based rules; never delegate cleanup to a worker.
+- On Codex, require complete transcript mutation evidence after every child: all command workdirs and canonical apply-patch targets must be inside the assigned worktree, no apply-patch call may be unresolved, and reviewers must have made no apply-patch call.
 - Keep integration history linear and repository-native. Restack a clean plan branch onto current integration only after saving its prior HEAD under a private checkpoint ref, review the exact restacked base/HEAD/tree, and fast-forward integration to that approved HEAD. Track completion only through a private plan-set-scoped Git ref. Never create a plan merge commit, marker commit, trailer, tag, or Herder-branded commit message. The only normal user-branch handoff is `git merge --ff-only herder/<plan-name>/integration`.
 - Fork dependents only from canonical integration HEAD after every dependency is reviewed, integrated, `DONE`, and represented by a reachable private completion ref.
 - Record one usage row after every usage-bearing probe or terminal attempt, including terminal attempts without a response. Copy host telemetry when available; otherwise record `unknown`. Never estimate.

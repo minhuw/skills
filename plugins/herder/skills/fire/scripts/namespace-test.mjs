@@ -51,6 +51,12 @@ The fixture is empty.
 
 Namespace checks only.
 
+## Git workflow
+
+- Branch: use the exact branch/worktree assigned by Herder Fire; never create or switch branches.
+- Use one focused conventional commit.
+- Do not push or open a pull request.
+
 ## Steps
 
 ### Step 1: Test

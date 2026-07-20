@@ -452,7 +452,7 @@ Users need a deterministic version string for bug reports and scripts. The exact
 
 ## Git workflow
 
-- Use the stable plan branch/worktree created by Fire.
+- Branch: use the exact branch/worktree assigned by Herder Fire; never create or switch branches.
 - Make one logical commit using the repository's observed conventional style, for example \`feat: add version flag\`.
 - Do not push or open a pull request.
 
@@ -589,6 +589,8 @@ function main() {
     assert.match(validateText, /Never change lifecycle status/)
     const evidenceReader = path.join(installedPath, "skills", "fire", "scripts", "read-codex-agent-evidence.mjs")
     assert.equal(fs.existsSync(evidenceReader), true, "missing installed Codex Multi-Agent V2 evidence reader")
+    const checkoutGuard = path.join(installedPath, "skills", "fire", "scripts", "checkout-state.mjs")
+    assert.equal(fs.existsSync(checkoutGuard), true, "missing installed Fire checkout-state guard")
     const cleanupRunner = path.join(installedPath, "skills", "fire", "scripts", "cleanup-run.mjs")
     assert.equal(fs.existsSync(cleanupRunner), true, "missing installed Fire cleanup runner")
     const namespaceRunner = path.join(installedPath, "skills", "fire", "scripts", "namespace-run.mjs")
@@ -695,6 +697,8 @@ function main() {
         assert.equal(agentEvidence.every((item) => item.userMessageCount === 0 && item.taskMessageCount === 1), true, "child context was not isolated")
         assert.equal(agentEvidence.every((item) => item.cwd === project), true, "child session did not inherit the intended repository context")
         assert.equal(agentEvidence.every((item) => item.executionWorkdirs.length > 0 && item.executionWorkdirs.every((workdir) => isInsidePath(fireRoot, workdir))), true, "child command escaped the disposable Fire worktree root")
+        assert.equal(agentEvidence.every((item) => item.mutationEvidenceComplete && item.unresolvedApplyPatchCalls === 0), true, "child apply-patch evidence was incomplete")
+        assert.equal(agentEvidence.every((item) => item.applyPatchPaths.every((target) => isInsidePath(fireRoot, target))), true, "child apply-patch target escaped the disposable Fire worktree root")
         assert.equal(agentEvidence.every((item) => item.usage && Number.isSafeInteger(item.usage.inputTokens)), true)
         const implementers = agentEvidence.filter((item) => item.agentRole === "plan_implementer")
         const reviewers = agentEvidence.filter((item) => item.agentRole === "plan_reviewer")
@@ -702,6 +706,7 @@ function main() {
         assert.equal(reviewers.length >= 2, true)
         assert.equal(implementers.every((item) => item.model === "gpt-5.6-luna" && item.effort === "max" && item.sandbox === "workspace-write"), true)
         assert.equal(reviewers.every((item) => item.model === "gpt-5.6-sol" && item.effort === "xhigh" && item.sandbox === "workspace-write"), true)
+        assert.equal(reviewers.every((item) => item.applyPatchCalls === 0), true, "reviewer attempted to apply a patch")
         fs.writeFileSync(path.join(reports, "native-agent-evidence.json"), `${JSON.stringify(agentEvidence, null, 2)}\n`)
 
         const spawnEvidence = nativeSpawnEvidence(codexHome)
