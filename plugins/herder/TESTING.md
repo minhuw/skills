@@ -8,6 +8,7 @@ From the marketplace repository root:
 
 ```bash
 node plugins/herder/skills/plans/scripts/test.mjs
+node plugins/herder/skills/configure/scripts/test.mjs
 node plugins/herder/skills/install/scripts/test.mjs
 node plugins/herder/skills/fire/scripts/test.mjs
 node plugins/herder/skills/fire/scripts/checkout-state-test.mjs
@@ -16,6 +17,7 @@ node plugins/herder/skills/fire/scripts/branch-model-test.mjs
 node plugins/herder/skills/fire/scripts/cleanup-test.mjs
 
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/plans
+python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/configure
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/grill
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/improve
 python3 /path/to/skill-creator/scripts/quick_validate.py plugins/herder/skills/fire
@@ -28,13 +30,13 @@ claude plugin validate plugins/herder --strict
 git diff --check
 ```
 
-The Fire script tests cover native agent-evidence extraction by agent and worktree, canonical apply-patch mutation targets and unresolved-call detection, byte-stable checkout snapshots for tracked/index/untracked user state, coordinator gate isolation, namespaced collision preflight, one stable branch/worktree per plan, in-place checkpointed restacking, severity-gated review convergence, stable finding ledgers, bounded recovery, repository-native linear history, private completion/checkpoint refs, and fail-closed cleanup. The namespace fixtures prove directory-derived names, explicit-name isolation, fresh-run collision refusal, resume validation, and parent/unknown branch protection. Cleanup fixtures prove exact plan-branch recognition, private-ref validation, absence of Herder metadata from new commit history, dry-run behavior, clean/unlocked `DONE` cleanup, default preservation of non-`DONE` evidence, explicit failed-evidence deletion, terminal finalization, and preservation of dirty, locked, unknown, proofless, integration, and log state.
+The Plans tests cover compiled shared-context snapshots, snapshot hashes, review-budget parsing, legacy shape warnings, dependency graphs, and lifecycle/usage behavior. Configure tests cover native Codex profile generation, all supported Orca harness/mutability combinations, structural and live route probes, redaction, conflict refusal, and recoverable backups. The Fire script tests cover native agent-evidence extraction, Orca runtime-profile validation and tracked dispatch construction, canonical apply-patch mutation targets and unresolved-call detection, byte-stable checkout snapshots for tracked/index/untracked user state, coordinator gate isolation, namespaced collision preflight, one stable branch/worktree per plan, in-place checkpointed restacking, one-discovery/three-round review convergence, Judge classification, stable relationship ledgers, bounded recovery, repository-native linear history, private completion/checkpoint refs, and fail-closed cleanup. The namespace fixtures prove directory-derived names, explicit-name isolation, fresh-run collision refusal, resume validation, and parent/unknown branch protection. Cleanup fixtures prove native and Orca-owned removal, exact plan-branch recognition, private-ref validation, absence of Herder metadata from new commit history, dry-run behavior, clean/unlocked `DONE` cleanup, default preservation of non-`DONE` evidence, explicit failed-evidence deletion, terminal finalization, and preservation of dirty, locked, unknown, proofless, integration, and log state.
 
 Use `uv run --with pyyaml python ...` when the validation scripts' Python environment does not already contain PyYAML.
 
 ## Local installation smoke test
 
-This creates a real temporary Git repository and isolated `CODEX_HOME`, installs the current marketplace checkout through `codex plugin`, verifies all six skills are cached, initializes an ignored `herder-plans/` backlog through the installed manager, records and aggregates a usage attempt, validates the backlog, and runs the fixture's tests:
+This creates a real temporary Git repository and isolated `CODEX_HOME`, installs the current marketplace checkout through `codex plugin`, verifies all seven skills are cached, initializes an ignored `herder-plans/` backlog through the installed manager, records and aggregates a usage attempt, validates the backlog, and runs the fixture's tests:
 
 ```bash
 node plugins/herder/scripts/smoke-test.mjs
@@ -44,9 +46,9 @@ The temporary directory is deleted after success and preserved after failure.
 
 ## Live Codex compatibility test
 
-This first installs the three native profiles in an isolated user-scoped Codex home, verifies that Multi-Agent V2 is enabled, and then exercises the full intent-to-plan pipeline against the fixture:
+This first installs the four native profiles in an isolated user-scoped Codex home, verifies that Multi-Agent V2 is enabled, and then exercises the full intent-to-plan pipeline against the fixture:
 
-1. `$herder:grill <change>` investigates user intent, pauses for final confirmation, and creates one plan without changing source code or replacing the manager-generated usage ledger.
+1. `$herder:grill <change>` investigates user intent, pauses for final confirmation, and creates a shape-clean review-budgeted plan graph without changing source code or replacing the manager-generated usage ledger.
 2. `$herder:plans status` reads the generated backlog and reports plan `001` ready.
 3. `$herder:fire status` consumes the same backlog without spawning workers or changing files.
 
@@ -77,6 +79,16 @@ node plugins/herder/scripts/smoke-test.mjs --live-grill --keep
 
 Use `--workspace` and `--auth-file` exactly as in the general live test. The transcript files include `00-install.jsonl`, `01-grill-question.jsonl`, `02-grill-answer.jsonl`, and `03-grill-confirm.jsonl`.
 
+## Live plan-shaping test
+
+This mode adds two six-handler caller cohorts behind a compatibility normalizer, then asks Grill to plan a safe object-result migration. It verifies that Codex produces at least three focused nodes (bounded cohort migrations plus dependent cleanup), every node is at most 1,200 words and eight files, dependency edges are explicit, write-scope overlaps are ordered, and source remains unchanged.
+
+```bash
+node plugins/herder/scripts/smoke-test.mjs --live-shape --keep
+```
+
+Use `--workspace` and `--auth-file` exactly as in the general live test. The transcript files include `00-install.jsonl`, `01-shape-intake.jsonl`, and `02-shape-confirm.jsonl`.
+
 ## Live Validate repair test
 
 This targeted mode creates one executor-ready plan and audits it with `$herder:validate` without `--fix`, proving the plan directory and source checkout remain byte-for-byte unchanged. It then renames one required heading, proves manager validation fails, runs `$herder:validate --fix`, and verifies that:
@@ -96,7 +108,7 @@ Use `--workspace` and `--auth-file` exactly as in the general live test. The tra
 
 This high-cost mode creates a plan with Improve and executes it through native Codex Multi-Agent V2. The isolated Codex configuration pins the main scheduler to Sol/max, enables `multi_agent_v2`, and gives the coordinator only the workspace-write roots needed for disposable worktrees and Git metadata. The test installs the native profiles in a fresh session, then verifies:
 
-- Fire dispatches `agent_type` with `fork_turns: "none"` and never invokes the removed `codex exec` worker adapter.
+- Fire dispatches `agent_type` with `fork_turns: "none"` and never invokes the removed `codex exec` worker adapter. The installed native role set includes Implementer, Reviewer, Judge, and Saver; the simple passing fixture need not invoke Judge or Saver.
 - Implementers run Luna/max and reviewers run Sol/xhigh. The installed reviewer profile requests read-only; the transcript also records whether the coordinator's inherited runtime permission override superseded it, while Fire proves the reviewer left the plan branch unchanged.
 - Every child transcript reports Multi-Agent V2 with one `NEW_TASK` envelope and no user-history messages, proving coordinator history was not forked. Its command workdirs and canonical apply-patch targets must stay under the disposable plan or integration worktree root, and every patch call must resolve from transcript evidence.
 - Exact native per-child transcript telemetry is recorded as numeric `codex-multi-agent-v2-transcript` usage rows.
@@ -112,6 +124,45 @@ node plugins/herder/scripts/smoke-test.mjs \
 
 The transcript files are `00-install.jsonl`, `01-improve.jsonl`, and `02-fire-run.jsonl`. The retained `reports/final-fire-report.md` contains Fire's user-facing result. `reports/native-spawn-evidence.json` records redacted namespaced routing arguments and coordinator configuration; it records only that an encrypted task payload existed, never the payload itself. `reports/native-agent-evidence.json` records the effective child role, model, effort, sandbox, repository context, execution workdirs, and token telemetry extracted from persisted Codex sessions. Inspect those reports together with the fixture, integration worktree, and `herder-plans/README.md`, then delete the workspace when finished.
 
+## Live Orca heterogeneous execution test
+
+This high-cost compatibility test uses the bundled `orca-heterogeneous-profile.json`:
+
+- Controller: Codex with `gpt-5.6-sol` in the profile's explicit permissive mode, required so its Orca CLI children can reach the saved runtime
+- Implementer: Grok Build with `grok-4.5`
+- Reviewer: Pi with `kimi-coding/k3`
+- Judge: Pi with `openai/gpt-5.6-sol`
+- Saver: Grok Build with `grok-4.5`
+
+First run the deterministic checks and prepare a disposable installed fixture:
+
+```bash
+node plugins/herder/scripts/smoke-test.mjs \
+  --workspace /tmp/herder-orca-matrix
+```
+
+Start or restart Orca, register `/tmp/herder-orca-matrix/project`, create an independent controller worktree, and launch the controller through the runtime adapter so its exact profile hash, model, and effort are attested:
+
+```bash
+env CODEX_HOME=/tmp/herder-orca-matrix/codex-home \
+  node /absolute/path/to/skills/fire/scripts/orca-runtime.mjs \
+  launch-controller \
+  --profile /absolute/path/to/skills/fire/references/orca-heterogeneous-profile.json \
+  --controller-terminal <handle-returned-by-orca-terminal-create> \
+  --controller-worktree id:<full-id-returned-by-orca-worktree-create>
+```
+
+The controller must run inside the Orca terminal. Ask it to:
+
+1. create and validate the fixture's focused `--version` plan;
+2. run Fire with `--runtime orca` and the absolute installed or source `orca-heterogeneous-profile.json`;
+3. perform the two-layer interoperability confidence test in `skills/fire/references/orca-runtime.md`; and
+4. retain compact routing, dispatch, Git, checkout-guard, and usage evidence under the fixture's private report/log directory.
+
+Pass only when the adapter normalizes Orca's deterministic slash-to-hyphen branch rewrite while retaining the same opaque worktree ownership, every custom harness receives its tracked task through `tracked-terminal-send`, the normal plan integrates linearly through Grok and Pi/Kimi, the separate non-integrating drill exercises Pi/GPT Judge and Grok Saver, every `worker_done` matches its task/dispatch/pane, Reviewer and Judge leave Git unchanged, Implementer and Saver mutate only their assigned Orca worktrees, and the original fixture checkout remains byte-stable.
+
+This test fails closed rather than falling back to native agents or another model. Codex, Grok Build, and Pi must already be authenticated. If the Orca bridge reports `stale_bootstrap` while an app process exists, restart Orca before retrying; do not delete bootstrap, daemon, or single-instance files.
+
 ## Release confidence
 
-Before publishing, require all deterministic checks and the local installation smoke test. Run the general live test after changes to Improve output, the Plans protocol, or Fire's consumption of plan state. Run the targeted Grill test after changes to its interview, confirmation, or plan-editing contract. Run the targeted Validate test after changes to validation, repair boundaries, or Fire-readiness reporting. Run the high-cost Fire execution mode when scheduling, namespace, worktree, model routing, usage capture, review, or recovery behavior changes materially.
+Before publishing, require all deterministic checks and the local installation smoke test. Run the general live test after changes to Improve output, the Plans protocol, or Fire's consumption of plan state. Run the live shaping test after changes to granularity, review budgets, shared context, or split rules. Run the targeted Grill test after changes to its interview, confirmation, or plan-editing contract. Run the targeted Validate test after changes to validation, repair boundaries, or Fire-readiness reporting. Run the high-cost native Fire execution mode when scheduling, namespace, worktree, model routing, usage capture, review, judging, or recovery behavior changes materially. Run the Orca heterogeneous mode after changes to cross-harness profile resolution, Orca worktree ownership, task dispatch/provenance, runtime recovery, or Orca cleanup.

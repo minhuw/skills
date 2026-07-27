@@ -1,7 +1,7 @@
 {
   "name": "herder",
-  "version": "0.9.0",
-  "description": "Create plans from user intent or repository evidence, validate and safely repair them, manage dependencies, and execute with reviewed integration and token accounting.",
+  "version": "0.10.0",
+  "description": "Shape focused plans and execute them with bounded review, independent judging, recovery, usage accounting, and optional Orca cross-harness routing.",
   "author": {
     "name": "minhuw",
     "url": "https://github.com/minhuw"

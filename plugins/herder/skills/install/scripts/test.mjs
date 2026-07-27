@@ -44,6 +44,7 @@ process.stdout.write("multi_agent_v2                       under development  tr
   const expectedNicknames = {
     plan_implementer: ["Mocha", "Latte", "Cortado", "Piccolo", "Doppio", "Affogato", "Espresso", "Macchiato", "Cappuccino", "Ristretto"],
     plan_reviewer: ["Kiwi", "Mango", "Peach", "Fig", "Lychee", "Yuzu", "Guava", "Cherry", "Plum", "Papaya"],
+    plan_judge: ["Sage", "Atlas", "Solon", "Themis", "Verity", "Justus", "Minerva", "Cato", "Portia", "Astraea"],
     plan_saver: ["Daisy", "Poppy", "Iris", "Peony", "Aster", "Violet", "Zinnia", "Dahlia", "Lotus", "Marigold"],
   };
   for (const [profile, nicknames] of Object.entries(expectedNicknames)) {
@@ -78,6 +79,7 @@ process.stdout.write("multi_agent_v2                       under development  tr
   assert.equal(await readFile(path.join(backupRoot, stamps[0], "plan_implementer.toml"), "utf8"), "customized\n");
   assert.deepEqual((await readdir(path.join(projectRoot, ".codex/agents"))).sort(), [
     "plan_implementer.toml",
+    "plan_judge.toml",
     "plan_reviewer.toml",
     "plan_saver.toml",
   ]);
@@ -108,6 +110,7 @@ process.stdout.write("multi_agent_v2                       under development  tr
   );
   assert.deepEqual((await readdir(path.join(migrationProject, ".codex/agents"))).sort(), [
     "plan_implementer.toml",
+    "plan_judge.toml",
     "plan_reviewer.toml",
     "plan_saver.toml",
   ]);

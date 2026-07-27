@@ -106,8 +106,8 @@ function parseManifest(bytes) {
 function validateFiles(manifest, host) {
   const entry = manifest.hosts?.[host];
   const expectedMode = host === "codex" ? "copy" : "bundled";
-  if (entry?.mode !== expectedMode || !Array.isArray(entry.files) || entry.files.length !== 3) {
-    throw new Error(`Manifest must define exactly three ${host} profiles in ${expectedMode} mode.`);
+  if (entry?.mode !== expectedMode || !Array.isArray(entry.files) || entry.files.length !== 4) {
+    throw new Error(`Manifest must define exactly four ${host} profiles in ${expectedMode} mode.`);
   }
 
   const expectedPrefix = host === "codex" ? "agent-profiles/codex/" : "agents/";

@@ -1,11 +1,11 @@
 ---
 name: install
-description: Install or verify the implementer, reviewer, and saver agent profiles required by Herder. Use when setting up the Herder plugin in a repository, when Herder reports a missing Codex role, or when the user asks to refresh Herder's host-native agent definitions.
+description: Install or verify the implementer, reviewer, judge, and saver agent profiles required by Herder. Use when setting up the Herder plugin in a repository, when Herder reports a missing Codex role, or when the user asks to refresh Herder's host-native agent definitions.
 ---
 
 # Herder Install
 
-Install or verify the three host-native agent profiles required by Herder. The profiles are bundled with the installed plugin, so the plugin version is the single verified release unit and no runtime network fetch is required.
+Install or verify the four host-native agent profiles required by Herder. The profiles are bundled with the installed plugin, so the plugin version is the single verified release unit and no runtime network fetch is required.
 
 Codex Fire uses these profiles as native custom agent types. It requires Codex Multi-Agent V2 and never falls back to nested `codex exec` processes. Claude Fire uses the bundled host-native agents directly.
 
@@ -42,6 +42,8 @@ node <skill-dir>/scripts/install-herder.mjs \
 6. On Codex, require a new session when the agent directory was first created or profiles changed. Native custom agents and feature flags are resolved when a session starts.
 
 Codex project scope installs to `<repo>/.codex/agents/`; user scope installs to `~/.codex/agents/`. Claude agents load directly from the plugin's `agents/` directory, so the installer only verifies their bundled definitions.
+
+After installing defaults, direct users who want different native Codex models or Orca role routing to `$herder:configure`. Configured native profiles intentionally differ from the bundled defaults, so a later install reports conflicts and preserves them. Use installer `--force` only when the user explicitly wants to reset configured profiles to bundled defaults.
 
 ## Codex Requirement
 

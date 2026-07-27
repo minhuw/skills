@@ -1,7 +1,7 @@
 {
   "name": "herder",
-  "version": "0.9.0",
-  "description": "Create plans from user intent or repository evidence, validate and safely repair them, manage dependencies, and execute with reviewed integration and token accounting.",
+  "version": "0.10.0+codex.20260727141036",
+  "description": "Shape focused plans and execute them with bounded review, independent judging, recovery, usage accounting, and optional Orca cross-harness routing.",
   "author": {
     "name": "minhuw",
     "url": "https://github.com/minhuw"
@@ -21,16 +21,16 @@
   "interface": {
     "displayName": "Herder",
     "shortDescription": "Clarify, create, and execute plans with specialized agents.",
-    "longDescription": "Herder grills requested changes into canonical plans, audits repositories for evidence-backed improvements, validates and conservatively repairs local dependency-aware backlogs, reviews candidates, rescues failures, integrates verified work transactionally, and records per-attempt token usage with honest coverage.",
+    "longDescription": "Herder shapes requested changes and verified findings into focused dependency-aware plans, compiles shared context into immutable snapshots, validates review budgets and write scopes, executes bounded implementation-review rounds, independently judges convergence, rescues authorized failures, integrates verified work transactionally, records per-attempt token usage with honest coverage, and can route roles across CLI harnesses through Orca.",
     "developerName": "minhuw",
     "category": "Developer Tools",
     "capabilities": [
       "Write"
     ],
     "defaultPrompt": [
-      "Grill me one decision at a time, then create one validated Herder plan for this change.",
+      "Grill me one decision at a time, then create a focused validated Herder plan graph for this objective.",
+      "Interactively configure and verify Herder role routing for this repository.",
       "Audit this repository and create prioritized Herder plans.",
-      "Validate and safely repair the Herder plan backlog.",
       "Fire the implementation plans in this repository."
     ]
   }

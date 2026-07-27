@@ -3,6 +3,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import process from "node:process"
+import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { buildGraph } from "../../plans/scripts/herder-plans.mjs"
@@ -39,6 +40,7 @@ function parseArguments(argv) {
     includeFailed: false,
     finalize: false,
     handoffTarget: null,
+    runtime: null,
     pretty: false,
   }
   for (let index = 0; index < argv.length; index += 1) {
@@ -50,14 +52,15 @@ function parseArguments(argv) {
       else options.pretty = true
       continue
     }
-    if (["--repo", "--plan-dir", "--plan-name", "--plan", "--handoff-target"].includes(argument)) {
+    if (["--repo", "--plan-dir", "--plan-name", "--plan", "--handoff-target", "--runtime"].includes(argument)) {
       const value = takeValue(argv, index, argument)
       index += 1
       if (argument === "--repo") options.repo = value
       else if (argument === "--plan-dir") options.planDir = value
       else if (argument === "--plan-name") options.planName = value
       else if (argument === "--plan") options.plan = value
-      else options.handoffTarget = value
+      else if (argument === "--handoff-target") options.handoffTarget = value
+      else options.runtime = value
       continue
     }
     fail(`Unknown argument: ${argument}`)
@@ -70,7 +73,141 @@ function parseArguments(argv) {
   }
   if (options.finalize && options.plan) fail("--finalize cannot be combined with --plan")
   if (options.handoffTarget && !options.finalize) fail("--handoff-target requires --finalize")
+  if (!options.runtime) fail("--runtime is required")
+  if (!["native", "orca"].includes(options.runtime)) fail("--runtime must be native or orca")
   return options
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex")
+}
+
+function executablePath(command) {
+  if (command.includes(path.sep)) {
+    const candidate = path.resolve(command)
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK)
+      return candidate
+    } catch {
+      return null
+    }
+  }
+  const extensions = process.platform === "win32"
+    ? String(process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";")
+    : [""]
+  for (const directory of String(process.env.PATH || "").split(path.delimiter)) {
+    if (!directory) continue
+    for (const extension of extensions) {
+      const candidate = path.join(directory, `${command}${extension}`)
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK)
+        return candidate
+      } catch {
+        // Continue searching PATH.
+      }
+    }
+  }
+  return null
+}
+
+function runOrca(args, { allowFailure = false } = {}) {
+  const binary = process.env.HERDER_ORCA_BIN || "orca"
+  if (!executablePath(binary)) fail(`Orca CLI not found: ${binary}`)
+  const result = spawnSync(binary, [...args, "--json"], {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  })
+  if (result.error) fail(`Cannot run Orca CLI: ${result.error.message}`)
+  if (result.status !== 0 && !allowFailure) {
+    fail(`orca ${args.join(" ")} failed (${result.status}); output_sha256=${sha256(`${result.stdout}\0${result.stderr}`)}`)
+  }
+  return result
+}
+
+function parseOrcaJson(result, label) {
+  try {
+    return JSON.parse(result.stdout)
+  } catch (error) {
+    fail(`${label} returned invalid JSON: ${error.message}`)
+  }
+}
+
+function findStringByKeys(value, keys) {
+  if (!value || typeof value !== "object") return null
+  for (const key of keys) {
+    if (typeof value[key] === "string" && value[key]) return value[key]
+  }
+  for (const child of Object.values(value)) {
+    if (!child || typeof child !== "object") continue
+    const found = findStringByKeys(child, keys)
+    if (found) return found
+  }
+  return null
+}
+
+function verifyOrcaOwnership(worktreePath) {
+  const result = runOrca(["worktree", "show", "--worktree", `path:${worktreePath}`], { allowFailure: true })
+  if (result.status !== 0) return false
+  const payload = parseOrcaJson(result, "orca worktree show")
+  if (payload.ok === false) return false
+  const reportedPath = findStringByKeys(payload.result ?? payload, ["path", "worktreePath", "worktree_path"])
+  if (!reportedPath || !fs.existsSync(reportedPath)) return false
+  return fs.realpathSync(reportedPath) === fs.realpathSync(worktreePath)
+}
+
+function listLiveOrcaTerminals(worktreePath) {
+  const payload = parseOrcaJson(runOrca([
+    "terminal",
+    "list",
+    "--worktree",
+    `path:${worktreePath}`,
+  ]), "orca terminal list")
+  if (payload.ok === false) fail(`Orca terminal inventory failed for ${worktreePath}`)
+  const result = payload.result ?? payload
+  if (!Array.isArray(result?.terminals)) {
+    fail(`Orca terminal inventory is ambiguous for ${worktreePath}`)
+  }
+  const totalCount = Number.isSafeInteger(result.totalCount)
+    ? result.totalCount
+    : result.terminals.length
+  if (totalCount !== result.terminals.length || result.truncated === true) {
+    fail(`Orca terminal inventory is truncated for ${worktreePath}`)
+  }
+  return result.terminals
+}
+
+function hasLiveOrcaTerminals(worktreePath) {
+  return listLiveOrcaTerminals(worktreePath).length > 0
+}
+
+function refTarget(repoRoot, ref) {
+  const result = runGit(repoRoot, ["rev-parse", "--verify", ref], { allowFailure: true })
+  return result.status === 0 ? result.stdout.trim() : null
+}
+
+function removeOwnedWorktree(repoRoot, worktreePath, runtime) {
+  if (runtime === "native") {
+    runGit(repoRoot, ["worktree", "remove", "--", worktreePath])
+    return
+  }
+  if (!verifyOrcaOwnership(worktreePath)) fail(`Orca ownership cannot be verified for ${worktreePath}`)
+  if (hasLiveOrcaTerminals(worktreePath)) fail(`Cannot remove Orca worktree with live terminals: ${worktreePath}`)
+  const canonicalWorktreePath = fs.realpathSync(worktreePath)
+  runOrca(["worktree", "rm", "--worktree", `path:${worktreePath}`])
+  const stillPresent = parseWorktrees(repoRoot).some((item) => (
+    fs.existsSync(item.path)
+      ? fs.realpathSync(item.path) === canonicalWorktreePath
+      : path.resolve(item.path) === path.resolve(worktreePath)
+  ))
+  if (stillPresent) fail(`Orca reported removal but Git still lists worktree ${worktreePath}`)
+}
+
+function deleteBranchIfPresent(repoRoot, branch, expectedHead) {
+  const ref = `refs/heads/${branch}`
+  const current = refTarget(repoRoot, ref)
+  if (current === null) return
+  if (current !== expectedHead) fail(`Cannot delete moved branch ${branch}: expected ${expectedHead}, found ${current}`)
+  runGit(repoRoot, ["update-ref", "-d", ref, expectedHead])
 }
 
 function canonicalPlanId(value) {
@@ -254,6 +391,9 @@ function worktreeStatus(repoRoot, worktree) {
 }
 
 export function cleanupRun(input) {
+  const runtime = input.runtime
+  if (!runtime) fail("--runtime is required")
+  if (!["native", "orca"].includes(runtime)) fail("--runtime must be native or orca")
   const repoCandidate = path.resolve(input.repo)
   if (!fs.existsSync(repoCandidate) || !fs.statSync(repoCandidate).isDirectory()) fail(`Repository does not exist: ${repoCandidate}`)
   const repoRoot = fs.realpathSync(repoCandidate)
@@ -344,6 +484,14 @@ export function cleanupRun(input) {
       skipped.push({ branch: item.branch, plan: plan.id, status: plan.status, worktree: state.path, reason: "worktree-dirty" })
       continue
     }
+    if (runtime === "orca" && state.path && !verifyOrcaOwnership(state.path)) {
+      skipped.push({ branch: item.branch, plan: plan.id, status: plan.status, worktree: state.path, reason: "orca-ownership-unverified" })
+      continue
+    }
+    if (runtime === "orca" && state.path && hasLiveOrcaTerminals(state.path)) {
+      skipped.push({ branch: item.branch, plan: plan.id, status: plan.status, worktree: state.path, reason: "orca-live-terminals" })
+      continue
+    }
     actions.push({
       branch: item.branch,
       head: item.head,
@@ -353,7 +501,7 @@ export function cleanupRun(input) {
       mode,
       proof,
       worktree: state.path,
-      operations: [...(state.path ? ["remove-worktree"] : []), mode === "completed-plan" ? "delete-completed-plan-branch" : "delete-failed-evidence-branch"],
+      operations: [...(state.path ? [runtime === "orca" ? "remove-orca-worktree" : "remove-worktree"] : []), mode === "completed-plan" ? "delete-completed-plan-branch" : "delete-failed-evidence-branch"],
     })
   }
 
@@ -456,6 +604,8 @@ export function cleanupRun(input) {
         if (state.locked) handoff.blockers.push({ reason: "integration-worktree-locked", worktree: state.path })
         else if (state.missing) handoff.blockers.push({ reason: "integration-worktree-missing", worktree: state.path })
         else if (!state.clean) handoff.blockers.push({ reason: "integration-worktree-dirty", worktree: state.path })
+        else if (runtime === "orca" && !verifyOrcaOwnership(state.path)) handoff.blockers.push({ reason: "orca-ownership-unverified", worktree: state.path })
+        else if (runtime === "orca" && hasLiveOrcaTerminals(state.path)) handoff.blockers.push({ reason: "orca-live-terminals", worktree: state.path })
       }
     }
     handoff.eligible = handoff.blockers.length === 0
@@ -464,8 +614,8 @@ export function cleanupRun(input) {
   const removed = []
   if (!input.dryRun) {
     for (const action of actions) {
-      if (action.worktree) runGit(repoRoot, ["worktree", "remove", "--", action.worktree])
-      runGit(repoRoot, ["update-ref", "-d", `refs/heads/${action.branch}`, action.head])
+      if (action.worktree) removeOwnedWorktree(repoRoot, action.worktree, runtime)
+      deleteBranchIfPresent(repoRoot, action.branch, action.head)
       removed.push(action)
     }
     if (finalization.eligible) {
@@ -493,8 +643,8 @@ export function cleanupRun(input) {
       if (!isAncestor(repoRoot, integrationHead, currentTargetHead)) {
         fail(`Cannot remove integration because ${handoffTarget} no longer contains ${integrationHead}`)
       }
-      if (integrationWorktree) runGit(repoRoot, ["worktree", "remove", "--", integrationWorktree.path])
-      runGit(repoRoot, ["update-ref", "-d", integrationRef, integrationHead])
+      if (integrationWorktree) removeOwnedWorktree(repoRoot, integrationWorktree.path, runtime)
+      deleteBranchIfPresent(repoRoot, integrationBranch, integrationHead)
       handoff.targetHead = currentTargetHead
       handoff.removed = true
     }
@@ -504,6 +654,7 @@ export function cleanupRun(input) {
     repoRoot,
     planDir,
     planName,
+    runtime,
     integrationBranch,
     integrationHead,
     plan: planFilter,

@@ -1,4 +1,4 @@
 interface:
   display_name: "Herder Fire"
-  short_description: "Execute and clean namespaced plan sets"
-  default_prompt: "Use $herder:fire to execute, resume, inspect, or safely clean a validated Herder plan set."
+  short_description: "Execute bounded plans natively or through Orca"
+  default_prompt: "Use $herder:fire to execute, resume, inspect, or safely clean a validated review-budgeted Herder plan graph, optionally routing roles across harnesses through Orca."

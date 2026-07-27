@@ -21,6 +21,7 @@ function parseArgs(argv) {
     live: false,
     liveFire: false,
     liveGrill: false,
+    liveShape: false,
     liveValidate: false,
     keep: false,
     workspace: "",
@@ -31,6 +32,7 @@ function parseArgs(argv) {
     if (argument === "--live") options.live = true
     else if (argument === "--live-fire") options.liveFire = true
     else if (argument === "--live-grill") options.liveGrill = true
+    else if (argument === "--live-shape") options.liveShape = true
     else if (argument === "--live-validate") options.liveValidate = true
     else if (argument === "--keep") options.keep = true
     else if (["--workspace", "--auth-file"].includes(argument)) {
@@ -38,12 +40,12 @@ function parseArgs(argv) {
       const key = argument === "--workspace" ? "workspace" : "authFile"
       options[key] = path.resolve(argv[++index])
     } else if (["-h", "--help"].includes(argument)) {
-      process.stdout.write(`Usage: node smoke-test.mjs [--live | --live-fire | --live-grill | --live-validate] [--keep] [--workspace <empty-dir>] [--auth-file <file>]\n`)
+      process.stdout.write(`Usage: node smoke-test.mjs [--live | --live-fire | --live-grill | --live-shape | --live-validate] [--keep] [--workspace <empty-dir>] [--auth-file <file>]\n`)
       process.exit(0)
     } else fail(`Unknown argument: ${argument}`)
   }
-  if ([options.live, options.liveFire, options.liveGrill, options.liveValidate].filter(Boolean).length > 1) {
-    fail("--live, --live-fire, --live-grill, and --live-validate are separate test modes")
+  if ([options.live, options.liveFire, options.liveGrill, options.liveShape, options.liveValidate].filter(Boolean).length > 1) {
+    fail("--live, --live-fire, --live-grill, --live-shape, and --live-validate are separate test modes")
   }
   if (options.workspace) options.keep = true
   return options
@@ -114,6 +116,42 @@ test("prints the application name", () => {
   run("git", ["config", "user.email", "herder-smoke@example.invalid"], { cwd: project })
   run("git", ["add", "."], { cwd: project })
   run("git", ["commit", "-q", "-m", "test: add smoke fixture"], { cwd: project })
+}
+
+function writeShapeFixture(project) {
+  for (const cohort of ["core", "admin"]) {
+    const sourceDir = path.join(project, "src", cohort)
+    const testDir = path.join(project, "test", cohort)
+    fs.mkdirSync(sourceDir, { recursive: true })
+    fs.mkdirSync(testDir, { recursive: true })
+    for (let index = 1; index <= 6; index += 1) {
+      const name = `${cohort}-${index}`
+      fs.writeFileSync(path.join(sourceDir, `handler-${index}.mjs`), `export function handle() {
+  return ${JSON.stringify(name)}
+}
+`)
+    }
+    fs.writeFileSync(path.join(testDir, `${cohort}.test.mjs`), `import assert from "node:assert/strict"
+import test from "node:test"
+${Array.from({ length: 6 }, (_, index) => `import { handle as handle${index + 1} } from "../../src/${cohort}/handler-${index + 1}.mjs"`).join("\n")}
+import { dispatch } from "../../src/dispatcher.mjs"
+
+test(${JSON.stringify(`${cohort} handlers preserve text output`)}, () => {
+  const handlers = [${Array.from({ length: 6 }, (_, index) => `handle${index + 1}`).join(", ")}]
+  assert.deepEqual(handlers.map(dispatch), ${JSON.stringify(Array.from({ length: 6 }, (_, index) => `${cohort}-${index + 1}`))})
+})
+`)
+  }
+  fs.writeFileSync(path.join(project, "src", "dispatcher.mjs"), `export function normalizeResult(result) {
+  return typeof result === "string" ? { text: result } : result
+}
+
+export function dispatch(handler) {
+  return normalizeResult(handler()).text
+}
+`)
+  run("git", ["add", "."], { cwd: project })
+  run("git", ["commit", "-q", "-m", "test: add handler migration fixture"], { cwd: project })
 }
 
 function writeCodexConfig(codexHome, project, fireRoot) {
@@ -322,6 +360,9 @@ ${usageSection}
 - **Depends on**: none
 - **Category**: dx
 - **Planned at**: commit \`${plannedAt}\`, ${plannedDate}
+- **Kind**: behavioral
+- **Parent objective**: Expose package version metadata without changing default CLI behavior.
+- **Review budget**: files<=3, changed_lines<=100
 
 ## Why this matters
 
@@ -340,11 +381,23 @@ Users need a deterministic way to identify the installed CLI version in bug repo
 | Tests | \`npm test\` | all tests pass |
 | Version | \`node src/cli.mjs --version\` | exits 0 with the chosen format |
 
+## Dependency contract
+
+- **Consumes**: none.
+- **Provides**: one exact version-output contract with unchanged default output.
+- **Safe intermediate state**: the complete repository test command passes.
+
 ## Scope
 
 **In scope**: \`package.json\`, \`src/cli.mjs\`, and \`test/cli.test.mjs\`.
 
 **Out of scope**: dependencies, a general argument parser, aliases, and changes to no-argument output.
+
+## Git workflow
+
+- Branch: use the exact branch/worktree assigned by Herder Fire; never create or switch branches.
+- Use one focused conventional commit.
+- Do not push or open a pull request.
 
 ## Steps
 
@@ -363,6 +416,15 @@ Test the exact version output, exit code, and unchanged no-argument behavior wit
 ## Test plan
 
 Add tests for exact \`--version\` output, successful exit, and the existing no-argument greeting. Run \`npm test\` and the direct version command.
+
+## Review map
+
+- **Outcome**: exact version output with unchanged default output.
+- **Modified symbols**: package metadata, direct CLI dispatch, and subprocess tests.
+- **Direct contracts**: both supported CLI invocations.
+- **Expected unchanged behavior**: the no-argument greeting.
+- **Proof**: \`npm test\` and both direct commands.
+- **Expected diff**: no more than 3 files and 100 changed lines.
 
 ## Done criteria
 
@@ -401,6 +463,9 @@ function writeValidatePlan(project) {
 - **Depends on**: none
 - **Category**: dx
 - **Planned at**: commit \`${plannedAt}\`, ${plannedDate}
+- **Kind**: behavioral
+- **Parent objective**: Expose package version metadata without changing default CLI behavior.
+- **Review budget**: files<=3, changed_lines<=100
 
 ## Why this matters
 
@@ -435,6 +500,12 @@ Users need a deterministic version string for bug reports and scripts. The exact
 | Tests | \`npm test\` | exits 0 and all tests pass |
 | Version | \`node src/cli.mjs --version\` | prints exactly \`1.0.0\` and exits 0 |
 | Greeting | \`node src/cli.mjs\` | prints exactly \`herder-smoke\` and exits 0 |
+
+## Dependency contract
+
+- **Consumes**: none.
+- **Provides**: exact \`--version\` output with unchanged default output.
+- **Safe intermediate state**: this plan owns implementation and tests, and \`npm test\` passes.
 
 ## Scope
 
@@ -475,6 +546,15 @@ Extend \`test/cli.test.mjs\` with child-process assertions for the exact \`--ver
 - Extend \`test/cli.test.mjs\`, following its existing \`node:test\` structure.
 - Cover exact version stdout \`1.0.0\\n\`, successful version exit, exact no-argument stdout \`herder-smoke\\n\`, and successful no-argument exit.
 - Run \`npm test\` and both direct CLI commands; all must exit 0 with the outputs above.
+
+## Review map
+
+- **Outcome**: exact \`1.0.0\\n\` version output.
+- **Modified symbols**: package version, direct CLI dispatch, and subprocess tests.
+- **Direct contracts**: version and no-argument process behavior.
+- **Expected unchanged behavior**: \`message()\` and default output.
+- **Proof**: \`npm test\` plus both direct commands.
+- **Expected diff**: no more than 3 files and 100 changed lines.
 
 ## Done criteria
 
@@ -525,15 +605,17 @@ function main() {
   let createdAuthLink = ""
   try {
     writeFixture(project)
+    if (options.liveShape) writeShapeFixture(project)
     const { env, installed } = installPlugin(codexHome, project)
     const installedPath = installed.installedPath
-    const expectedSkills = ["fire", "grill", "improve", "install", "plans", "validate"]
+    const expectedSkills = ["configure", "fire", "grill", "improve", "install", "plans", "validate"]
     for (const skill of expectedSkills) {
       assert.equal(fs.existsSync(path.join(installedPath, "skills", skill, "SKILL.md")), true, `missing installed skill ${skill}`)
     }
     const expectedNicknames = {
       plan_implementer: ["Mocha", "Latte", "Cortado", "Piccolo", "Doppio", "Affogato", "Espresso", "Macchiato", "Cappuccino", "Ristretto"],
       plan_reviewer: ["Kiwi", "Mango", "Peach", "Fig", "Lychee", "Yuzu", "Guava", "Cherry", "Plum", "Papaya"],
+      plan_judge: ["Sage", "Atlas", "Solon", "Themis", "Verity", "Justus", "Minerva", "Cato", "Portia", "Astraea"],
       plan_saver: ["Daisy", "Poppy", "Iris", "Peony", "Aster", "Violet", "Zinnia", "Dahlia", "Lotus", "Marigold"],
     }
     for (const [profile, nicknames] of Object.entries(expectedNicknames)) {
@@ -548,23 +630,35 @@ function main() {
     assert.match(sharedTemplateText, /### Accepted decisions/)
     assert.match(sharedTemplateText, /CONTEXT\.md/)
     assert.match(sharedTemplateText, /Producer self-review/)
+    assert.match(sharedTemplateText, /never exceed 1,200/)
     assert.match(sharedTemplateText, /Mechanical validation complements self-review/)
     assert.doesNotMatch(sharedTemplateText, /\*\*Issue\*\*/)
     const grillText = fs.readFileSync(path.join(installedPath, "skills", "grill", "SKILL.md"), "utf8")
     const improveText = fs.readFileSync(path.join(installedPath, "skills", "improve", "SKILL.md"), "utf8")
     const fireText = fs.readFileSync(path.join(installedPath, "skills", "fire", "SKILL.md"), "utf8")
+    const configureText = fs.readFileSync(path.join(installedPath, "skills", "configure", "SKILL.md"), "utf8")
+    const configureScript = path.join(installedPath, "skills", "configure", "scripts", "configure-herder.mjs")
     const fireProtocolText = fs.readFileSync(path.join(installedPath, "skills", "fire", "references", "orchestration-protocol.md"), "utf8")
     const validateText = fs.readFileSync(path.join(installedPath, "skills", "validate", "SKILL.md"), "utf8")
     assert.match(grillText, /herder:grill <change-description>/)
     assert.match(grillText, /Producer self-review/)
     assert.match(grillText, /resume the one-question interview/)
+    assert.match(grillText, /Shape the Plan Graph/)
+    assert.match(grillText, /files<=N, changed_lines<=N/)
     assert.match(improveText, /Route user intent to .*herder:grill/)
     assert.match(improveText, /Producer self-review/)
+    assert.match(improveText, /impact graph/)
     assert.match(fireText, /herder:fire cleanup \[<plan-dir>\]/)
+    assert.match(fireText, /--runtime native\|orca/)
+    assert.match(fireText, /references\/orca-runtime\.md/)
     assert.match(fireText, /--include-failed/)
     assert.match(fireText, /--finalize/)
     assert.match(fireText, /Only the root coordinator may invoke the cleanup runner/)
     assert.match(fireText, /Keep integration history linear/)
+    assert.match(configureText, /Ask one focused question at a time/)
+    assert.match(configureText, /live validation makes one minimal call per unique/)
+    assert.match(configureText, /Do not accept an API key in chat/)
+    assert.equal(fs.existsSync(configureScript), true, "missing installed Configure generator")
     assert.match(fireProtocolText, /Each plan has exactly one stable branch and at most one worktree/)
     assert.match(fireProtocolText, /herder\/<plan-name>\/integration/)
     assert.match(fireProtocolText, /git rebase --onto <integration-head> <recorded-base>/)
@@ -577,10 +671,13 @@ function main() {
     assert.match(fireProtocolText, /For transient capacity, do not increment any retry, interruption, clarification, replan, or recovery bound/)
     assert.match(fireProtocolText, /30 seconds, 60 seconds, 120 seconds, and 300 seconds/)
     assert.match(fireProtocolText, /at most two same-round non-capacity interruption restarts/)
-    assert.match(fireProtocolText, /P2 and P3 findings are advisory and never block integration/)
-    assert.match(fireProtocolText, /Allow at most two completed broad discovery passes per generation/)
+    assert.match(fireProtocolText, /P2\/P3, `FOLLOWUP`, and `INVALID` findings are advisory and never block integration/)
+    assert.match(fireProtocolText, /Allow at most three substantive implementation-review rounds per generation/)
+    assert.match(fireProtocolText, /This is the only broad review/)
     assert.match(fireProtocolText, /Assign each `NEW` finding the next stable ID/)
-    assert.match(fireProtocolText, /Do not restart broad discovery/)
+    assert.match(fireProtocolText, /Never reopen broad discovery/)
+    assert.match(fireProtocolText, /DECISION: DONE \| SAVER \| NEEDS_INPUT \| BLOCKED/)
+    assert.match(fireProtocolText, /For an Orca attempt, create a fresh configured role terminal/)
     assert.match(validateText, /herder:validate \[<plan-dir>\] \[--fix\]/)
     assert.match(validateText, /herder-plans\.mjs/)
     assert.match(validateText, /strictly read-only/)
@@ -589,6 +686,44 @@ function main() {
     assert.match(validateText, /Never change lifecycle status/)
     const evidenceReader = path.join(installedPath, "skills", "fire", "scripts", "read-codex-agent-evidence.mjs")
     assert.equal(fs.existsSync(evidenceReader), true, "missing installed Codex Multi-Agent V2 evidence reader")
+    const orcaRuntime = path.join(installedPath, "skills", "fire", "scripts", "orca-runtime.mjs")
+    assert.equal(fs.existsSync(orcaRuntime), true, "missing installed Orca runtime adapter")
+    const orcaProtocol = path.join(installedPath, "skills", "fire", "references", "orca-runtime.md")
+    assert.equal(fs.existsSync(orcaProtocol), true, "missing installed Orca runtime protocol")
+    const orcaProfile = path.join(installedPath, "skills", "fire", "references", "orca-heterogeneous-profile.json")
+    assert.equal(fs.existsSync(orcaProfile), true, "missing installed heterogeneous Orca profile")
+    const validatedOrcaProfile = parseJson(run("node", [
+      orcaRuntime,
+      "validate",
+      "--profile", orcaProfile,
+      "--pretty",
+    ], { cwd: project }).stdout, "installed Orca profile validation")
+    assert.equal(validatedOrcaProfile.profile.name, "codex-grok-pi")
+    assert.equal(validatedOrcaProfile.profile.roles["plan-implementer"].model, "grok-4.5")
+    assert.equal(validatedOrcaProfile.profile.roles["plan-reviewer"].model, "k3")
+    assert.equal(validatedOrcaProfile.profile.roles["plan-judge"].model, "gpt-5.6-sol")
+    assert.equal(validatedOrcaProfile.profile.roles["plan-saver"].harness, "grok-build")
+    const configureAnswers = path.join(root, "configure-answers.json")
+    fs.writeFileSync(configureAnswers, JSON.stringify({
+      schemaVersion: 1,
+      backend: "orca",
+      name: "smoke-routing",
+      roles: {
+        controller: { harness: "codex", model: "gpt-5.6-sol", effort: "max" },
+        "plan-implementer": { harness: "grok-build", model: "grok-4.5", effort: "high" },
+        "plan-reviewer": { harness: "pi", model: "kimi-coding/k3", effort: "max" },
+        "plan-judge": { harness: "pi", model: "openai/gpt-5.6-sol", effort: "max" },
+        "plan-saver": { harness: "grok-build", model: "grok-4.5", effort: "high" },
+      },
+    }))
+    const configuredRouting = parseJson(run("node", [
+      configureScript,
+      "validate",
+      "--answers", configureAnswers,
+      "--pretty",
+    ], { cwd: project }).stdout, "installed Configure validation")
+    assert.equal(configuredRouting.ok, true)
+    assert.equal(configuredRouting.uniqueRoutes, 4)
     const checkoutGuard = path.join(installedPath, "skills", "fire", "scripts", "checkout-state.mjs")
     assert.equal(fs.existsSync(checkoutGuard), true, "missing installed Fire checkout-state guard")
     const cleanupRunner = path.join(installedPath, "skills", "fire", "scripts", "cleanup-run.mjs")
@@ -602,6 +737,8 @@ function main() {
     assert.equal(run("git", ["check-ignore", "-q", "herder-plans/README.md"], { cwd: project, allowFailure: true }).status, 0)
     const emptyGraph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "empty validation")
     assert.equal(emptyGraph.counts.total, 0)
+    const emptyShape = parseJson(run("node", [manager, "shape", "herder-plans", "--pretty"], { cwd: project }).stdout, "empty shape")
+    assert.equal(emptyShape.shapeReady, true)
     const recordedUsage = parseJson(run("node", [
       manager,
       "record-usage", "RUN", "plan-reviewer", "herder-plans",
@@ -620,7 +757,7 @@ function main() {
 
     run("npm", ["test"], { cwd: project })
 
-    if (options.live || options.liveFire || options.liveGrill || options.liveValidate) {
+    if (options.live || options.liveFire || options.liveGrill || options.liveShape || options.liveValidate) {
       if (!fs.existsSync(options.authFile)) fail(`Codex auth file not found: ${options.authFile}`)
       const authTarget = path.join(codexHome, "auth.json")
       if (!fs.existsSync(authTarget)) {
@@ -631,13 +768,15 @@ function main() {
 
       const installMessage = runCodex("00-install", `Use $herder:install --host codex --scope user. Install the native Herder profiles into this isolated Codex home, verify Multi-Agent V2, and do not change repository source.`, context).message
       assert.match(installMessage, /multi.agent.v2|multi_agent_v2|enabled/i)
-      for (const profile of ["plan_implementer", "plan_reviewer", "plan_saver"]) {
+      for (const profile of ["plan_implementer", "plan_reviewer", "plan_judge", "plan_saver"]) {
         assert.equal(fs.existsSync(path.join(codexHome, "agents", `${profile}.toml`)), true, `missing installed profile ${profile}`)
       }
       const installedReviewer = fs.readFileSync(path.join(codexHome, "agents", "plan_reviewer.toml"), "utf8")
       assert.match(installedReviewer, /sandbox_mode = "read-only"/)
-      assert.match(installedReviewer, /P2\/P3 findings are advisory and never block approval/)
-      assert.match(installedReviewer, /In VERIFICATION mode, verify the supplied open finding IDs and inspect only the repair delta/)
+      assert.match(installedReviewer, /P2\/P3, FOLLOWUP, and INVALID findings are advisory and never block approval/)
+      assert.match(installedReviewer, /In every later VERIFICATION round, verify the supplied open finding IDs and inspect only the repair delta/)
+      const installedJudge = fs.readFileSync(path.join(codexHome, "agents", "plan_judge.toml"), "utf8")
+      assert.match(installedJudge, /DECISION: DONE \| SAVER \| NEEDS_INPUT \| BLOCKED/)
 
       if (options.live) {
         const opened = runCodex("01-grill-intake", `Use $herder:grill to plan a --version flag for this tiny CLI. Print only the package version followed by one newline, preserve the no-argument output, and add no dependencies. Use your recommendations for any remaining decisions. Follow the skill exactly: inspect the repository, summarize the shared understanding, ask for final confirmation, and do not edit yet.`, context, { ephemeral: false })
@@ -652,6 +791,7 @@ function main() {
         const graph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "generated validation")
         assert.equal(graph.counts.total, 1)
         assert.deepEqual(graph.ready, ["001"])
+        assert.equal(graph.shapeReady, true, "Grill generated a plan without the bounded review shape")
         assert.equal(parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "preserved usage report").attempts, 1)
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
 
@@ -667,6 +807,7 @@ function main() {
         const graph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "generated validation")
         assert.equal(graph.counts.total, 1)
         assert.deepEqual(graph.ready, ["001"])
+        assert.equal(graph.shapeReady, true, "Improve generated a plan without the bounded review shape")
         assert.equal(parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "preserved usage report").attempts, 1)
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
 
@@ -714,7 +855,7 @@ function main() {
         assert.equal(spawnEvidence.every((item) => item.namespace === "herder_agents"), true)
         assert.equal(spawnEvidence.every((item) => item.encryptedMessagePresent), true)
         assert.equal(spawnEvidence.every((item) => item.arguments.fork_turns === "none"), true)
-        assert.equal(spawnEvidence.every((item) => ["plan_implementer", "plan_reviewer", "plan_saver"].includes(item.arguments.agent_type)), true)
+        assert.equal(spawnEvidence.every((item) => ["plan_implementer", "plan_reviewer", "plan_judge", "plan_saver"].includes(item.arguments.agent_type)), true)
         assert.equal(spawnEvidence.every((item) => !("model" in item.arguments) && !("reasoning_effort" in item.arguments) && !("service_tier" in item.arguments)), true)
         assert.equal(spawnEvidence.every((item) => item.coordinatorModel === "gpt-5.6-sol" && item.coordinatorEffort === "max" && item.multiAgentVersion === "v2"), true)
         fs.writeFileSync(path.join(reports, "native-spawn-evidence.json"), `${JSON.stringify(spawnEvidence, null, 2)}\n`)
@@ -750,11 +891,28 @@ function main() {
         assert.match(confirmed.message, /valid|updated|refined|plan 001/i)
         const after = fs.readFileSync(plan, "utf8")
         assert.notEqual(after, before, "Grill did not update the confirmed plan")
-        assert.match(after, /version[\s\S]*followed by exactly one newline/i)
+        assert.match(after, /version[\s\S]{0,240}followed by\s+(?:exactly\s+)?one newline/i)
         assert.match(after, /no label|without (?:a )?label/i)
         assert.match(after, /(?:no|without)[^\n.]{0,80}JSON/i)
         assert.doesNotMatch(after, /DECISION NEEDED/)
-        parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "refined plan validation")
+        const refinedGraph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "refined plan validation")
+        assert.equal(refinedGraph.shapeReady, true, "Grill refinement lost the bounded plan shape")
+        assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
+      } else if (options.liveShape) {
+        const opened = runCodex("01-shape-intake", `Use $herder:grill to plan a safe migration in this fixture: every handler under src/core/ and src/admin/ must directly return an object with a text field, dispatch(handler) must preserve its current public string output, and the compatibility normalizer must be removed only after both caller cohorts migrate. Treat core and admin as separate independently testable cohorts, keep every subplan within the default focused review budget, use your recommendations for remaining decisions, and do not modify source. Follow the skill exactly: inspect the repository, propose the focused plan DAG, ask for final confirmation, and do not write plans yet.`, context, { ephemeral: false })
+        assert.match(opened.message, /confirm|graph|plan|cohort/i)
+        const emptyBeforeConfirmation = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "shape pre-confirmation validation")
+        assert.equal(emptyBeforeConfirmation.counts.total, 0)
+
+        const confirmed = resumeCodex("02-shape-confirm", opened.threadId, `Yes. The objective and proposed dependency graph are accurate. Write the focused subplans, run shape and validation, and do not modify source code.`, context)
+        assert.match(confirmed.message, /valid|shape|plan|graph/i)
+        const graph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "shape graph validation")
+        assert.equal(graph.counts.total >= 3, true, "large migration was not split into focused cohort and cleanup plans")
+        assert.equal(graph.shapeReady, true, "generated subplan graph is not shape-ready")
+        assert.equal(graph.plans.every((plan) => plan.planWords <= 1200), true, "generated subplan exceeded prose budget")
+        assert.equal(graph.plans.every((plan) => plan.reviewBudget.files <= 8), true, "generated subplan exceeded focused file budget")
+        assert.equal(graph.plans.some((plan) => plan.dependencies.length > 0), true, "generated graph has no dependency edges")
+        assert.equal(graph.overlaps.every((overlap) => overlap.ordered), true, "generated graph has unordered write-scope overlap")
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
       } else {
         const plan = writeValidatePlan(project)
@@ -787,6 +945,7 @@ function main() {
         const repairedGraph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "repaired Validate fixture validation")
         assert.equal(repairedGraph.counts.total, 1)
         assert.deepEqual(repairedGraph.ready, ["001"])
+        assert.equal(repairedGraph.shapeReady, true, "Validate repair lost the bounded plan shape")
         assert.equal(parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "Validate usage preservation").attempts, 1)
         assert.equal(fs.readFileSync(readme, "utf8"), beforeReadme, "Validate --fix changed the usage-bearing index")
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout, beforeSourceStatus, "Validate --fix changed source files")
@@ -797,7 +956,7 @@ function main() {
     process.stdout.write(`Herder smoke test passed\n`)
     process.stdout.write(`Plugin: ${installed.name}@${installed.version}\n`)
     process.stdout.write(`Fixture: ${options.keep ? project : "temporary (removed after success)"}\n`)
-    if (options.live || options.liveFire || options.liveGrill || options.liveValidate) process.stdout.write(`Transcripts: ${transcripts}\n`)
+    if (options.live || options.liveFire || options.liveGrill || options.liveShape || options.liveValidate) process.stdout.write(`Transcripts: ${transcripts}\n`)
     if (options.liveFire) process.stdout.write(`Reports: ${reports}\n`)
   } finally {
     if (createdAuthLink) {

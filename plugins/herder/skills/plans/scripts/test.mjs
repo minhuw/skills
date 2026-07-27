@@ -7,6 +7,7 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import {
   buildGraph,
+  getShapeReport,
   getUsageReport,
   initPlanDir,
   recordUsage,
@@ -32,6 +33,9 @@ function planBody(id, title, dependencies) {
 - **Depends on**: ${dependencies}
 - **Category**: tests
 - **Planned at**: commit \`abc1234\`, 2026-07-15
+- **Kind**: behavioral
+- **Parent objective**: Exercise the plan manager fixture
+- **Review budget**: files<=4, changed_lines<=200
 
 ## Why this matters
 
@@ -49,7 +53,15 @@ Fixture state.
 
 ## Scope
 
-Fixture scope.
+**In scope** (the only files you should modify):
+- \`src/${id}.mjs\`
+
+**Out of scope**:
+- Every other fixture file.
+
+## Dependency contract
+
+Consumes the declared predecessor state and provides one passing fixture.
 
 ## Git workflow
 
@@ -66,6 +78,14 @@ Run the fixture.
 ## Test plan
 
 Run the fixture test.
+
+## Review map
+
+- Outcome: the fixture command passes.
+- Modified symbols: the scoped fixture file only.
+- Proof: \`true\`.
+- Expected unchanged behavior: every other fixture remains unchanged.
+- Expected diff: at most 4 files and 200 changed lines.
 
 ## Done criteria
 
@@ -136,7 +156,18 @@ try {
   assert.deepEqual(valid.waiting, [])
   assert.deepEqual(valid.waves, [["001", "003"], ["002"]])
   assert.equal(valid.complete, false)
+  assert.equal(valid.shapeReady, true)
+  assert.deepEqual(valid.overlaps, [])
   assert.equal(valid.plans.find((plan) => plan.id === "003").statusDetail, "previous attempt stopped")
+  const shape = getShapeReport(valid.planDir)
+  assert.equal(shape.shapeReady, true)
+  assert.equal(shape.plans.find((plan) => plan.id === "002").planWords < 1200, true)
+  assert.equal(Number.isSafeInteger(shape.plans.find((plan) => plan.id === "002").planLines), true)
+  assert.deepEqual(shape.plans.find((plan) => plan.id === "002").reviewBudget, {
+    files: 4,
+    changedLines: 200,
+    source: "files<=4, changed_lines<=200",
+  })
 
   const implementerUsage = {
     plan: "002",
@@ -194,6 +225,21 @@ try {
   assert.equal(snapshot.plan.id, "002")
   assert.match(snapshot.planText, /Plan 002/)
   assert.match(snapshot.indexText, /Execution order/)
+  assert.match(snapshot.snapshotSha256, /^[a-f0-9]{64}$/)
+  assert.equal(snapshot.snapshotInputs.length, 1)
+
+  fs.writeFileSync(path.join(valid.planDir, "CONTEXT.md"), `# Herder Plan-Set Context
+
+## Objective
+
+Keep shared fixture facts in one compiled snapshot input.
+`)
+  const composedSnapshot = snapshotPlan(valid.planDir, "2")
+  assert.match(composedSnapshot.planText, /herder-snapshot:shared-context/)
+  assert.match(composedSnapshot.planText, /Keep shared fixture facts/)
+  assert.match(composedSnapshot.planText, /Plan 002/)
+  assert.equal(composedSnapshot.snapshotInputs.length, 2)
+  assert.equal(composedSnapshot.contextText.includes("Plan-Set Context"), true)
 
   const progress = transitionStatus(valid.planDir, "002", "IN PROGRESS")
   assert.equal(progress.from, "TODO")
@@ -229,6 +275,53 @@ try {
   const malformedPlan = path.join(malformed, "002-second.md")
   fs.writeFileSync(malformedPlan, fs.readFileSync(malformedPlan, "utf8").replace("## Maintenance notes", "## Notes"))
   expectFailure(() => buildGraph(malformed), /missing required heading "## Maintenance notes"/)
+
+  const invalidBudget = writeFixture(path.join(root, "invalid-budget"))
+  const invalidBudgetPlan = path.join(invalidBudget, "002-second.md")
+  fs.writeFileSync(
+    invalidBudgetPlan,
+    fs.readFileSync(invalidBudgetPlan, "utf8").replace("files<=4, changed_lines<=200", "large"),
+  )
+  expectFailure(() => buildGraph(invalidBudget), /invalid Review budget/)
+
+  const legacyShape = writeFixture(path.join(root, "legacy-shape"))
+  const legacyShapePlan = path.join(legacyShape, "002-second.md")
+  fs.writeFileSync(
+    legacyShapePlan,
+    fs.readFileSync(legacyShapePlan, "utf8")
+      .replace("- **Kind**: behavioral\n", "")
+      .replace("- **Parent objective**: Exercise the plan manager fixture\n", "")
+      .replace("- **Review budget**: files<=4, changed_lines<=200\n", "")
+      .replace(/## Dependency contract[\s\S]*?(?=## Git workflow)/, "")
+      .replace(/## Review map[\s\S]*?(?=## Done criteria)/, ""),
+  )
+  const legacyGraph = buildGraph(legacyShape)
+  assert.equal(legacyGraph.shapeReady, false)
+  assert.match(legacyGraph.warnings.join("\n"), /Plan 002 shape: missing metadata "Kind"/)
+
+  const overlap = writeFixture(path.join(root, "overlap"))
+  const overlapPlan = path.join(overlap, "003-parallel.md")
+  fs.writeFileSync(
+    overlapPlan,
+    fs.readFileSync(overlapPlan, "utf8").replace("src/003.mjs", "src/002.mjs"),
+  )
+  const overlapShape = getShapeReport(overlap)
+  assert.deepEqual(overlapShape.overlaps, [{
+    plans: ["002", "003"],
+    paths: ["src/002.mjs"],
+    ordered: false,
+  }])
+  assert.match(overlapShape.warnings.join("\n"), /unordered overlapping in-scope paths/)
+
+  const verbose = writeFixture(path.join(root, "verbose"))
+  const verbosePlan = path.join(verbose, "002-second.md")
+  fs.writeFileSync(
+    verbosePlan,
+    `${fs.readFileSync(verbosePlan, "utf8")}\n${"repeated ".repeat(1300)}\n`,
+  )
+  const verboseShape = getShapeReport(verbose)
+  assert.equal(verboseShape.shapeReady, false)
+  assert.match(verboseShape.warnings.join("\n"), /compact subplans must stay at or below 1200/)
 
   const legacyBranch = writeFixture(path.join(root, "legacy-branch"))
   const legacyBranchPlan = path.join(legacyBranch, "002-second.md")

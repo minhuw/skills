@@ -1,14 +1,19 @@
 # Canonical Herder Plan Template
 
-Every plan is written for an executor model that has **zero context**: it has not seen the Grill interview, Improve audit, other plans, or prior conversation. It may be a smaller/cheaper model. Assume it is competent at following explicit instructions and weak at filling gaps, recovering from ambiguity, or knowing when to stop.
+Every compiled plan snapshot is written for an executor model that has **zero context**: it has not seen the Grill interview, Improve audit, sibling plans, or prior conversation. It may be a smaller/cheaper model. Assume it is competent at following explicit instructions and weak at filling gaps, recovering from ambiguity, or knowing when to stop. A snapshot may compose an optional plan-set `CONTEXT.md` before the local plan, but the local plan must still state its own outcome, dependency guarantees, boundaries, and proof.
 
 Three properties make a plan executable by a weaker model:
 
 1. **Self-contained context** — everything needed is in the file: paths, code excerpts, conventions, commands.
 2. **Verification gates** — every step ends with a command and its expected result. The executor never has to *judge* whether it succeeded.
 3. **Hard boundaries and escape hatches** — explicit out-of-scope list, and "STOP and report" conditions instead of letting the model improvise when reality doesn't match the plan.
+4. **Bounded review surface** — one independently verifiable invariant, a numeric file/line ceiling, and an exact review map.
 
 File naming: `herder-plans/NNN-short-slug.md`, numbered in recommended execution order.
+
+Shape an objective before drafting. Prefer a dependency DAG of focused behavioral slices over one large plan or layer-by-layer fragments. A normal plan targets one package, 5–8 edited files, 300–500 changed lines, one focused verification command, and at most one public-contract transition. Split larger work through valid intermediate states such as characterization tests, additive seams, bounded caller migrations, and compatibility cleanup.
+
+Compactness is part of executability. Target 500–900 words per local plan and never exceed 1,200; the manager reports the count and marks larger plans shape-incomplete. State each fact once, prefer dense bullets/tables, and do not repeat acceptance language across decisions, steps, test plan, review map, and done criteria. Inline only the evidence needed to locate and verify the change. Shared `CONTEXT.md` must stay at or below 1,600 words.
 
 ---
 
@@ -36,10 +41,13 @@ File naming: `herder-plans/NNN-short-slug.md`, numbered in recommended execution
 - **Depends on**: herder-plans/NNN-*.md (or "none")
 - **Category**: feature | bug | security | perf | tests | tech-debt | migration | dx | docs | direction
 - **Planned at**: commit `<short SHA>`, <YYYY-MM-DD>
+- **Kind**: behavioral | mechanical | migration | spike
+- **Parent objective**: <the durable plan-set outcome this subplan advances>
+- **Review budget**: files<=8, changed_lines<=500
 
 ## Why this matters
 
-2–5 sentences. State the requested or discovered outcome, its concrete value,
+1–3 sentences. State the requested or discovered outcome, its concrete value,
 and what improves when this lands. Written so the executor (and a human
 reviewer) understands the intent — intent is what lets a correct judgment call
 happen when a detail is off.
@@ -57,8 +65,8 @@ The facts the executor needs, inlined — never "as discussed" or "see audit":
 
 - The relevant files, each with one line on its role:
   - `src/orders/api.ts` — order-list endpoint; contains the N+1 (lines 130–160)
-- Excerpts of the code as it exists today (short, with `file:line` markers),
-  enough that the executor can confirm it's looking at the right thing.
+- Short code excerpts only when the exact current shape is load-bearing or
+  ambiguous. Otherwise name the file, symbol, and verified fact in one bullet.
 - The repo conventions that apply here, with a pointer to one exemplar file:
   "Error handling follows the Result pattern — see `src/lib/result.ts` and its
   use in `src/users/api.ts:40-60`. Match it."
@@ -81,6 +89,15 @@ The facts the executor needs, inlined — never "as discussed" or "see audit":
 | Lint      | `pnpm lint`              | exit 0              |
 
 (Exact commands from this repo — verified during recon, not guessed.)
+
+## Dependency contract
+
+- **Consumes**: the exact behavior or artifact guaranteed by each dependency,
+  or "none". Never say only "plan NNN"; the executor does not read siblings.
+- **Provides**: the independently testable invariant this plan leaves on
+  integration for later plans.
+- **Safe intermediate state**: why all required gates can pass after this plan
+  even when later sibling plans are unfinished.
 
 ## Suggested executor toolkit
 
@@ -115,9 +132,9 @@ executor's environment. Skip the section otherwise.)
 
 ### Step 1: <imperative title>
 
-What to do, precisely. Reference exact files/symbols. Include the target code
-shape when it's load-bearing (the pattern to produce, not necessarily every
-line).
+What to do, precisely, in 2–5 bullets. Reference exact files/symbols. Include
+the target code shape only when it is load-bearing; never prescribe incidental
+line-by-line implementation.
 
 **Verify**: `<command>` → <expected output>
 
@@ -133,15 +150,29 @@ domain glossaries free of implementation detail.
 
 ## Test plan
 
-- New tests to write, in which file, covering which cases (list them:
+- In 3–6 bullets, name new tests, their file, and cases (list them:
   happy path, the specific bug/regression this plan fixes, named edge cases).
 - Which existing test to use as the structural pattern:
   "model after `src/users/api.test.ts`".
 - Verification: `<test command>` → all pass, including N new tests.
 
+## Review map
+
+Give the reviewer the shortest evidence path:
+
+- **Outcome**: one observable behavior or invariant.
+- **Modified symbols**: exact production symbols and configuration keys.
+- **Direct contracts**: callers, interfaces, schemas, or invariants that must be
+  inspected because this diff can affect them.
+- **Expected unchanged behavior**: nearby behavior the reviewer should prove was
+  preserved without reopening unrelated code.
+- **Proof**: focused commands and named test cases.
+- **Expected diff**: estimated production/test files and changed lines within the
+  numeric Status budget.
+
 ## Done criteria
 
-Machine-checkable. ALL must hold:
+Machine-checkable; use 3–8 non-duplicative criteria. ALL must hold:
 
 - [ ] `pnpm typecheck` exits 0
 - [ ] `pnpm test` exits 0; new tests for <X> exist and pass
@@ -152,23 +183,55 @@ Machine-checkable. ALL must hold:
 
 ## STOP conditions
 
-Stop and report back (do not improvise) if:
+Use 3–6 plan-specific triggers. Stop and report back (do not improvise) if:
 
 - The code at the locations in "Current state" doesn't match the excerpts
   (the codebase has drifted since this plan was written).
 - A step's verification fails twice after a reasonable fix attempt.
 - The fix appears to require touching an out-of-scope file.
+- The actual diff would exceed the declared review budget or cross another
+  package/bounded subsystem.
 - You discover the assumption "<key assumption>" is false.
 
 ## Maintenance notes
 
-For the human/agent who owns this code after the change lands:
+Use 1–3 bullets for the human/agent who owns this code after the change lands:
 
 - What future changes will interact with this (e.g. "if pagination is added
   to this endpoint, the batching in step 2 must be revisited").
 - What a reviewer should scrutinize in the PR.
 - Any follow-up explicitly deferred out of this plan (and why).
 ```
+
+---
+
+## Optional shared `herder-plans/CONTEXT.md`
+
+Create this only when two or more plans would otherwise repeat verified repository facts. Keep it concise, stable, non-repetitive, and at or below 1,600 words:
+
+```markdown
+# Herder Plan-Set Context
+
+## Objective
+
+The confirmed plan-set outcome and global non-goals.
+
+## Shared repository facts
+
+Verified architecture, conventions, baseline state, and exemplars reused by
+multiple subplans.
+
+## Shared commands
+
+Repository-wide commands with expected results.
+
+## Shared constraints
+
+Accepted terminology, compatibility, security, rollout, and documentation
+constraints that apply to every subplan.
+```
+
+Do not put a subplan's outcome, scope, dependency guarantee, or STOP condition here. `snapshot` hashes and composes this file before the local plan, so changing it changes every later snapshot.
 
 ---
 
@@ -215,7 +278,9 @@ After writing a draft, reread the saved plan from disk as if the planning sessio
 3. **Executability** — a model new to the repository can execute the plan using only the plan and repository. Remove placeholders, "as discussed", vague references such as "the relevant module", judgment-only checks such as "make sure it works", and any hidden interview or audit context.
 4. **Internal consistency** — Scope, drift-check paths, Git workflow, steps, test plan, done criteria, STOP conditions, dependencies, and the index agree. The Git workflow delegates branch/worktree ownership to Herder Fire, and every step names exact files or symbols and ends with a command plus expected result.
 5. **Domain model** — accepted terminology, glossary changes, and ADR obligations are durable and consistent across current state, scope, ordered steps, and done criteria. Do not hide them in conversation history.
-6. **Plan shape** — the draft is one coherent, independently testable unit. Its steps are small enough to verify, ordered by dependency, and explicit about inputs, outputs, and boundaries where those are not obvious.
+6. **Plan shape** — the draft is one coherent, independently testable invariant. Its numeric review budget is credible, its review map gives a short evidence path, its dependency contract leaves a gate-passing intermediate state, and its steps are ordered and explicit about inputs, outputs, and boundaries.
+7. **Split discipline** — split multiple outcomes, packages, public transitions, or caller cohorts before writing long prose. Do not split at a point where integration would be broken. A larger `mechanical` budget names the deterministic transformation and completeness proof; it is not a waiver for broad semantic work.
+8. **Overlap and composition** — repeated verified facts may live in plan-set `CONTEXT.md`, but no local outcome or dependency guarantee does. Overlapping in-scope paths are explicitly ordered by dependency or the plans are reshaped.
 
 Repair omissions or inconsistencies directly when doing so only clarifies already confirmed intent or verified evidence. If review exposes a missing product decision, material scope or approach choice, or a second plan, return to the producer's clarification or selection phase and obtain confirmation before finalizing. A STOP condition is not a substitute for a decision required to begin implementation.
 

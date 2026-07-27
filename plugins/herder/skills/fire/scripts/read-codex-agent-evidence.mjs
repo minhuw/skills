@@ -173,9 +173,15 @@ function parseSession(text, options, file) {
         taskMessageCount += 1
       }
     }
-    if (event.type === "response_item" && event.payload?.type === "custom_tool_call") {
-      for (const workdir of toolWorkdirs(event.payload.input)) executionWorkdirs.add(workdir)
-      const patchEvidence = applyPatchEvidence(event.payload.name, event.payload.input)
+    if (
+      event.type === "response_item"
+      && ["custom_tool_call", "function_call"].includes(event.payload?.type)
+    ) {
+      const input = event.payload.type === "function_call"
+        ? event.payload.arguments
+        : event.payload.input
+      for (const workdir of toolWorkdirs(input)) executionWorkdirs.add(workdir)
+      const patchEvidence = applyPatchEvidence(event.payload.name, input)
       applyPatchCalls += patchEvidence.calls
       unresolvedApplyPatchCalls += patchEvidence.unresolvedCalls
       for (const target of patchEvidence.paths) rawApplyPatchPaths.add(target)

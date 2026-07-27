@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
-import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import process from "node:process"
@@ -11,11 +11,14 @@ import { fileURLToPath } from "node:url"
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const reader = path.join(scriptDir, "read-codex-agent-evidence.mjs")
 const gateRunner = path.join(scriptDir, "run-gate.mjs")
+const orcaRuntime = path.join(scriptDir, "orca-runtime.mjs")
+const orcaProfile = path.join(scriptDir, "..", "references", "orca-heterogeneous-profile.json")
 const root = await mkdtemp(path.join(tmpdir(), "herder-agent-evidence-test-"))
 const sessions = path.join(root, "sessions", "2026", "07", "15")
 const archivedSessions = path.join(root, "archived_sessions")
 const candidateReal = path.join(root, "candidate-real")
 const candidateAlias = path.join(root, "candidate-alias")
+const candidateNested = path.join(candidateReal, "nested")
 const agentId = "019f0000-0000-7000-8000-000000000001"
 const interruptedAgentId = "019f0000-0000-7000-8000-000000000002"
 const priorAgentId = "019f0000-0000-7000-8000-000000000003"
@@ -59,6 +62,14 @@ try {
     {
       type: "response_item",
       payload: {
+        type: "function_call",
+        name: "exec_command",
+        arguments: JSON.stringify({ cmd: "git status --short", workdir: candidateNested }),
+      },
+    },
+    {
+      type: "response_item",
+      payload: {
         type: "custom_tool_call",
         name: "exec",
         input: `const patch = ${JSON.stringify(`*** Begin Patch
@@ -80,6 +91,17 @@ try {
         name: "apply_patch",
         input: `*** Begin Patch
 *** Add File: ${path.join(candidateAlias, "direct.txt")}
++direct
+*** End Patch`,
+      },
+    },
+    {
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "apply_patch",
+        arguments: `*** Begin Patch
+*** Add File: ${path.join(candidateAlias, "function-direct.txt")}
 +direct
 *** End Patch`,
       },
@@ -156,13 +178,14 @@ try {
   assert.equal(evidence.effort, "max")
   assert.equal(evidence.multiAgentVersion, "v2")
   assert.equal(evidence.sandbox, "workspace-write")
-  assert.deepEqual(evidence.executionWorkdirs, [candidateReal])
-  assert.equal(evidence.applyPatchCalls, 2)
+  assert.deepEqual(evidence.executionWorkdirs, [candidateReal, candidateNested])
+  assert.equal(evidence.applyPatchCalls, 3)
   assert.deepEqual(evidence.applyPatchPaths, [
     path.join(candidateCanonical, "source.txt"),
     path.join(candidateCanonical, "moved.txt"),
     path.join(candidateCanonical, "relative.txt"),
     path.join(candidateCanonical, "direct.txt"),
+    path.join(candidateCanonical, "function-direct.txt"),
   ])
   assert.equal(evidence.unresolvedApplyPatchCalls, 0)
   assert.equal(evidence.mutationEvidenceComplete, true)
@@ -216,6 +239,351 @@ try {
   assert.equal(missing.status, 1)
   assert.equal(JSON.parse(missing.stdout).ok, false)
 
+  const validatedOrcaProfile = JSON.parse(execFileSync(process.execPath, [
+    orcaRuntime,
+    "validate",
+    "--profile", orcaProfile,
+  ], { encoding: "utf8" }))
+  assert.equal(validatedOrcaProfile.ok, true)
+  assert.equal(validatedOrcaProfile.profile.name, "codex-grok-pi")
+  assert.match(validatedOrcaProfile.profileHash, /^[a-f0-9]{64}$/)
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(validatedOrcaProfile.profile.roles).map(([name, role]) => [name, `${role.harness}/${role.provider}/${role.model}`])),
+    {
+      controller: "codex/openai-codex/gpt-5.6-sol",
+      "plan-implementer": "grok-build/xai/grok-4.5",
+      "plan-reviewer": "pi/kimi-coding/k3",
+      "plan-judge": "pi/openai/gpt-5.6-sol",
+      "plan-saver": "grok-build/xai/grok-4.5",
+    },
+  )
+  assert.equal(validatedOrcaProfile.profile.roles["plan-reviewer"].mutates, false)
+  assert.equal(validatedOrcaProfile.profile.roles["plan-judge"].mutates, false)
+  assert.equal(validatedOrcaProfile.profile.roles["plan-saver"].harness, "grok-build")
+  assert.equal(
+    validatedOrcaProfile.profile.roles.controller.command.includes("--dangerously-bypass-approvals-and-sandbox"),
+    true,
+  )
+  const sourceOrcaProfile = JSON.parse(await readFile(orcaProfile, "utf8"))
+  const unsupportedAmpProfile = structuredClone(sourceOrcaProfile)
+  unsupportedAmpProfile.roles["plan-saver"].harness = "amp"
+  const unsupportedAmpProfilePath = path.join(root, "orca-unsupported-amp-profile.json")
+  await writeFile(unsupportedAmpProfilePath, JSON.stringify(unsupportedAmpProfile))
+  const unsupportedAmpValidation = spawnSync(process.execPath, [
+    orcaRuntime,
+    "validate",
+    "--profile", unsupportedAmpProfilePath,
+  ], { encoding: "utf8" })
+  assert.notEqual(unsupportedAmpValidation.status, 0)
+  assert.match(unsupportedAmpValidation.stderr, /Unsupported harness for plan-saver: "amp"/)
+
+  const controllerLauncher = JSON.parse(execFileSync(process.execPath, [
+    orcaRuntime,
+    "launcher",
+    "--profile", orcaProfile,
+    "--role", "controller",
+  ], { encoding: "utf8" }))
+  assert.match(controllerLauncher.launcherSha256, /^[a-f0-9]{64}$/)
+
+  const mismatchedProfile = structuredClone(sourceOrcaProfile)
+  const reviewerModelIndex = mismatchedProfile.roles["plan-reviewer"].command.indexOf("kimi-coding/k3")
+  mismatchedProfile.roles["plan-reviewer"].command[reviewerModelIndex] = "openai/gpt-5.6-sol"
+  const mismatchedProfilePath = path.join(root, "orca-mismatched-profile.json")
+  await writeFile(mismatchedProfilePath, JSON.stringify(mismatchedProfile))
+  const mismatchedValidation = spawnSync(process.execPath, [
+    orcaRuntime,
+    "validate",
+    "--profile", mismatchedProfilePath,
+  ], { encoding: "utf8" })
+  assert.notEqual(mismatchedValidation.status, 0)
+  assert.match(mismatchedValidation.stderr, /must select declared Pi route/)
+
+  const disabledKimiProviderProfile = structuredClone(sourceOrcaProfile)
+  disabledKimiProviderProfile.roles["plan-reviewer"].command.push("--no-extensions")
+  const disabledKimiProviderProfilePath = path.join(root, "orca-disabled-kimi-provider-profile.json")
+  await writeFile(disabledKimiProviderProfilePath, JSON.stringify(disabledKimiProviderProfile))
+  const disabledKimiProviderValidation = spawnSync(process.execPath, [
+    orcaRuntime,
+    "validate",
+    "--profile", disabledKimiProviderProfilePath,
+  ], { encoding: "utf8" })
+  assert.notEqual(disabledKimiProviderValidation.status, 0)
+  assert.match(disabledKimiProviderValidation.stderr, /must allow the installed Kimi provider extension/)
+
+  const sandboxedControllerProfile = structuredClone(sourceOrcaProfile)
+  sandboxedControllerProfile.roles.controller.command = sandboxedControllerProfile.roles.controller.command
+    .filter((argument) => argument !== "--dangerously-bypass-approvals-and-sandbox")
+  const sandboxedControllerProfilePath = path.join(root, "orca-sandboxed-controller-profile.json")
+  await writeFile(sandboxedControllerProfilePath, JSON.stringify(sandboxedControllerProfile))
+  const sandboxedControllerValidation = spawnSync(process.execPath, [
+    orcaRuntime,
+    "validate",
+    "--profile", sandboxedControllerProfilePath,
+  ], { encoding: "utf8" })
+  assert.notEqual(sandboxedControllerValidation.status, 0)
+  assert.match(sandboxedControllerValidation.stderr, /controller\.command must use Codex permissive mode/)
+
+  const credentialProfile = structuredClone(sourceOrcaProfile)
+  credentialProfile.roles["plan-saver"].probe = ["grok", "models", "--api-key", "do-not-print"]
+  const credentialProfilePath = path.join(root, "orca-credential-profile.json")
+  await writeFile(credentialProfilePath, JSON.stringify(credentialProfile))
+  const credentialValidation = spawnSync(process.execPath, [
+    orcaRuntime,
+    "validate",
+    "--profile", credentialProfilePath,
+  ], { encoding: "utf8" })
+  assert.notEqual(credentialValidation.status, 0)
+  assert.match(credentialValidation.stderr, /probe must not embed credentials/)
+  assert.doesNotMatch(credentialValidation.stdout, /do-not-print/)
+
+  const fakeBin = path.join(root, "fake-bin")
+  const fakeOrca = path.join(fakeBin, "orca")
+  const fakeAgent = path.join(fakeBin, "fake-agent")
+  const fakeOrcaLog = path.join(root, "fake-orca.log")
+  await mkdir(fakeBin)
+  await writeFile(fakeOrca, `#!/usr/bin/env node
+const fs = require("node:fs")
+const args = process.argv.slice(2).filter((arg) => arg !== "--json")
+fs.appendFileSync(process.env.FAKE_ORCA_LOG, JSON.stringify(args) + "\\n")
+if (process.env.FAKE_ORCA_FAIL === args.slice(0, 2).join(" ")) {
+  process.stderr.write("forced fake Orca failure\\n")
+  process.exit(7)
+}
+let result
+if (args[0] === "status") result = { app: { running: true }, runtime: { reachable: true } }
+else if (args[0] === "worktree" && args[1] === "current") result = { id: "repo::controller", path: "/tmp/orca-controller", branch: "test/controller" }
+else if (args[0] === "worktree" && args[1] === "show") result = {
+  id: process.env.FAKE_ORCA_WORKTREE_ID || "repo::controller",
+  path: process.env.FAKE_ORCA_WORKTREE_PATH || "/tmp/orca-controller",
+  branch: process.env.FAKE_ORCA_WORKTREE_BRANCH || "test/controller",
+}
+else if (args[0] === "terminal" && args[1] === "show") result = { handle: args[3] || "terminal:controller" }
+else if (args[0] === "orchestration" && args[1] === "task-list") result = { count: 0, tasks: [] }
+else if (args[0] === "terminal" && args[1] === "create") result = { terminalHandle: "terminal:worker" }
+else if (args[0] === "terminal" && args[1] === "wait") result = { ready: true }
+else if (args[0] === "terminal" && args[1] === "send") result = { accepted: true }
+else if (args[0] === "orchestration" && args[1] === "task-create") result = { taskId: "task:001" }
+else if (args[0] === "orchestration" && args[1] === "dispatch") result = { dispatchId: "dispatch:001" }
+else { process.stderr.write("unexpected fake Orca command: " + args.join(" ") + "\\n"); process.exit(2) }
+process.stdout.write(JSON.stringify({ ok: true, result }) + "\\n")
+`)
+  await writeFile(fakeAgent, `#!/usr/bin/env node
+const fs = require("node:fs")
+if (process.argv[1].endsWith("/codex") && process.env.FAKE_CONTROLLER_ENV_LOG) {
+  fs.writeFileSync(process.env.FAKE_CONTROLLER_ENV_LOG, JSON.stringify({
+    profileHash: process.env.HERDER_ORCA_PROFILE_SHA256,
+    launcherHash: process.env.HERDER_ORCA_CONTROLLER_LAUNCHER_SHA256,
+    terminal: process.env.HERDER_ORCA_CONTROLLER_TERMINAL,
+    worktree: process.env.HERDER_ORCA_CONTROLLER_WORKTREE,
+  }))
+}
+process.stdout.write("grok-4.5 kimi-coding/k3 openai/gpt-5.6-sol authenticated\\n")
+`)
+  await chmod(fakeOrca, 0o755)
+  await chmod(fakeAgent, 0o755)
+  for (const name of ["codex", "grok", "pi"]) await symlink(fakeAgent, path.join(fakeBin, name))
+  const fakeRuntimeEnv = {
+    ...process.env,
+    PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ""}`,
+    HERDER_ORCA_BIN: fakeOrca,
+    FAKE_ORCA_LOG: fakeOrcaLog,
+    HERDER_ORCA_PROFILE_SHA256: validatedOrcaProfile.profileHash,
+    HERDER_ORCA_CONTROLLER_LAUNCHER_SHA256: controllerLauncher.launcherSha256,
+    HERDER_ORCA_CONTROLLER_TERMINAL: "terminal:controller",
+    HERDER_ORCA_CONTROLLER_WORKTREE: "id:repo::controller",
+  }
+  const normalizeRepo = path.join(root, "normalize-repo")
+  const normalizeWorktreePath = path.join(root, "normalize-worktree")
+  await mkdir(normalizeRepo)
+  execFileSync("git", ["init", "-q", normalizeRepo])
+  await writeFile(path.join(normalizeRepo, "fixture.txt"), "fixture\n")
+  execFileSync("git", ["-C", normalizeRepo, "add", "fixture.txt"])
+  execFileSync("git", [
+    "-C", normalizeRepo,
+    "-c", "user.name=Herder Test",
+    "-c", "user.email=herder@example.invalid",
+    "commit", "-q", "-m", "test: initialize fixture",
+  ])
+  const normalizeHead = execFileSync("git", ["-C", normalizeRepo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()
+  execFileSync("git", ["-C", normalizeRepo, "branch", "herder-orca-matrix-integration"])
+  execFileSync("git", [
+    "-C", normalizeRepo,
+    "worktree", "add", "-q", normalizeWorktreePath, "herder-orca-matrix-integration",
+  ])
+  const normalizedWorktree = spawnSync(process.execPath, [
+    orcaRuntime,
+    "normalize-worktree",
+    "--profile", orcaProfile,
+    "--worktree", "id:repo::normalize",
+    "--expected-branch", "herder/orca-matrix/integration",
+    "--expected-head", normalizeHead,
+  ], {
+    encoding: "utf8",
+    env: {
+      ...fakeRuntimeEnv,
+      FAKE_ORCA_WORKTREE_ID: "repo::normalize",
+      FAKE_ORCA_WORKTREE_PATH: normalizeWorktreePath,
+      FAKE_ORCA_WORKTREE_BRANCH: "refs/heads/herder-orca-matrix-integration",
+    },
+  })
+  assert.equal(normalizedWorktree.status, 0, normalizedWorktree.stderr)
+  const normalizedEvidence = JSON.parse(normalizedWorktree.stdout)
+  assert.equal(normalizedEvidence.renamed, true)
+  assert.equal(normalizedEvidence.gitBranch, "herder/orca-matrix/integration")
+  assert.equal(normalizedEvidence.orcaReportedBranchAfter, "herder-orca-matrix-integration")
+  assert.equal(
+    execFileSync("git", ["-C", normalizeWorktreePath, "symbolic-ref", "--short", "HEAD"], { encoding: "utf8" }).trim(),
+    "herder/orca-matrix/integration",
+  )
+  assert.equal(
+    spawnSync("git", [
+      "-C", normalizeRepo,
+      "show-ref", "--verify", "--quiet", "refs/heads/herder-orca-matrix-integration",
+    ]).status,
+    1,
+  )
+  const preflight = spawnSync(process.execPath, [
+    orcaRuntime,
+    "preflight",
+    "--profile", orcaProfile,
+  ], { encoding: "utf8", env: fakeRuntimeEnv })
+  assert.equal(preflight.status, 0, preflight.stderr)
+  const preflightEvidence = JSON.parse(preflight.stdout)
+  assert.equal(preflightEvidence.controllerTerminal, "terminal:controller")
+  assert.equal(preflightEvidence.worktreeId, "repo::controller")
+  assert.deepEqual(preflightEvidence.orchestration, { status: "available", existingTaskCount: 0 })
+  assert.equal(preflightEvidence.probes["plan-implementer"].status, "passed")
+  assert.equal(preflightEvidence.probes["plan-reviewer"].status, "passed")
+  assert.equal(preflightEvidence.probes["plan-judge"].status, "passed")
+  assert.equal(preflightEvidence.probes["plan-saver"].status, "passed")
+
+  const unattestedPreflight = spawnSync(process.execPath, [
+    orcaRuntime,
+    "preflight",
+    "--profile", orcaProfile,
+  ], {
+    encoding: "utf8",
+    env: {
+      ...fakeRuntimeEnv,
+      HERDER_ORCA_CONTROLLER_LAUNCHER_SHA256: "0".repeat(64),
+    },
+  })
+  assert.notEqual(unattestedPreflight.status, 0)
+  assert.match(unattestedPreflight.stderr, /Controller routing is unattested/)
+
+  const controllerEnvLog = path.join(root, "fake-controller-env.json")
+  const launchedController = spawnSync(process.execPath, [
+    orcaRuntime,
+    "launch-controller",
+    "--profile", orcaProfile,
+    "--controller-terminal", "terminal:controller",
+    "--controller-worktree", "id:repo::controller",
+  ], {
+    encoding: "utf8",
+    env: {
+      ...fakeRuntimeEnv,
+      FAKE_CONTROLLER_ENV_LOG: controllerEnvLog,
+    },
+  })
+  assert.equal(launchedController.status, 0, launchedController.stderr)
+  assert.deepEqual(JSON.parse(await readFile(controllerEnvLog, "utf8")), {
+    profileHash: validatedOrcaProfile.profileHash,
+    launcherHash: controllerLauncher.launcherSha256,
+    terminal: "terminal:controller",
+    worktree: "id:repo::controller",
+  })
+
+  const taskFile = path.join(root, "orca-task.txt")
+  await writeFile(taskFile, "ROLE: plan-implementer\nSTATUS: return the required envelope\n")
+  const dispatched = spawnSync(process.execPath, [
+    orcaRuntime,
+    "dispatch",
+    "--profile", orcaProfile,
+    "--role", "plan-implementer",
+    "--worktree", "id:repo::plan-001",
+    "--task-file", taskFile,
+    "--attempt", "plans-001-implementer-1",
+    "--controller-terminal", "terminal:controller",
+  ], { encoding: "utf8", env: fakeRuntimeEnv })
+  assert.equal(dispatched.status, 0, dispatched.stderr)
+  const dispatchEvidence = JSON.parse(dispatched.stdout)
+  assert.equal(dispatchEvidence.role, "plan-implementer")
+  assert.equal(dispatchEvidence.harness, "grok-build")
+  assert.equal(dispatchEvidence.model, "grok-4.5")
+  assert.equal(dispatchEvidence.terminalHandle, "terminal:worker")
+  assert.equal(dispatchEvidence.taskId, "task:001")
+  assert.equal(dispatchEvidence.dispatchId, "dispatch:001")
+  assert.equal(dispatchEvidence.readiness, "tui-idle")
+  assert.match(dispatchEvidence.readinessEvidenceSha256, /^[a-f0-9]{64}$/)
+  assert.match(dispatchEvidence.taskSha256, /^[a-f0-9]{64}$/)
+  assert.match(dispatchEvidence.launcherSha256, /^[a-f0-9]{64}$/)
+  assert.equal(dispatchEvidence.delivery, "tracked-terminal-send")
+  assert.match(dispatchEvidence.deliverySha256, /^[a-f0-9]{64}$/)
+  const fakeOrcaCalls = (await readFile(fakeOrcaLog, "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line))
+  assert.equal(fakeOrcaCalls.some((args) => args[0] === "terminal" && args[1] === "create" && args.includes("grok --model grok-4.5 --effort high --always-approve --no-subagents --no-auto-update")), true)
+  assert.equal(fakeOrcaCalls.some((args) => args[0] === "orchestration" && args[1] === "task-create"), true)
+  assert.equal(fakeOrcaCalls.some((args) => args[0] === "orchestration" && args[1] === "dispatch" && !args.includes("--inject")), true)
+  const trackedSend = fakeOrcaCalls.find((args) => args[0] === "terminal" && args[1] === "send")
+  assert.ok(trackedSend)
+  const trackedPrompt = trackedSend[trackedSend.indexOf("--text") + 1]
+  assert.match(trackedPrompt, /Task ID: task:001/)
+  assert.match(trackedPrompt, /Dispatch ID: dispatch:001/)
+  assert.match(trackedPrompt, /ROLE: plan-implementer/)
+
+  const saverDispatch = spawnSync(process.execPath, [
+    orcaRuntime,
+    "dispatch",
+    "--profile", orcaProfile,
+    "--role", "plan-saver",
+    "--worktree", "id:repo::plan-001",
+    "--task-file", taskFile,
+    "--attempt", "plans-001-saver-success",
+    "--controller-terminal", "terminal:controller",
+  ], { encoding: "utf8", env: fakeRuntimeEnv })
+  assert.equal(saverDispatch.status, 0, saverDispatch.stderr)
+  const saverEvidence = JSON.parse(saverDispatch.stdout)
+  assert.equal(saverEvidence.role, "plan-saver")
+  assert.equal(saverEvidence.harness, "grok-build")
+  assert.equal(saverEvidence.model, "grok-4.5")
+  assert.equal(saverEvidence.readiness, "tui-idle")
+  assert.equal(saverEvidence.delivery, "tracked-terminal-send")
+
+  const failedReadyDispatch = spawnSync(process.execPath, [
+    orcaRuntime,
+    "dispatch",
+    "--profile", orcaProfile,
+    "--role", "plan-saver",
+    "--worktree", "id:repo::plan-001",
+    "--task-file", taskFile,
+    "--attempt", "plans-001-saver-1",
+    "--controller-terminal", "terminal:controller",
+    "--ready-timeout-ms", "1000",
+  ], {
+    encoding: "utf8",
+    env: { ...fakeRuntimeEnv, FAKE_ORCA_FAIL: "terminal wait" },
+  })
+  assert.notEqual(failedReadyDispatch.status, 0)
+  assert.match(failedReadyDispatch.stderr, /orca terminal wait failed with exit 7/)
+  assert.match(failedReadyDispatch.stderr, /terminalHandle=terminal:worker/)
+  assert.match(failedReadyDispatch.stderr, /taskId=none/)
+
+  const failedDispatch = spawnSync(process.execPath, [
+    orcaRuntime,
+    "dispatch",
+    "--profile", orcaProfile,
+    "--role", "plan-implementer",
+    "--worktree", "id:repo::plan-001",
+    "--task-file", taskFile,
+    "--attempt", "plans-001-implementer-failed",
+    "--controller-terminal", "terminal:controller",
+  ], {
+    encoding: "utf8",
+    env: { ...fakeRuntimeEnv, FAKE_ORCA_FAIL: "orchestration task-create" },
+  })
+  assert.notEqual(failedDispatch.status, 0)
+  assert.match(failedDispatch.stderr, /terminalHandle=terminal:worker/)
+  assert.match(failedDispatch.stderr, /taskId=none/)
+
   const protocol = await readFile(path.join(scriptDir, "..", "references", "orchestration-protocol.md"), "utf8")
   assert.match(protocol, /wait_agent.*timeout_ms: 1800000/)
   assert.match(protocol, /timeout caps idle wakeups, not result-delivery latency/)
@@ -249,14 +617,19 @@ try {
   assert.match(protocol, /git merge --ff-only herder\/<plan-name>\/integration/)
   assert.match(protocol, /compact failure envelope/)
   assert.match(protocol, /open blocker evidence, reproduction commands, compact gate evidence/)
-  assert.match(protocol, /P2 and P3 findings are advisory and never block integration/)
-  assert.match(protocol, /Allow at most two completed broad discovery passes per generation/)
+  assert.match(protocol, /P2\/P3, `FOLLOWUP`, and `INVALID` findings are advisory and never block integration/)
+  assert.match(protocol, /Allow at most three substantive implementation-review rounds per generation/)
+  assert.match(protocol, /This is the only broad review/)
   assert.match(protocol, /verify only open blocker IDs/)
   assert.match(protocol, /Assign each `NEW` finding the next stable ID/)
-  assert.match(protocol, /new blocker outside that delta after the cap becomes `NEEDS_ADJUDICATION`/)
-  assert.match(protocol, /Do not restart broad discovery/)
-  assert.match(protocol, /Resume or restack never resets broad-pass count or ledger/i)
-  assert.match(protocol, /A `REVISE` response containing only P2\/P3, dismissed, or non-qualifying findings is effective approval/)
+  assert.match(protocol, /claimed blocker outside the original task and repair delta triggers Judge immediately/)
+  assert.match(protocol, /Never reopen broad discovery/)
+  assert.match(protocol, /Resume or restack never resets implementation-review round count or ledger/i)
+  assert.match(protocol, /A `REVISE` containing only P2\/P3, `FOLLOWUP`, `INVALID`/)
+  assert.match(protocol, /DECISION: DONE \| SAVER \| NEEDS_INPUT \| BLOCKED/)
+  assert.match(protocol, /<plan_dir>\/proposed\/<source-plan-id>-<finding-id>-<slug>\.md/)
+  assert.match(protocol, /conservative legacy fallback/)
+  assert.match(protocol, /Never ask a reviewer to absorb an over-budget diff/)
   assert.match(protocol, /Give each generation two substantive autonomous Saver rounds/)
   assert.match(protocol, /Accept at most two `REPLAN` outcomes per plan per invocation/)
   assert.match(protocol, /same signature survives two consecutive completed generations/)
@@ -275,15 +648,39 @@ try {
   assert.match(protocol, /The runner recognizes only `herder\/<plan-name>\/<indexed-id>` plan branches plus exact integration/)
   assert.match(protocol, /clean non-`DONE` branches unless the user explicitly supplied `--include-failed`/)
   assert.match(protocol, /For `--finalize --handoff-target`, require integration HEAD to be an ancestor/)
+  assert.match(protocol, /execution_runtime.*explicit `native` or `orca`/)
+  assert.match(protocol, /For an Orca attempt, create a fresh configured role terminal/)
+  assert.match(protocol, /Matching `worker_done` task\/dispatch\/pane provenance/)
+  assert.match(protocol, /never fall back to a native child or another configured model/i)
+
+  const orcaProtocol = await readFile(path.join(scriptDir, "..", "references", "orca-runtime.md"), "utf8")
+  assert.match(orcaProtocol, /controller must itself be a Codex session in an Orca-managed terminal/)
+  assert.match(orcaProtocol, /Orca is the sole worktree creator and remover/)
+  assert.match(orcaProtocol, /normalize-worktree/)
+  assert.match(orcaProtocol, /slash-to-hyphen Orca alias/)
+  assert.match(orcaProtocol, /One Orca orchestration task represents exactly one Herder role attempt/)
+  assert.match(orcaProtocol, /worker_done.*active task ID and dispatch ID/)
+  assert.match(orcaProtocol, /normal focused plan through Codex controller, Grok implementer, and Pi\/Kimi reviewer/)
+  assert.match(orcaProtocol, /Pi\/GPT Judge and a Judge-authorized repair contract to Grok Saver/)
 
   const pluginRoot = path.resolve(scriptDir, "..", "..", "..")
   const codexReviewer = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_reviewer.toml"), "utf8")
   const claudeReviewer = await readFile(path.join(pluginRoot, "agents", "plan-reviewer.md"), "utf8")
   for (const profile of [codexReviewer, claudeReviewer]) {
-    assert.match(profile, /P2\/P3 findings are advisory and never block approval/)
-    assert.match(profile, /In .*VERIFICATION.* mode, verify the supplied open finding IDs and inspect only the repair delta/)
+    assert.match(profile, /P2\/P3, .*FOLLOWUP.* and .*INVALID.* findings are advisory and never block approval/)
+    assert.match(profile, /In every later .*VERIFICATION.* round, verify the supplied open finding IDs and inspect only the repair delta/)
     assert.match(profile, /Every blocking finding must identify an exact changed file and line/)
     assert.match(profile, /Return .*REVISE.* only when at least one evidence-complete blocking finding is open/)
+    assert.match(profile, /repair contract containing observed behavior, expected behavior, reproduction, constraints/)
+  }
+
+  const codexJudge = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_judge.toml"), "utf8")
+  const claudeJudge = await readFile(path.join(pluginRoot, "agents", "plan-judge.md"), "utf8")
+  for (const profile of [codexJudge, claudeJudge]) {
+    assert.match(profile, /Classify every finding as .*PLAN_REQUIREMENT.*PATCH_REGRESSION.*FOLLOWUP.*INVALID.*NEEDS_INPUT/)
+    assert.match(profile, /Never override a failed required gate/)
+    assert.match(profile, /DECISION: DONE \| SAVER \| NEEDS_INPUT \| BLOCKED/)
+    assert.match(profile, /herder-plans\/proposed\//)
   }
 
   const codexSaver = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_saver.toml"), "utf8")
@@ -299,13 +696,15 @@ try {
 
   const codexImplementer = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_implementer.toml"), "utf8")
   const claudeImplementer = await readFile(path.join(pluginRoot, "agents", "plan-implementer.md"), "utf8")
-  for (const profile of [codexImplementer, claudeImplementer, codexReviewer, claudeReviewer, codexSaver, claudeSaver]) {
+  for (const profile of [codexImplementer, claudeImplementer, codexReviewer, claudeReviewer, codexJudge, claudeJudge, codexSaver, claudeSaver]) {
     assert.match(profile, /longest event-driven or blocking process wait the host supports/)
     assert.match(profile, /A quiet process is not a failure/)
   }
   for (const profile of [codexImplementer, claudeImplementer]) {
     assert.match(profile, /Write every commit subject and body solely in repository and domain terms/)
     assert.match(profile, /Never mention Herder, plan IDs, worker roles/)
+    assert.match(profile, /GUIDED_REPAIR/)
+    assert.match(profile, /suggested directions as non-binding/)
   }
   for (const profile of [codexImplementer, claudeImplementer, codexSaver, claudeSaver]) {
     assert.match(profile, /absolute apply-patch targets inside that worktree/)

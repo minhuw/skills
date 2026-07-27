@@ -1,4 +1,4 @@
 interface:
   display_name: "Herder Grill"
-  short_description: "Clarify intent and create one Herder plan"
-  default_prompt: "Use $herder:grill to question me one decision at a time, clarify this change, and create one validated Herder plan."
+  short_description: "Clarify intent and shape focused Herder plans"
+  default_prompt: "Use $herder:grill to question me one decision at a time, clarify this objective, and create a focused validated Herder plan graph."

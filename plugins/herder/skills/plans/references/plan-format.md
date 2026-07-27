@@ -7,14 +7,20 @@ Store plan truth at the repository root:
 ```text
 herder-plans/
   README.md
+  CONTEXT.md              # optional shared verified context
   001-short-imperative-slug.md
   002-another-plan.md
+  proposed/               # optional judge-drafted follow-ups awaiting user choice
   .herder/                 # optional runtime artifacts; never plan truth
 ```
 
 Do not require YAML execution configuration, a database, or `.herder/state.json`. Plans owns format, parsing, validation, and transitions; Grill and Improve produce the same format; Fire owns execution, branches, and worktrees. Plans must use the canonical Fire-assigned branch instruction and never name a concrete execution branch. Provenance must not alter what Fire receives or require hidden session context.
 
-Before manager validation, reread every draft and complete [plan-template.md](plan-template.md)'s semantic Producer self-review. Validation checks structure and graph integrity, not intent or evidence quality.
+The zero-context invariant applies to the immutable snapshot Fire dispatches. A plan may remain file-self-contained, or a producer may put facts reused by multiple plans in `CONTEXT.md`. `snapshot` deterministically composes the exact shared context followed by the local plan and returns hashes for both inputs and the compiled text. A plan must never rely on a sibling plan file or conversation history. Dependency guarantees belong in its local `## Dependency contract`.
+
+`proposed/` contains non-executable draft follow-ups emitted after judge classification. They are never indexed, scheduled, or treated as accepted intent. Grill or Improve must confirm, promote, number, and validate them before Fire can execute them.
+
+Before manager validation, reread every draft and complete [plan-template.md](plan-template.md)'s semantic Producer self-review. Validation checks structure, graph integrity, machine-readable review budgets, and write-scope overlap. It reports legacy shape omissions as warnings rather than making an older backlog unreadable; producers and Validate still own semantic evidence quality.
 
 ## 2. Index
 
@@ -48,13 +54,30 @@ Every plan follows the shared template and begins with:
 - **Depends on**: herder-plans/NNN-*.md (or "none")
 - **Category**: feature | bug | security | perf | tests | tech-debt | migration | dx | docs | direction
 - **Planned at**: commit `<short SHA>`, <YYYY-MM-DD>
+- **Kind**: behavioral | mechanical | migration | spike
+- **Parent objective**: <one durable outcome shared by this plan set>
+- **Review budget**: files<=8, changed_lines<=500
 ```
 
-Use [plan-template.md](plan-template.md) for all required evidence, decisions, scope, ordered work, tests, done criteria, STOP conditions, and maintenance guidance. When terminology or architecture decisions change, schedule the relevant `CONTEXT.md`, `CONTEXT-MAP.md`, or ADR update in scope, steps, and done criteria; keep implementation details out of glossaries.
+Use [plan-template.md](plan-template.md) for all required evidence, decisions, dependency guarantees, scope, ordered work, tests, review map, done criteria, STOP conditions, and maintenance guidance. New producers always write the three shape fields above plus `## Dependency contract` and `## Review map`. The numeric budget is a review-surface ceiling, not an estimate to ignore. Fire compares the actual diff with it before review.
 
-The executor receives the repository and this plan, not the Grill interview, Improve audit, or necessarily sibling plan files. Inline every required fact and durable decision.
+When terminology or architecture decisions change, schedule the relevant repository `CONTEXT.md`, `CONTEXT-MAP.md`, or ADR update in scope, steps, and done criteria; keep implementation details out of glossaries. Do not confuse a repository domain `CONTEXT.md` with `herder-plans/CONTEXT.md`, which is only shared snapshot input.
 
-## 4. Status
+The executor receives the repository and the compiled snapshot, not the Grill interview, Improve audit, or sibling plan files. Inline every plan-local fact and durable decision; place only genuinely reused, verified facts in shared context.
+
+## 4. Plan Shaping
+
+Partition an objective into a dependency DAG before drafting prose. A normal subplan targets one independently verifiable invariant, one package or bounded subsystem, no more than 5–8 edited files, no more than roughly 300–500 changed lines, one focused verification command, and at most one public-contract or migration transition.
+
+Target 500–900 words and require at most 1,200 words in each local plan. Shared `CONTEXT.md` is capped at 1,600 words. The manager includes local line/word counts in `shape`, marks larger content shape-incomplete, and leaves legacy content readable with warnings. Compact plans state each fact once and include only evidence needed to locate, implement, and verify their bounded outcome.
+
+Split when work contains multiple observable outcomes, independently releasable caller cohorts, ownership/package boundaries, more than one public transition, or no focused verification command. Every cut must leave integration valid. Prefer additive seams: characterize current behavior, add an adapter or expansion, migrate bounded caller groups, then remove compatibility code. Do not split by architectural layer when an intermediate layer cannot pass required gates.
+
+`mechanical` plans may declare a larger numeric budget only when the transformation is deterministic, the review map names the invariant and generated churn, and a repository command proves completeness. `migration` plans must be phased through backward-compatible states. `spike` plans produce evidence or a confirmed design and do not silently become implementation plans.
+
+Two ready plans with the same machine-readable in-scope path must be ordered by dependency or reshaped. The manager reports unordered overlap. Exceeding the budget or crossing an undeclared subsystem is a STOP condition and requires split/replan before broad review.
+
+## 5. Status
 
 ```text
 TODO
@@ -76,14 +99,14 @@ REJECTED → TODO
 
 Only the root coordinator writes status during Fire. Dependencies require both `DONE` and a plan-set-scoped private completion ref naming a reachable commit. `ready` returns dependency-satisfied `TODO` plans; `IN PROGRESS` needs resume reconstruction and `BLOCKED` needs Saver recovery.
 
-## 5. Tracking and Worktrees
+## 6. Tracking and Worktrees
 
 Default initialization adds `/herder-plans/` to `.git/info/exclude` without changing project `.gitignore`; tracking is opt-in. When tracked, ignore `.herder/` because runtime artifacts change frequently.
 
-An ignored backlog is absent from new worktrees. Fire uses manager `snapshot` and inlines `planText` in implementer, reviewer, and saver prompts; never copy the whole backlog into execution branches.
+An ignored backlog is absent from new worktrees. Fire uses manager `snapshot` and inlines compiled `planText` in implementer, reviewer, judge, and saver prompts; never copy the whole backlog into execution branches.
 
-## 6. Execution Usage
+## 7. Execution Usage
 
 The manager may generate `README.md`'s `## Execution usage` section with summaries and one row per attempt. Only the root Fire coordinator writes it through `record-usage`; workers return usage envelopes.
 
-Record model, effort, outcome, and an idempotent attempt ID for every implementer, reviewer, saver, and run-wide attempt. Copy only host telemetry; keep unavailable fields `unknown` and never estimate. Input-plus-output subtotals do not add cached-input or reasoning details again, and incomplete coverage must remain visible.
+Record model, effort, outcome, and an idempotent attempt ID for every implementer, reviewer, judge, saver, and run-wide attempt. Copy only host telemetry; keep unavailable fields `unknown` and never estimate. Input-plus-output subtotals do not add cached-input or reasoning details again, and incomplete coverage must remain visible.

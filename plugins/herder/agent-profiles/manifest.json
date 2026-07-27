@@ -8,17 +8,22 @@
         {
           "source": "agent-profiles/codex/plan_implementer.toml",
           "target": "plan_implementer.toml",
-          "sha256": "14a471f3f1b17d6e915e8cd413ddf287adb4c877bd222549e559199613bbe60c"
+          "sha256": "2dd5b3af254598b8c20d28d6c0e336341df79752d8434884c7b0e40906311dd7"
         },
         {
           "source": "agent-profiles/codex/plan_reviewer.toml",
           "target": "plan_reviewer.toml",
-          "sha256": "a6574ec34326b46dc0afaabde04f0ae75bc75ebd00823940eb57a3d931733f12"
+          "sha256": "98657f480e84a1fed61c5c4fd57f090105039ff796feda21da421aae0cf2c160"
+        },
+        {
+          "source": "agent-profiles/codex/plan_judge.toml",
+          "target": "plan_judge.toml",
+          "sha256": "cb8b4d27ac56e12361c96a26286b5aa24e2bfd80e6d6b4a08edd5c0717950584"
         },
         {
           "source": "agent-profiles/codex/plan_saver.toml",
           "target": "plan_saver.toml",
-          "sha256": "e01798d3b162c93430a083e5c27f5391f90882f8dbccaf1cc738eb4795e58ad2"
+          "sha256": "201b3fc22c2c3272d2e61271e1f5285ffe02046c0b8608b897e989d379547d17"
         }
       ]
     },
@@ -28,17 +33,22 @@
         {
           "source": "agents/plan-implementer.md",
           "identifier": "herder:plan-implementer",
-          "sha256": "32cf77acce0cade36f70b76ad4718524859f7b3d5e53e78dc2e867560d02fc68"
+          "sha256": "f05f675b710cb81d8f71455778de9e99a0df129dfdbfc1ac791e5ee4a69667be"
         },
         {
           "source": "agents/plan-reviewer.md",
           "identifier": "herder:plan-reviewer",
-          "sha256": "2cc5c8c433b6a2af0b116c5a6b3bd389f561cda3b9b259b85a919d9bf2a48173"
+          "sha256": "779956fd19b7d75509baa9bd9aad21c4bc560c51ebab48bb83de3f3a72fcaed4"
+        },
+        {
+          "source": "agents/plan-judge.md",
+          "identifier": "herder:plan-judge",
+          "sha256": "aa17da1055bb29d4eb5eb14476b464a145a9c1e97b8d193d0a0dc55fa390851e"
         },
         {
           "source": "agents/plan-saver.md",
           "identifier": "herder:plan-saver",
-          "sha256": "f73c38f14e549bab02b0b8932045a3f1870a87b637fed8eb1bb4ce23b8287420"
+          "sha256": "e8dcbae567ee47ae401c0bde8b6a0eaa41d6ea6c76d6b212ebbde24ae6b66c3f"
         }
       ]
     }

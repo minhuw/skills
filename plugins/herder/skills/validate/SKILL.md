@@ -42,22 +42,27 @@ Record the source checkout's initial Git status and the plan files present. Do n
 
 ### 1. Mechanical contract
 
-Run:
+Run both:
 
 ```bash
 node <manager> validate <plan-dir> --pretty
+node <manager> shape <plan-dir> --pretty
 ```
 
-Capture nonzero output as validation evidence rather than aborting the audit. Check index/file agreement, required headings and metadata, filenames and IDs, allowed values, dependencies, statuses, missing plans, unknown dependencies, and cycles through the manager.
+Capture nonzero output as validation evidence rather than aborting the audit. Check index/file agreement, required headings and metadata, filenames and IDs, allowed values, dependencies, statuses, missing plans, unknown dependencies, cycles, review-budget syntax, machine-readable in-scope paths, and unordered write-scope overlap through the manager. Legacy shape warnings do not make an old backlog unreadable, but a newly produced plan is not semantically Fire-ready until its shape report is clean.
 
 ### 2. Per-plan semantics
 
-Read every indexed plan from disk as though no sibling plan or prior conversation were available. Verify:
+Read every indexed compiled snapshot as though no sibling plan or prior conversation were available. When plan-set `CONTEXT.md` exists, verify that the manager composes it and that it contains only genuinely shared, verified facts. Verify:
 
 - intent, accepted decisions, non-goals, and terminology are explicit and consistent;
 - current-state paths, line references, excerpts, commands, conventions, and planned commit are supported by the live repository;
 - drift is distinguished from a bad plan, with the affected scope identified;
 - in-scope and out-of-scope boundaries are exact and do not conflict with steps or done criteria;
+- `Kind`, `Parent objective`, and numeric review budget fit the work; large mechanical budgets have deterministic transformations and completeness proofs;
+- the local plan is concise and non-repetitive, targets 500–900 words, never exceeds 1,200 words, and any shared context stays within 1,600 words;
+- the dependency contract names consumed and provided guarantees and leaves a gate-passing intermediate state;
+- the review map names exact modified symbols, direct contracts, preserved behavior, focused proof, and a credible expected diff;
 - steps are ordered, actionable, and carry relevant verification with expected results;
 - tests cover the behavior and failure modes, following real repository patterns;
 - done criteria are machine-checkable and jointly sufficient;
@@ -70,7 +75,7 @@ Do not run plan implementation commands. Use read-only repository evidence; a pl
 
 ### 3. Backlog semantics
 
-Check that plans are coherent, independently testable units; duplicates and overlaps are reconciled; dependencies reflect real implementation order; prerequisite tests or migrations precede risky work; and Fire can execute each ready plan from canonical integration HEAD using only its snapshot.
+Check that plans are coherent, independently testable invariants; multiple outcomes, packages, caller cohorts, and public transitions are split at safe integration points; duplicates and overlaps are reconciled; overlapping write paths are ordered; dependencies reflect real implementation order; prerequisite tests or migrations precede risky work; and Fire can execute each ready plan from canonical integration HEAD using only its compiled snapshot.
 
 ## Classify and Report
 
@@ -89,10 +94,10 @@ In read-only mode, finish after the report and prove the plan directory and sour
 Take a before snapshot of plan contents and source Git status, then repair `AUTO` issues in this order:
 
 1. Restore mechanically unambiguous index, filename, heading, metadata, and dependency agreement while preserving IDs and lifecycle status.
-2. For `TODO` and `BLOCKED` plans, refresh stale evidence and planned commit, tighten scope, and complete steps, tests, done criteria, STOP conditions, or maintenance notes using only existing intent and verified repository facts.
+2. For `TODO` and `BLOCKED` plans, refresh stale evidence and planned commit, tighten scope, and complete shape metadata, dependency contracts, review maps, steps, tests, done criteria, STOP conditions, or maintenance notes using only existing intent and verified repository facts.
 3. Remove placeholders only when their answer is already established by the plan or repository.
 4. Reread every changed plan from disk and perform the shared template's Producer self-review.
-5. Rerun manager validation, repair remaining mechanical errors, and repeat semantic review whenever a repair changes meaning.
+5. Rerun manager shape and validation, repair remaining mechanical errors, and repeat semantic review whenever a repair changes meaning.
 
 Hard repair boundaries:
 

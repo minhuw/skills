@@ -170,6 +170,7 @@ try {
     "--repo", repo,
     "--plan-dir", planDir,
     "--plan", "001",
+    "--runtime", "native",
     "--pretty",
   ], { cwd: repo })
   const cleaned = JSON.parse(cleanupResult.stdout)

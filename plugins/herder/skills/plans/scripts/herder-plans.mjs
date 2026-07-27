@@ -3,6 +3,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import process from "node:process"
+import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
@@ -24,6 +25,12 @@ const REQUIRED_PLAN_HEADINGS = [
   "Maintenance notes",
 ]
 const REQUIRED_PLAN_METADATA = ["Priority", "Effort", "Risk", "Depends on", "Category", "Planned at"]
+const SHAPE_PLAN_HEADINGS = ["Dependency contract", "Review map"]
+const SHAPE_PLAN_METADATA = ["Kind", "Parent objective", "Review budget"]
+const PLAN_KINDS = new Set(["behavioral", "mechanical", "migration", "spike"])
+const SHARED_CONTEXT_FILE = "CONTEXT.md"
+const MAX_PLAN_WORDS = 1200
+const MAX_SHARED_CONTEXT_WORDS = 1600
 const FIRE_BRANCH_INSTRUCTION = "use the exact branch/worktree assigned by Herder Fire; never create or switch branches."
 const REQUIRED_INDEX_HEADERS = ["plan", "title", "priority", "effort", "depends on", "status"]
 const USAGE_SECTION_START = "<!-- herder-usage:start -->"
@@ -111,6 +118,15 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex")
+}
+
+function wordCount(value) {
+  const trimmed = String(value).trim()
+  return trimmed ? trimmed.split(/\s+/).length : 0
+}
+
 function isInside(parent, child) {
   const relative = path.relative(parent, child)
   return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)
@@ -154,6 +170,41 @@ function resolvePlanFile(planDir, planCell, id) {
   return resolved
 }
 
+function sectionText(text, heading) {
+  const match = new RegExp(`^##\\s+${escapeRegex(heading)}\\s*$`, "im").exec(text)
+  if (!match) return ""
+  const tail = text.slice(match.index + match[0].length)
+  const next = tail.search(/^##\s+/m)
+  return next === -1 ? tail : tail.slice(0, next)
+}
+
+function parseReviewBudget(value, id, file) {
+  const normalized = String(value).trim()
+  const match = normalized.match(/^files\s*<=\s*(\d+)\s*,\s*(?:changed[_\s-]*lines|lines)\s*<=\s*(\d+)$/i)
+  if (!match) {
+    fail(`Plan ${id} has invalid Review budget; use "files<=N, changed_lines<=N": ${file}`)
+  }
+  const files = Number.parseInt(match[1], 10)
+  const changedLines = Number.parseInt(match[2], 10)
+  if (!Number.isSafeInteger(files) || files < 1 || !Number.isSafeInteger(changedLines) || changedLines < 1) {
+    fail(`Plan ${id} Review budget limits must be positive safe integers: ${file}`)
+  }
+  return { files, changedLines, source: normalized }
+}
+
+function extractInScopePaths(text) {
+  const scope = sectionText(text, "Scope")
+  const inScope = scope.match(/\*\*In scope\*\*[^\n]*([\s\S]*?)(?=\*\*Out of scope\*\*|$)/i)?.[1] ?? ""
+  const paths = []
+  for (const match of inScope.matchAll(/`([^`\r\n]+)`/g)) {
+    const candidate = match[1].trim()
+    if (!candidate || /\s(?:--?|&&|\|)\s/.test(candidate) || /[()]$/.test(candidate)) continue
+    if (!candidate.includes("/") && !/^[\w@.-]+\.[A-Za-z0-9*{}_-]+$/.test(candidate)) continue
+    paths.push(candidate)
+  }
+  return [...new Set(paths)]
+}
+
 function parsePlanFile(file, id) {
   const text = fs.readFileSync(file, "utf8")
   const title = text.match(/^#\s+Plan\s+(\d+)\b/i)
@@ -171,6 +222,10 @@ function parsePlanFile(file, id) {
     if (!match) fail(`Plan ${id} is missing required metadata "- **${field}**:": ${file}`)
     metadata.set(field, match[1])
   }
+  for (const field of SHAPE_PLAN_METADATA) {
+    const match = text.match(new RegExp(`^\\s*[-*]\\s+\\*\\*${escapeRegex(field)}\\*\\*:\\s*(.+?)\\s*$`, "im"))
+    if (match) metadata.set(field, match[1])
+  }
   const workflowHeading = /^##\s+Git workflow\s*$/im.exec(text)
   const workflowTail = text.slice(workflowHeading.index + workflowHeading[0].length)
   const nextHeadingOffset = workflowTail.search(/^##\s+/m)
@@ -183,7 +238,40 @@ function parsePlanFile(file, id) {
   if (workflowBranchInstructions[0][1].trim() !== FIRE_BRANCH_INSTRUCTION) {
     fail(`Plan ${id} must delegate branch ownership to Herder Fire with "- Branch: ${FIRE_BRANCH_INSTRUCTION}": ${file}`)
   }
-  return { dependencies: parseDependencies(metadata.get("Depends on")), text }
+  const shapeIssues = []
+  for (const field of SHAPE_PLAN_METADATA) {
+    if (!metadata.has(field)) shapeIssues.push(`missing metadata "${field}"`)
+  }
+  for (const heading of SHAPE_PLAN_HEADINGS) {
+    if (!new RegExp(`^##\\s+${escapeRegex(heading)}\\s*$`, "im").test(text)) {
+      shapeIssues.push(`missing heading "## ${heading}"`)
+    }
+  }
+  const kind = metadata.has("Kind") ? metadata.get("Kind").trim().toLowerCase() : null
+  if (kind && !PLAN_KINDS.has(kind)) {
+    fail(`Plan ${id} has unsupported Kind ${JSON.stringify(metadata.get("Kind"))}: ${file}`)
+  }
+  const reviewBudget = metadata.has("Review budget")
+    ? parseReviewBudget(metadata.get("Review budget"), id, file)
+    : null
+  const inScopePaths = extractInScopePaths(text)
+  if (inScopePaths.length === 0) shapeIssues.push("has no machine-readable backticked in-scope paths")
+  const planWords = wordCount(text)
+  const planLines = text.split(/\r?\n/).length
+  if (planWords > MAX_PLAN_WORDS) {
+    shapeIssues.push(`has ${planWords} words; compact subplans must stay at or below ${MAX_PLAN_WORDS}`)
+  }
+  return {
+    dependencies: parseDependencies(metadata.get("Depends on")),
+    text,
+    kind,
+    parentObjective: metadata.get("Parent objective")?.trim() || null,
+    reviewBudget,
+    inScopePaths,
+    planWords,
+    planLines,
+    shapeIssues,
+  }
 }
 
 function findIndexTable(markdown, readme) {
@@ -400,6 +488,25 @@ function buildWaves(plans) {
   return waves
 }
 
+function transitivelyDependsOn(plansById, from, target, seen = new Set()) {
+  if (seen.has(from)) return false
+  seen.add(from)
+  for (const dependency of plansById.get(from)?.dependencies ?? []) {
+    if (dependency === target || transitivelyDependsOn(plansById, dependency, target, seen)) return true
+  }
+  return false
+}
+
+function sharedContextPath(planDir) {
+  const file = path.join(planDir, SHARED_CONTEXT_FILE)
+  if (!fs.existsSync(file)) return null
+  if (!fs.statSync(file).isFile()) fail(`${file} must be a regular Markdown file`)
+  const realPlanDir = fs.realpathSync(planDir)
+  const realFile = fs.realpathSync(file)
+  if (!isInside(realPlanDir, realFile)) fail(`${file} resolves outside the plan directory`)
+  return file
+}
+
 export function buildGraph(inputDir = DEFAULT_PLAN_DIR) {
   const planDir = path.resolve(inputDir)
   if (!fs.existsSync(planDir) || !fs.statSync(planDir).isDirectory()) {
@@ -410,6 +517,12 @@ export function buildGraph(inputDir = DEFAULT_PLAN_DIR) {
     fail(`Plan directory has no README.md: ${planDir}`)
   }
 
+  const contextFile = sharedContextPath(planDir)
+  const contextText = contextFile ? fs.readFileSync(contextFile, "utf8") : ""
+  const contextWords = wordCount(contextText)
+  const contextIssues = contextWords > MAX_SHARED_CONTEXT_WORDS
+    ? [`Shared context has ${contextWords} words; keep it at or below ${MAX_SHARED_CONTEXT_WORDS}`]
+    : []
   const table = findIndexTable(fs.readFileSync(readme, "utf8"), readme)
   const column = Object.fromEntries(table.normalized.map((name, index) => [name, index]))
   const plans = []
@@ -421,7 +534,8 @@ export function buildGraph(inputDir = DEFAULT_PLAN_DIR) {
     seen.add(id)
     const file = resolvePlanFile(planDir, row.cells[column.plan], id)
     const indexDependencies = parseDependencies(row.cells[column["depends on"]])
-    const fileDependencies = parsePlanFile(file, id).dependencies
+    const parsedPlan = parsePlanFile(file, id)
+    const fileDependencies = parsedPlan.dependencies
     if (JSON.stringify([...indexDependencies].sort()) !== JSON.stringify([...fileDependencies].sort())) {
       fail(`Plan ${id} dependency mismatch: README has [${indexDependencies.join(", ")}], file has [${fileDependencies.join(", ")}]`)
     }
@@ -435,6 +549,14 @@ export function buildGraph(inputDir = DEFAULT_PLAN_DIR) {
       status: parsedStatus.status,
       statusDetail: parsedStatus.statusDetail,
       file,
+      kind: parsedPlan.kind,
+      parentObjective: parsedPlan.parentObjective,
+      reviewBudget: parsedPlan.reviewBudget,
+      inScopePaths: parsedPlan.inScopePaths,
+      planWords: parsedPlan.planWords,
+      planLines: parsedPlan.planLines,
+      shapeIssues: parsedPlan.shapeIssues,
+      shapeReady: parsedPlan.shapeIssues.length === 0,
     })
   }
 
@@ -463,10 +585,29 @@ export function buildGraph(inputDir = DEFAULT_PLAN_DIR) {
   if (cycle) fail(`Dependency cycle: ${cycle.join(" -> ")}`)
 
   const warnings = []
+  warnings.push(...contextIssues)
   for (const plan of plans) {
     if (plan.status === "DONE") {
       const unfinished = plan.dependencies.filter((id) => plansById.get(id).status !== "DONE")
       if (unfinished.length > 0) warnings.push(`Plan ${plan.id} is DONE but dependencies are not DONE: ${unfinished.join(", ")}`)
+    }
+    for (const issue of plan.shapeIssues) warnings.push(`Plan ${plan.id} shape: ${issue}`)
+  }
+
+  const overlaps = []
+  for (let leftIndex = 0; leftIndex < plans.length; leftIndex += 1) {
+    const left = plans[leftIndex]
+    const leftPaths = new Set(left.inScopePaths)
+    for (let rightIndex = leftIndex + 1; rightIndex < plans.length; rightIndex += 1) {
+      const right = plans[rightIndex]
+      const paths = right.inScopePaths.filter((candidate) => leftPaths.has(candidate))
+      if (paths.length === 0) continue
+      const ordered = transitivelyDependsOn(plansById, left.id, right.id)
+        || transitivelyDependsOn(plansById, right.id, left.id)
+      overlaps.push({ plans: [left.id, right.id], paths, ordered })
+      if (!ordered) {
+        warnings.push(`Plans ${left.id} and ${right.id} have unordered overlapping in-scope paths: ${paths.join(", ")}`)
+      }
     }
   }
 
@@ -496,6 +637,11 @@ export function buildGraph(inputDir = DEFAULT_PLAN_DIR) {
     waiting,
     waves: buildWaves(plans),
     complete: plans.every((plan) => TERMINAL.has(plan.status)),
+    contextFile,
+    contextWords,
+    contextIssues,
+    shapeReady: contextIssues.length === 0 && plans.every((plan) => plan.shapeReady),
+    overlaps,
     warnings,
   }
 }
@@ -567,7 +713,7 @@ function ensureRuntimeIgnore(planDir) {
 function initialReadme() {
   return `# Herder Plans
 
-Implementation plans managed by Herder. Each plan must be self-contained and safe to execute from a fresh integration commit.
+Implementation plans managed by Herder. Each plan snapshot must be self-contained, review-budgeted, and safe to execute from a fresh integration commit. Producers may place verified facts shared by multiple plans in \`CONTEXT.md\`; the Plans manager composes that file into every immutable snapshot.
 
 ## Execution order & status
 
@@ -626,12 +772,59 @@ export function snapshotPlan(inputDir = DEFAULT_PLAN_DIR, inputId) {
   const id = canonicalId(inputId)
   const plan = graph.plans.find((candidate) => candidate.id === id)
   if (!plan) fail(`Plan ${id} is not indexed in ${graph.readme}`)
+  const sourcePlanText = fs.readFileSync(plan.file, "utf8")
+  const contextText = graph.contextFile ? fs.readFileSync(graph.contextFile, "utf8") : ""
+  const planText = contextText
+    ? `<!-- herder-snapshot:shared-context -->\n${contextText.trim()}\n\n<!-- herder-snapshot:local-plan -->\n${sourcePlanText.trim()}\n`
+    : sourcePlanText
+  const snapshotInputs = [
+    ...(graph.contextFile ? [{
+      kind: "shared-context",
+      file: graph.contextFile,
+      sha256: sha256(contextText),
+    }] : []),
+    {
+      kind: "plan",
+      file: plan.file,
+      sha256: sha256(sourcePlanText),
+    },
+  ]
   return {
     planDir: graph.planDir,
     readme: graph.readme,
     plan,
-    planText: fs.readFileSync(plan.file, "utf8"),
+    planText,
+    sourcePlanText,
+    contextText,
+    snapshotSha256: sha256(planText),
+    snapshotInputs,
     indexText: fs.readFileSync(graph.readme, "utf8"),
+  }
+}
+
+export function getShapeReport(inputDir = DEFAULT_PLAN_DIR) {
+  const graph = buildGraph(inputDir)
+  return {
+    planDir: graph.planDir,
+    contextFile: graph.contextFile,
+    contextWords: graph.contextWords,
+    contextIssues: graph.contextIssues,
+    shapeReady: graph.shapeReady,
+    plans: graph.plans.map((plan) => ({
+      id: plan.id,
+      kind: plan.kind,
+      parentObjective: plan.parentObjective,
+      reviewBudget: plan.reviewBudget,
+      inScopePaths: plan.inScopePaths,
+      planWords: plan.planWords,
+      planLines: plan.planLines,
+      shapeReady: plan.shapeReady,
+      issues: plan.shapeIssues,
+    })),
+    overlaps: graph.overlaps,
+    warnings: graph.warnings.filter((warning) => warning.includes(" shape:")
+      || warning.includes("overlapping in-scope paths")
+      || warning.startsWith("Shared context has ")),
   }
 }
 
@@ -727,6 +920,7 @@ function usage() {
     "Usage:",
     "  herder-plans init [plan-dir] [--track] [--pretty]",
     "  herder-plans validate [plan-dir] [--pretty]",
+    "  herder-plans shape [plan-dir] [--pretty]",
     "  herder-plans status [plan-dir] [--pretty]",
     "  herder-plans ready [plan-dir] [--pretty]",
     "  herder-plans snapshot <plan-id> [plan-dir] [--pretty]",
@@ -779,6 +973,9 @@ function main(argv) {
   } else if (["validate", "status"].includes(command)) {
     if (args.length > 1 || detail || track || hasUsageOptions) fail(usage())
     result = buildGraph(args[0] ?? DEFAULT_PLAN_DIR)
+  } else if (command === "shape") {
+    if (args.length > 1 || detail || track || hasUsageOptions) fail(usage())
+    result = getShapeReport(args[0] ?? DEFAULT_PLAN_DIR)
   } else if (command === "ready") {
     if (args.length > 1 || detail || track || hasUsageOptions) fail(usage())
     const graph = buildGraph(args[0] ?? DEFAULT_PLAN_DIR)

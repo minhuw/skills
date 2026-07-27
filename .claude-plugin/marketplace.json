@@ -8,7 +8,7 @@
     {
       "name": "herder",
       "source": "./plugins/herder",
-      "description": "Create plans from user intent or repository evidence, validate and safely repair them, manage dependencies, and execute with reviewed integration and token accounting."
+      "description": "Shape focused plans and execute them with bounded review, independent judging, recovery, usage accounting, and optional Orca cross-harness routing."
     }
   ]
 }
