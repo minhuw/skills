@@ -196,7 +196,7 @@ Repository failures and evidence-complete review revisions keep their normal Her
 
 The rich live test has two layers:
 
-1. Execute a normal focused plan through Codex controller, Grok implementer, and Pi/Kimi reviewer, including gates and linear integration.
-2. On a separate disposable probe plan branch that can never advance integration, dispatch a synthetic, evidence-complete three-round ledger to Pi/GPT Judge and a Judge-authorized repair contract to Grok Saver. Verify Saver changes only the probe worktree, commits the repair, passes the supplied check, and receives a targeted read-only re-review. Delete the probe only through Orca after all evidence is retained.
+1. Execute a normal focused plan through Codex controller, Grok implementer, Pi/Kimi reviewer, and Pi/GPT Judge, including gates, per-review adjudication, and linear integration.
+2. On a separate disposable probe plan branch that can never advance integration, dispatch a synthetic, evidence-complete five-attempt ledger with separate review-pass accounting to Pi/GPT Judge and a Judge-authorized one-shot recovery contract to Grok Saver. Verify Saver changes only the probe worktree, commits the repair, passes the supplied check, and receives one targeted read-only Reviewer/Judge pass with no second substantive Saver dispatch. Delete the probe only through Orca after all evidence is retained.
 
 The drill must be labeled test-only and must not manufacture a failure in an otherwise approving production plan. Success requires all five configured roles across the three supported harnesses, exact task/dispatch provenance, correct worktree isolation, zero Reviewer/Judge mutation, expected Implementer/Saver mutation, preserved source checkout, and no model or harness substitution.

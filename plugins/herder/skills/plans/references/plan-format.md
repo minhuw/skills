@@ -10,7 +10,7 @@ herder-plans/
   CONTEXT.md              # optional shared verified context
   001-short-imperative-slug.md
   002-another-plan.md
-  proposed/               # optional judge-drafted follow-ups awaiting user choice
+  leak/                   # optional judge-deferred findings awaiting user choice
   .herder/                 # optional runtime artifacts; never plan truth
 ```
 
@@ -18,7 +18,7 @@ Do not require YAML execution configuration, a database, or `.herder/state.json`
 
 The zero-context invariant applies to the immutable snapshot Fire dispatches. A plan may remain file-self-contained, or a producer may put facts reused by multiple plans in `CONTEXT.md`. `snapshot` deterministically composes the exact shared context followed by the local plan and returns hashes for both inputs and the compiled text. A plan must never rely on a sibling plan file or conversation history. Dependency guarantees belong in its local `## Dependency contract`.
 
-`proposed/` contains non-executable draft follow-ups emitted after judge classification. They are never indexed, scheduled, or treated as accepted intent. Grill or Improve must confirm, promote, number, and validate them before Fire can execute them.
+`leak/` contains non-executable findings that Judge found valid but outside the original task. They are never indexed, scheduled, or treated as accepted intent. Fire deduplicates them by recorded key; Grill or Improve must confirm, promote, number, and validate them before Fire can execute them.
 
 Before manager validation, reread every draft and complete [plan-template.md](plan-template.md)'s semantic Producer self-review. Validation checks structure, graph integrity, machine-readable review budgets, and write-scope overlap. It reports legacy shape omissions as warnings rather than making an older backlog unreadable; producers and Validate still own semantic evidence quality.
 

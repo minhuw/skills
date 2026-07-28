@@ -63,6 +63,6 @@ Only the root Fire coordinator changes status or records usage. Workers report o
 
 ## Usage
 
-The manager owns the generated `## Execution usage` section and appends idempotent attempts. Fire records every implementer, reviewer, Judge, Saver, and plan-set-wide attempt—including failures and missing responses—using a stable ID such as `<plan-name>-<plan-id>-<role>-<ordinal>`; use `RUN` when no plan owns the work and continue ordinals across resume. Use outcome `INTERRUPTED` for a host-level attempt that Fire proves produced neither a response envelope nor worktree mutation; it remains a usage attempt but does not consume a substantive Saver repair round.
+The manager owns the generated `## Execution usage` section and appends idempotent attempts. Fire records every Implementer, Reviewer, Judge, Saver, and plan-set-wide attempt—including failures and missing responses—using a stable ID such as `<plan-name>-<plan-id>-<role>-<ordinal>`; use `RUN` when no plan owns the work and continue ordinals across resume. Use outcome `INTERRUPTED` for a host-level attempt that Fire proves produced neither a response envelope nor worktree mutation; it remains a usage attempt but does not consume a substantive implementation or Saver attempt.
 
 Pass host-reported `--input-tokens`, `--cached-input-tokens`, `--output-tokens`, and `--reasoning-tokens`. Use `unknown` for unavailable fields and `--source unknown` when all token fields are missing. Never estimate from transcript length.

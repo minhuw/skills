@@ -9,7 +9,7 @@ Use this protocol for every `fire` and `resume` run. The coordinator owns schedu
 3. Branch, worktree, and lease layout
 4. Dispatch ready plans
 5. Restack, verify, review, and integrate
-6. Recover before escalation
+6. One-shot recovery implementation
 7. Usage accounting
 8. Resume semantics
 9. Completion
@@ -33,8 +33,8 @@ Resolve:
 - `worktree_root`: a directory outside the user's checkout, with integration at `<worktree_root>/<plan_name>/integration` and plans at `<worktree_root>/<plan_name>/<id>`.
 - `gate_log_root`: `<worktree_root>/<plan_name>/logs`, outside every Git worktree.
 - `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume. Use attempt IDs `<plan-name>-<plan-id|RUN>-<role>-<ordinal>`; never reuse an ID.
-- `recovery_state`: per-plan generation IDs, substantive Saver rounds, clarification cycles, bounded non-capacity interruption restarts, transient-capacity backoff state, accepted replans, and compact failure signatures.
-- `review_state`: per-plan-generation implementation-review round count, exact reviewed base/HEAD/tree/status, ordered repair deltas and guidance, Judge outcomes, and a coordinator-owned stable finding ledger. Use a separate ledger with the same rules for the final cross-plan audit.
+- `recovery_state`: per-plan generation IDs, whether the single substantive Saver attempt is consumed, one clarification cycle, bounded non-capacity interruption restarts, and transient-capacity backoff state.
+- `review_state`: per-plan-generation substantive Implementation attempt count out of five, separate review-pass count, exact reviewed base/HEAD/tree/status, ordered repair deltas and guidance, per-review Judge outcomes, leak records, and a coordinator-owned stable finding ledger. Use a separate ledger with the same rules for the final cross-plan audit.
 - `checkout_state_token`: the compact token returned by `checkout_guard` for the coordination checkout, excluding only `plan_dir`.
 - `execution_runtime`: explicit `native` or `orca`, never inferred.
 - `runtime_profile`: for Orca, the validated absolute profile path, profile hash, controller terminal, role routing, and Orca worktree/task/dispatch mappings retained outside Git worktrees.
@@ -81,7 +81,7 @@ For a Codex attempt, call native Multi-Agent V2 with:
 - `fork_turns: "none"`;
 - one self-contained initial message containing the complete role prompt and immutable plan snapshot.
 
-Omit model, reasoning-effort, and service-tier overrides. Use the returned canonical task name for follow-up, waits, interruption, and evidence. Treat spawn failure, terminal failure, or a terminal native state without a response envelope as an attempt failure, then apply Section 6 before deciding whether it consumed a Saver round. A quiet running worker is not a failed attempt.
+Omit model, reasoning-effort, and service-tier overrides. Use the returned canonical task name for follow-up, waits, interruption, and evidence. Treat spawn failure, terminal failure, or a terminal native state without a response envelope as an attempt failure, then apply Section 6 before deciding whether it consumed an Implementation attempt or the one Saver attempt. A quiet running worker is not a failed attempt.
 
 For an Orca attempt, create a fresh configured role terminal in the stable Orca worktree and use one tracked Orca orchestration task plus the adapter's explicit lifecycle delivery, exactly as defined in `orca-runtime.md`. Matching `worker_done` task/dispatch/pane provenance replaces native terminal completion evidence. A quiet running terminal or wait heartbeat is not a failed attempt.
 
@@ -93,7 +93,7 @@ Immediately before dispatching any worker, and again after it becomes terminal b
 
 At each scheduling pass:
 
-1. Run `node <plan_manager> ready <plan_dir> --pretty` from the coordination checkout. Route `blocked` plans to Saver and reconstruct `inProgress` plans through resume semantics; never treat either as fresh work.
+1. Run `node <plan_manager> ready <plan_dir> --pretty` from the coordination checkout. Route `blocked` and `inProgress` plans through resume semantics; never treat either as fresh work or dispatch Saver without reconstructed five-attempt and Judge evidence.
 2. Select `TODO` plans whose dependencies are all `DONE`.
 3. Resolve every dependency from `completion_ref(<id>)` and require it to be an ancestor of integration HEAD. Accept reachable legacy completion trailers or exact-subject markers only for backward compatibility; never create them.
 4. Before mutation, require `plan_branch(<id>)` not to exist. If it exists during fresh dispatch, stop that plan for namespace reconciliation; never reset or reuse it speculatively.
@@ -130,7 +130,7 @@ NOTES: <material facts only>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Tell the worker to use `unknown` for values not exposed by the host and never estimate. Structured host telemetry wins. Missing commits, dirty intended changes, unverifiable checks, `STOPPED`, tool errors, or a terminal attempt without a response enter recovery in the same plan worktree. Record every attempt through Plans. Initial implementation, restack, or gate failure still enters Saver directly; the bounded guided-implementer loop applies only to evidence-complete review revisions.
+Tell the worker to use `unknown` for values not exposed by the host and never estimate. Structured host telemetry wins. Missing commits, dirty intended changes, unverifiable checks, `STOPPED`, tool errors, or a terminal attempt without a response preserve the same plan worktree. Record every attempt through Plans. While the five-attempt Implementation budget remains, dispatch a fresh Implementer in `GUIDED_REPAIR` with exact coordinator-proven operational evidence; never send an ordinary implementation, restack, or gate failure directly to Saver.
 
 ### Coordinator wait discipline
 
@@ -148,17 +148,17 @@ Run every coordinator-owned verification gate through:
 node <gate_runner> --cwd <absolute-worktree> --log-dir <gate_log_root>/<plan-or-RUN>/<phase> --label <stable-label> -- <command> <arguments...>
 ```
 
-Pass the exact argv after `--`; do not add a shell unless the command requires one. Never place secrets in arguments. The runner writes combined output to a private log and returns only fingerprint, exit status, duration, byte count, SHA-256, and log path. It returns no command output on success or failure. Never reread a full gate log into coordinator context; let Saver reproduce failures in its isolated context. Preserve logs with failed state.
+Pass the exact argv after `--`; do not add a shell unless the command requires one. Never place secrets in arguments. The runner writes combined output to a private log and returns only fingerprint, exit status, duration, byte count, SHA-256, and log path. It returns no command output on success or failure. Never reread a full gate log into coordinator context; let the next authorized Implementer or one-shot Saver reproduce failures in its isolated context. Preserve logs with failed state.
 
 Run transactions fail-fast. Before retrying, prove integration HEAD still equals the recorded transaction base.
 
 For each completed plan branch:
 
 1. Require its worktree to be clean, unlocked, and unowned. Record branch base, HEAD, tree SHA, and ordered merge-free commits. Require at least one commit and no merge commit.
-2. If its recorded base differs from current integration HEAD, create a unique immutable checkpoint ref naming the pre-restack HEAD with an absent-old-value guard. Restack the same checked-out plan branch in place with `git rebase --onto <integration-head> <recorded-base>`. Never merge integration into it. A conflict or interrupted rebase remains in that exact worktree and enters Saver; never abort, reset, clean, or create another branch merely to recover cleanliness.
+2. If its recorded base differs from current integration HEAD, create a unique immutable checkpoint ref naming the pre-restack HEAD with an absent-old-value guard. Restack the same checked-out plan branch in place with `git rebase --onto <integration-head> <recorded-base>`. Never merge integration into it. A conflict or interrupted rebase remains in that exact worktree and uses the next normal guided Implementer attempt when available; after attempt 5 it must pass through Judge before one-shot Saver eligibility. Never abort, reset, clean, or create another branch merely to recover cleanliness.
 3. After restacking, require clean status, a merge-free unique range from the new integration base, and patch equivalence with the pre-restack checkpoint using `git cherry`. Record the new exact base, HEAD, tree, and commit list.
 4. Run every plan done criterion and applicable project-wide gate in the plan worktree.
-5. Measure the exact review surface from recorded integration base to plan HEAD with Git numstat/name-only evidence: count each changed path once and sum added plus deleted lines. Use the snapshot's numeric budget, or the conservative legacy fallback. A rename counts once; an unbudgeted binary or any file/line overflow enters `REPLAN` recovery before broad review. Never ask a reviewer to absorb an over-budget diff merely because implementation already exists.
+5. Measure the exact review surface from recorded integration base to plan HEAD with Git numstat/name-only evidence: count each changed path once and sum added plus deleted lines. Use the snapshot's numeric budget, or the conservative legacy fallback. A rename counts once; an unbudgeted binary or any file/line overflow stops before broad review and requires a user-authorized, validated narrower plan generation through Grill or Improve. It never authorizes Saver. Never ask a reviewer to absorb an over-budget diff merely because implementation already exists.
 6. Dispatch the read-only reviewer against the complete diff from recorded integration base to plan HEAD. Record clean status and tree before dispatch; prove base, HEAD, tree, and status are unchanged afterward. Reviewer mutation is failure even when its verdict says `APPROVE`.
 
 Do not add Herder metadata to a commit subject or body.
@@ -176,19 +176,20 @@ Only `PLAN_REQUIREMENT` and `PATCH_REGRESSION` may block. P0 is a universal rele
 
 A blocker must identify an exact changed file and line, triggering scenario, reproducible evidence or failing check, introducing hunk or commit, and relationship to either the immutable original task or branch delta. Reject pre-existing defects, speculation, unstated intent, and reviewer preferences. Style, formatting, documentation nits, unrelated cleanup, and generated-file churn are advisory unless explicitly required or demonstrably P0/P1.
 
-Maintain a monotonic finding ledger per plan generation. Assign each `NEW` finding the next stable ID (`F001`, `F002`, ...), deduplicate by root cause, and store severity, relationship, first-seen reviewed SHA, file/cause, evidence, introducing diff, repair contract, and status (`OPEN`, `RESOLVED`, `ADVISORY`, `DISMISSED`, `FOLLOWUP`, or `NEEDS_JUDGE`). Preserve IDs across restacks and resume.
+Maintain a monotonic finding ledger per plan generation. Assign each `NEW` finding the next stable ID (`F001`, `F002`, ...), deduplicate by root cause, and store severity, relationship, Judge disposition, first-seen reviewed SHA, file/cause, evidence, introducing diff, repair contract, leak dedupe key, and status (`OPEN`, `AUTHORIZED`, `RESOLVED`, `ADVISORY`, `DISMISSED`, `LEAKED`, or `NEEDS_INPUT`). Preserve IDs across restacks and resume.
 
-Allow at most three substantive implementation-review rounds per generation:
+Allow at most five substantive normal Implementation attempts per generation, and track review passes separately:
 
-1. Round 1 uses `DISCOVERY` against the complete budgeted plan diff. This is the only broad review.
-2. For an effective `REVISE`, dispatch a fresh `plan_implementer` attempt in `GUIDED_REPAIR` mode on the same branch/worktree. Give it only the original compiled plan, open blocking IDs, direct evidence, and reviewer repair contracts. Suggested directions are non-binding; the plan and observable invariants remain authoritative.
-3. Rerun all gates and review-surface measurement. Rounds 2 and 3 use `VERIFICATION`: verify only open blocker IDs and inspect only the new repair delta for regressions. Never reopen broad discovery.
+1. An `INITIAL` or `GUIDED_REPAIR` attempt that may have mutated the branch consumes one Implementation attempt even when its envelope is missing or it fails before review. A proven clean host interruption is free. A restack whose patch is unchanged consumes no attempt.
+2. Every completed, gate-passing, budgeted frozen branch receives a Reviewer pass followed by Judge. The first evidence-complete review in a generation uses `DISCOVERY` against the complete plan diff regardless of the Implementation attempt ordinal. This is the only broad review.
+3. For Judge `REPAIR`, when an Implementation attempt remains, dispatch a fresh `plan_implementer` in `GUIDED_REPAIR` mode on the same branch/worktree. Give it only the original compiled plan, Judge-authorized blocking IDs, direct evidence, and narrowed repair contracts. Suggested directions are non-binding; the plan and observable invariants remain authoritative.
+4. Rerun all gates and review-surface measurement. Every review pass after the first uses `VERIFICATION`: verify only open authorized blocker IDs and inspect only the new repair delta for regressions. Never reopen broad discovery.
 
-A substantive guided implementer attempt that may have mutated the branch consumes its round even if its envelope is missing or it fails before review. A proven clean host interruption is free under the normal interruption rules. A restack whose patch is unchanged consumes no new round.
+If verification discovers a new evidence-complete `PATCH_REGRESSION` in the repair delta, add it to the ledger and let Judge decide whether it authorizes another guided attempt. Judge sends valid findings outside the original task and repair delta to `leak/` rather than sending Implementer toward B or C. If actionable in-scope blockers remain after attempt 5, Judge may select the one-shot Saver path. Never start a sixth normal Implementation attempt.
 
-If verification discovers a new evidence-complete `PATCH_REGRESSION` in the repair delta, add it to the ledger and use a remaining guided round. A claimed blocker outside the original task and repair delta triggers Judge immediately rather than sending the implementer toward B or C. Otherwise dispatch Judge after round 3 still has an effective blocker. Never start a fourth implementation-review round.
+When attempt 5 ends without a reviewable frozen branch, dispatch Judge directly with the immutable task plus exact attempt, Git, gate, and failure evidence. This exhaustion adjudication is not a review pass and cannot create leak records without a Reviewer finding; it may authorize Saver only for an actionable in-scope failure or return `NEEDS_INPUT`/`BLOCKED`.
 
-Normalize reviewer output from direct evidence. A `REVISE` containing only P2/P3, `FOLLOWUP`, `INVALID`, dismissed, or non-qualifying findings is effective approval when required gates and scope pass. Only an evidence-complete open `PLAN_REQUIREMENT` or `PATCH_REGRESSION` produces effective `REVISE`; reserve `BLOCK` for an irreducible blocker.
+Normalize reviewer output only through Judge. A `REVISE` containing only P2/P3, `FOLLOWUP`, `INVALID`, dismissed, or non-qualifying findings becomes `DONE` when required gates and scope pass. Only a Judge-confirmed, evidence-complete `BLOCKING_IN_SCOPE` `PLAN_REQUIREMENT` or `PATCH_REGRESSION` authorizes repair; reserve Reviewer `BLOCK` and Judge `BLOCKED` for irreducible blockers.
 
 ### Reviewer prompt contract
 
@@ -200,10 +201,10 @@ Give the reviewer:
 - exact integration-base, plan-HEAD, and tree SHAs;
 - actual checks and compact results;
 - numeric review budget and actual measured surface;
-- review mode, implementation-review round/remaining count, and complete finding ledger;
+- review mode, Implementation attempt number, review-pass number, remaining attempt count, and complete finding ledger;
 - for verification, exact repair commit range and open blocker IDs;
 - stable attempt ID and model/effort attribution;
-- instructions to preserve IDs, apply the acceptance policy, and summarize without log dumps;
+- instructions to preserve IDs, apply the acceptance policy, treat its output as Judge evidence rather than repair authority, and summarize without log dumps;
 - this exact response shape:
 
 ```text
@@ -218,16 +219,16 @@ USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; ou
 
 ### Judge prompt contract
 
-Judge is independent and read-only. It classifies evidence rather than personalities. Give it the immutable compiled plan and snapshot hash, exact base/HEAD/tree/status, review budget and actual surface, all required gate evidence, the complete ledger, all three round envelopes, repair deltas, and reviewer guidance.
+Judge is independent and read-only. Dispatch it after every Reviewer response, including `APPROVE`, and once at attempt-budget exhaustion when the last attempt cannot reach review. It classifies evidence rather than personalities. Give it the immutable compiled plan and snapshot hash, exact base/HEAD/tree/status, current Implementation attempt, review-pass count, remaining five-attempt budget, review budget and actual surface, all required gate evidence, the complete ledger, all completed attempt/review envelopes, latest repair delta, reviewer guidance when present, and whether the single Saver attempt remains.
 
 Judge cannot override a failed required gate, explicit done criterion, scope violation, review-budget overflow, or evidence-complete patch regression. It returns:
 
 ```text
-DECISION: DONE | SAVER | NEEDS_INPUT | BLOCKED
-FINDINGS: <ordered `[finding-id][PLAN_REQUIREMENT|PATCH_REGRESSION|FOLLOWUP|INVALID|NEEDS_INPUT] decision; evidence=...` entries, or none>
+DECISION: DONE | REPAIR | SAVER | NEEDS_INPUT | BLOCKED
+FINDINGS: <ordered `[finding-id][BLOCKING_IN_SCOPE|NONBLOCKING_IN_SCOPE|DEFERRED_OUT_OF_SCOPE|REJECTED][PLAN_REQUIREMENT|PATCH_REGRESSION|FOLLOWUP|INVALID|NEEDS_INPUT] decision; evidence=...` entries, or none>
 AUTHORIZED_BLOCKERS: <ordered finding IDs, or none>
 REPAIR_CONTRACTS: <one `[finding-id] observed=...; expected=...; reproduction=...; constraints=...` entry per authorized blocker, or none>
-FOLLOWUPS: <one `[finding-id] title=...; problem=...; evidence=...; acceptance=...; non_goals=...` entry per retained follow-up, or none>
+LEAKS: <one `[finding-id] title=...; problem=...; evidence=...; acceptance=...; non_goals=...; dedupe_key=...` entry per deferred finding, or none>
 QUESTION: <one focused question only for NEEDS_INPUT>
 CHECKS: <independently verified commands/results>
 RATIONALE: <concise original-task closure rationale>
@@ -235,69 +236,76 @@ USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; ou
 ```
 
 - `DONE`: normalize the original task to approval after coordinator gates; no authorized blocker remains.
-- `SAVER`: dispatch Saver only with Judge-authorized IDs and narrowed repair contracts.
+- `REPAIR`: when an Implementation attempt remains, dispatch Implementer only with Judge-authorized IDs and narrowed repair contracts.
+- `SAVER`: only after attempt 5, dispatch Saver when the original task remains incomplete, actionable Judge-authorized blockers remain, and its one substantive attempt is unused.
 - `NEEDS_INPUT`: ask the one irreducible product/authority question, then redispatch Judge with the answer.
 - `BLOCKED`: preserve the branch/worktree and report why no safe bounded repair exists.
 
-For each Judge-retained `FOLLOWUP`, the coordinator writes one concise, secret-free, non-executable draft under `<plan_dir>/proposed/<source-plan-id>-<finding-id>-<slug>.md`. Never add it to the index, dependency graph, current Fire run, or source branch. Report it after the original plan closes. The user may later accept, edit, or reject it through Grill or Improve; only that producer allocates a numeric plan ID and validates it.
+For each Judge-classified `DEFERRED_OUT_OF_SCOPE` finding, the coordinator writes or deduplicates one concise, secret-free, non-executable draft under `<plan_dir>/leak/<source-plan-id>-<finding-id>-<slug>.md`. Include source plan/round, reviewer evidence, Judge rationale, severity, affected locations, dedupe key, proposed acceptance, non-goals, and status `PENDING`. Never add it to the index, dependency graph, current Fire run, or source branch. Report it after the original plan closes. The user may later promote, edit, dismiss, or reject it through Grill or Improve; only that producer allocates a numeric plan ID and validates it.
 
-Integrate only after effective reviewer `APPROVE` or Judge `DONE`, effective scope `PASS`, all required checks pass, and no open Judge-authorized blocker remains. Immediately before advancing, require integration HEAD to equal the reviewed/judged base and the plan branch HEAD/tree/status to equal the approved values. Fast-forward the integration worktree with `git merge --ff-only <plan-branch>`; this must add no merge node. If integration moved, approval is invalid for advancement: checkpoint and restack the same plan branch, rerun required gates, and targeted-verify the unchanged patch without granting another discovery round.
+Integrate only after Judge `DONE`, effective scope `PASS`, all required checks pass, and no open Judge-authorized blocker remains. Immediately before advancing, require integration HEAD to equal the reviewed/judged base and the plan branch HEAD/tree/status to equal the approved values. Fast-forward the integration worktree with `git merge --ff-only <plan-branch>`; this must add no merge node. If integration moved, approval is invalid for advancement: checkpoint and restack the same plan branch, rerun required gates, Reviewer, and Judge against the unchanged patch without granting another discovery round.
 
 After fast-forward, require integration HEAD to equal approved plan HEAD. Create `completion_ref(<id>)` with an absent-old-value guard, verify it is reachable, then transition the plan to `DONE`. If transition fails, stop dependency dispatch and reconcile from the private ref. After `DONE`, prove no agent can access the plan worktree, unlock it, and invoke cleanup with `--plan <id>`. Cleanup failure is a maintenance warning, not a rollback.
 
-Any restack, gate, reviewer mutation/transport failure, Judge failure, or compare-and-advance failure leaves integration unchanged and enters recovery on the same plan branch/worktree. An evidence-complete reviewer `REVISE` is not an operational failure: it follows the bounded guided-implementer/Judge convergence flow above.
+Any restack, gate, reviewer mutation/transport failure, Judge failure, or compare-and-advance failure leaves integration unchanged on the same plan branch/worktree. Retry proven read-only transport failures without consuming an Implementation attempt; otherwise use the next normal Implementer attempt with exact operational evidence. An evidence-complete Reviewer `REVISE` is not an operational failure: it always enters Judge gating above.
 
-## 6. Recover Before Escalation
+## 6. One-shot Recovery Implementation
 
-Never ask Saver to reconstruct failed work elsewhere. Dispatch it in the exact plan worktree containing committed, dirty, conflicted, or interrupted state. Do not create a recovery branch.
+Saver is an optional fresh recovery Implementer, not the default handler for failed work. While any of the five normal Implementation attempts remain, give ordinary implementation, restack, gate, dirty-state, or reconciliation failures to a fresh `plan_implementer` in `GUIDED_REPAIR` mode on the same branch/worktree with exact coordinator-proven evidence. That substantive mutation attempt consumes the next normal attempt and, when it reaches a frozen passing state, must be followed by Reviewer and Judge. Review-budget overflow, missing authority, and containment failure are not Saver work.
 
-An **agent attempt** is one host spawn and always receives a unique usage row. A **Saver repair round** is a substantive Saver result or an attempt that may have mutated the worktree. Host interruption alone is free only when every no-mutation invariant below is proven.
+An **agent attempt** is one host spawn and always receives a unique usage row. A **substantive implementation attempt** is a result or failed attempt that may have mutated the worktree. A proven clean host interruption is free only when every no-mutation invariant below holds.
 
-A **plan generation** starts with an immutable compiled plan snapshot, integration-base SHA, the stable plan branch reset for fresh implementation, an empty finding ledger, and zero implementation-review rounds. Number the initial generation `0`; increment only after accepted `REPLAN`, validated revised plan, checkpointed old HEAD, and controlled reset of the clean isolated plan branch to current integration. `REPAIRED`, guided repairs, restacks, clarification answers, and interrupted attempts remain in the same generation.
+A **plan generation** starts with an immutable compiled plan snapshot, integration-base SHA, the stable plan branch prepared for fresh implementation, an empty finding ledger, zero substantive Implementation attempts, zero review passes, and one unused Saver attempt. Resume, repair, restack, clarification, and interruption never start a generation or reset either budget. Only a user-authorized, validated revision through Grill or Improve may checkpoint the old state and start a new generation.
 
-Before every Saver dispatch, record integration HEAD; plan branch HEAD and tree; exact porcelain status; generation, snapshot SHA-256, repair-round number, and attempt ordinal; and any rebase state. Dirty state may contain the work Saver must recover and is ineligible for a no-cost interruption restart. Never abort a rebase, reset, clean, stash, or discard merely to make an attempt eligible.
+Dispatch Saver only when all of these are true:
+
+1. Five substantive normal Implementation attempts are exhausted.
+2. The latest read-only Judge returns `SAVER` because the immutable original task is still incomplete.
+3. At least one actionable `BLOCKING_IN_SCOPE` `PLAN_REQUIREMENT` or `PATCH_REGRESSION` remains with a narrowed repair contract.
+4. No unresolved user input, external authority, review-budget overflow, or containment failure prevents safe work.
+5. The generation's one substantive Saver attempt is unused.
+
+Never ask Saver to reconstruct failed work elsewhere. Dispatch it in the exact plan worktree containing the current committed, dirty, conflicted, or interrupted state. Do not create a recovery branch. Before dispatch, record integration HEAD; plan branch HEAD and tree; exact porcelain status; generation and snapshot SHA-256; all five Implementation attempt outcomes; every completed review/Judge outcome; Saver attempt ordinal; and any rebase state. Never abort a rebase, reset, clean, stash, or discard to make recovery easier.
 
 Give Saver only:
 
 - the absolute plan worktree and branch;
-- complete snapshotted plan text;
-- a compact failure envelope containing source (`implementer`, `restack`, `gate`, `review-budget`, `review`, `judge`, or `compare-and-advance`), generation, snapshot SHA-256, integration base, immutable failed HEAD/tree, exact status/rebase state, open blocker evidence, reproduction commands, compact gate evidence, ledger, implementation-review round count, repair delta, prior outcomes, and remaining budgets;
-- for exhausted review convergence, the exact Judge-authorized blocker IDs and narrowed repair contracts; never pass unapproved reviewer follow-ups or guidance as Saver authority;
-- expected behavior: reproduce, repair and commit if possible, resolve an in-progress restack when safe, or classify the blocker;
-- the user's answer after `NEEDS_INPUT`;
+- the immutable compiled plan and snapshot hash;
+- exact current Git, gate, and rebase evidence;
+- compact summaries of all five normal attempts and every completed review/Judge outcome;
+- only the latest Judge-authorized blocker IDs and narrowed repair contracts;
+- explicit notice that this is the generation's single substantive recovery implementation;
 - stable attempt ID and model/effort attribution;
 - this exact response shape:
 
 ```text
-OUTCOME: REPAIRED | REPLAN | NEEDS_INPUT | TERMINAL
+OUTCOME: REPAIRED | NEEDS_INPUT | TERMINAL
 COMMITS: <ordered SHAs, or none>
 CHECKS: <command — result, one per line>
 QUESTION: <one focused question only for NEEDS_INPUT>
-REPLAN: <specific corrected assumption/plan text only for REPLAN>
 EVIDENCE: <concise repository/tool evidence>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Pass direct evidence, not theories or raw gate logs. Never pass P2/P3, `FOLLOWUP`, or `INVALID` findings. Tell Saver to repair supplied blockers first and broaden only when evidence is systemic or cannot explain failure. Saver never self-approves.
+Pass direct evidence, not theories or raw gate logs. Never pass `NONBLOCKING_IN_SCOPE`, `DEFERRED_OUT_OF_SCOPE`, `REJECTED`, P2/P3, `FOLLOWUP`, or `INVALID` findings. Tell Saver to repair supplied blockers first and broaden only when direct evidence proves a systemic cause. Saver never replans, self-approves, or receives another substantive attempt in the same generation.
 
 ### Host interruption
 
-Classify `INTERRUPTED` only when: native host evidence proves platform/policy/transport/session failure rather than repository failure; no parseable final Saver envelope exists; integration HEAD and plan HEAD/tree exactly match pre-dispatch; and the worktree was clean before and remains clean including untracked files. Unknown or false conditions mean `FAILED`, consume the round, and preserve exact state.
+Classify `INTERRUPTED` only when host evidence proves platform, policy, transport, or session failure rather than repository failure; no parseable final envelope exists; integration HEAD and plan HEAD/tree exactly match pre-dispatch; and the worktree was clean before and remains clean including untracked files. Unknown or false conditions consume the relevant substantive budget and preserve exact state.
 
-For a proven interruption, record exact usage, do not increment repair or clarification counters, and use a fresh session/attempt ID with the same self-contained prompt. Never resume the interrupted child conversation.
+For a proven interruption, record exact usage, consume no substantive or clarification budget, and use a fresh session/attempt ID with the same self-contained prompt. Never resume the interrupted child conversation.
 
-- For transient capacity, do not increment any retry, interruption, clarification, replan, or recovery bound. Use fresh Saver sessions after 30 seconds, 60 seconds, 120 seconds, and 300 seconds, capped at 300 seconds. Never infer capacity from quiet, timeout, disconnect, or missing response. If cancellation/deadline/host lifecycle stops waiting, transition to `BLOCKED — infrastructure capacity unavailable; recovery budget preserved` and retain the same branch/worktree.
+- For transient capacity, do not increment any retry, interruption, clarification, implementation, or Saver bound. Use fresh sessions after 30 seconds, 60 seconds, 120 seconds, and 300 seconds, capped at 300 seconds. Never infer capacity from quiet, timeout, disconnect, or missing response. If cancellation, deadline, or host lifecycle stops waiting, transition to `BLOCKED — infrastructure capacity unavailable; recovery budget preserved` and retain the same branch/worktree.
 - For explicitly non-retryable infrastructure, transition immediately to the same infrastructure `BLOCKED` state without consuming substantive recovery.
-- For other host interruption, allow at most two same-round non-capacity interruption restarts, then block with infrastructure/policy reason while preserving unused substantive budget.
+- For other host interruption, allow at most two same-attempt non-capacity interruption restarts, then block with the infrastructure or policy reason while preserving any unused substantive budget.
 
-Handle outcomes:
+Handle Saver outcomes:
 
-- `REPAIRED`: record repair commits/delta and rerun restack if necessary, all gates, review-surface measurement, and `VERIFICATION` of Judge-authorized IDs plus only the Saver delta. Never reopen broad discovery.
-- `REPLAN`: validate evidence and guards. If accepted, revise/validate the plan, create a unique checkpoint for current HEAD, require clean unowned worktree, reset the same isolated plan branch to exact integration HEAD, increment generation, and dispatch a fresh implementer. This controlled reset is permitted only after the checkpoint succeeds; never reset dirty or ambiguously owned state.
-- `NEEDS_INPUT`: ask the one irreducible question, continue unrelated plans, then automatically redispatch Saver in the same worktree with the answer.
-- `TERMINAL`: transition to `BLOCKED` with a one-line reason.
+- `REPAIRED`: consume the one Saver attempt, record its commits/delta, rerun all gates and review-surface measurement, then run one targeted `VERIFICATION` Reviewer and Judge pass over the authorized IDs plus only the Saver delta. Never reopen broad discovery. Judge may return `DONE`, record leaks, request one irreducible input, or `BLOCKED`; it may not authorize another normal repair or Saver attempt.
+- `NEEDS_INPUT`: accept only when pre/post Git evidence proves no mutation. Ask one irreducible question and redispatch the same one-shot recovery with the answer; allow one clarification cycle. Mutation or a second question consumes the attempt and transitions to `BLOCKED`.
+- `TERMINAL`, malformed output, or a failure that may have mutated the worktree consumes the one Saver attempt and transitions to `BLOCKED` with exact evidence.
 
-Give each generation two substantive autonomous Saver rounds and two clarification cycles. Accept at most two `REPLAN` outcomes per plan per invocation. Derive compact failure signatures without generation numbers or SHAs. If the same signature survives two consecutive completed generations, reject another replan for it. When a bound is exhausted, transition to `BLOCKED`, preserve the single plan branch/worktree, and report the exact bound. A new explicit resume authorizes another bounded recovery cycle but does not reset review state.
+An explicit resume does not replenish the five normal Implementation attempts or the Saver attempt. Preserve the single branch/worktree and report the exhausted bound. Further autonomous work requires a user-authorized revised plan and new generation.
 
 ## 7. Usage Accounting
 
@@ -317,13 +325,13 @@ Treat locks as leases. On native Codex, run `node <codex_evidence_reader> --work
 
 Classify each retained plan branch:
 
-- Dirty, conflicted, or rebasing with no active owner: preserve exact worktree and dispatch Saver there; never abort or replace it.
+- Dirty, conflicted, or rebasing with no active owner: preserve exact worktree. If a normal Implementation attempt remains, dispatch a fresh Implementer there with the exact operational envelope; otherwise dispatch Judge and use Saver only when Section 6 eligibility is proven. Never abort or replace it.
 - Clean with merge-free unique commits not yet completed: reconstruct its base/checkpoint, then restack if needed, gate, and review.
 - Clean with no unique commits and `IN PROGRESS`: dispatch a fresh implementer only when evidence proves no prior mutation was lost; otherwise stop for reconciliation.
-- `BLOCKED`: dispatch Saver on the existing plan branch only for ordinary recovery or Judge-authorized review blockers. If the branch is absent, create it only when the ledger and evidence prove no failed work existed; otherwise stop.
+- `BLOCKED`: reconstruct the round ledger and latest Judge outcome on the existing plan branch. Resume a normal guided Implementer only when its budget remains; dispatch Saver only for a round-5 Judge `SAVER` with an unused attempt. If the branch is absent, create it only when the ledger and evidence prove no failed work existed; otherwise stop.
 - Valid completion ref reachable from integration: reconcile `DONE` before dependencies. `DONE` without proof or with failed cheap verification transitions to `BLOCKED` and recovery.
 
-Reconstruct review state from implementer, Reviewer, and Judge envelopes plus exact reviewed base/HEAD/tree. Resume or restack never resets implementation-review round count or ledger. If reconstruction is ambiguous, treat all three rounds as exhausted and dispatch Judge before any repair. Continue all ordinals and never rewrite usage.
+Reconstruct execution state from Implementer attempt envelopes, separate Reviewer/Judge envelopes, and exact reviewed base/HEAD/tree. Resume or restack never resets the Implementation attempt count, review-pass count, Saver eligibility, or ledger. If reconstruction is ambiguous, treat all five normal attempts and the Saver attempt as exhausted, preserve state, and dispatch Judge only for read-only closure classification. Continue all ordinals and never rewrite usage.
 
 A crash may occur after the integration fast-forward but before the completion ref is written. Recover only when evidence proves exact plan HEAD/tree received effective approval, every gate passed, no mutation followed, and that exact commit is current/reachable integration. Then create the missing ref with absent-old-value guard and reconcile `DONE`. Never infer approval merely because an unmarked commit is present on integration.
 
@@ -331,7 +339,7 @@ A crash may occur after the integration fast-forward but before the completion r
 
 The plan set succeeds when every plan is `DONE` or `REJECTED`, every dependency completion ref is reachable from integration, final project-wide gates pass, and the final reviewer ledger has no qualifying cross-plan blocker. P2/P3 findings remain advisory.
 
-The final audit checks only cross-plan dependency guarantees, combined migrations/public contracts, plan-set scope, and project-wide gates. It must not broadly rereview every already-approved local hunk. Apply the same relationship ledger, one initial bounded discovery, targeted repair verification, three-round cap, and Judge adjudication to genuine cross-plan blockers. After plan scheduling is terminal, a Judge-authorized final repair may operate directly in the isolated integration worktree to avoid another branch: first create a unique `checkpoints/RUN/<ordinal>` ref for integration HEAD, stop all plan dispatch, and give Saver a synthetic plan. Treat added repair commits as unapproved until all final gates and targeted Reviewer/Judge approval succeed. If interruption leaves dirty or unapproved integration state, preserve and resume that exact worktree; never hand it off. Only final approved integration may be reported as complete.
+The final audit checks only cross-plan dependency guarantees, combined migrations/public contracts, plan-set scope, and project-wide gates. It must not broadly rereview every already-approved local hunk. Apply the same five-attempt Implementation budget, one initial bounded discovery on the first reviewable result, targeted verification on later review passes, and Judge gating after every review to genuine cross-plan blockers. After five normal attempts, one Judge-authorized final Saver attempt may operate directly in the isolated integration worktree to avoid another branch: first create a unique `checkpoints/RUN/<ordinal>` ref for integration HEAD and stop all plan dispatch. Treat added repair commits as unapproved until all final gates and one targeted Reviewer/Judge pass succeed. If interruption leaves dirty or unapproved integration state, preserve and resume that exact worktree; never hand it off. Only final Judge-approved integration may be reported as complete.
 
 After successful final gates/audit, verify the checkout state token, prove no agent can access a plan worktree, and invoke fail-closed `--finalize`. Finalization removes every eligible plan branch/worktree, re-inventories the namespace, and deletes recognized private coordination refs only when no plan branch remains. Dirty, locked, missing, unrecognized, nonterminal, or unverifiable state preserves refs and reports a maintenance warning without rolling back approved integration.
 
