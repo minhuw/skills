@@ -42,6 +42,7 @@ Resolve the plugin root as two directories above this skill. Use:
 <plugin-root>/skills/plans/scripts/herder-plans.mjs
 <plugin-root>/skills/fire/scripts/namespace-run.mjs
 <plugin-root>/skills/fire/scripts/checkout-state.mjs
+<plugin-root>/skills/fire/scripts/assignment-bundle.mjs
 <plugin-root>/skills/fire/scripts/read-codex-agent-evidence.mjs
 <plugin-root>/skills/fire/scripts/orca-runtime.mjs
 <plugin-root>/skills/fire/scripts/run-gate.mjs
@@ -50,7 +51,7 @@ Resolve the plugin root as two directories above this skill. Use:
 
 The manager commands Fire needs are `validate`, `shape`, `ready`, `snapshot`, `transition`, `record-usage`, and `usage`; invoke each with `node <manager> ... --pretty`. Run the namespace helper before any Git mutation for both `fire` and `resume`; its conflict exit is a deliberate stop, not permission to invent another name. Treat other nonzero exits as coordinator failures. Fire never parses or directly edits `README.md`; only the root coordinator may call `transition` or `record-usage` during execution. Only the root coordinator may invoke the cleanup runner.
 
-The backlog is normally local and Git-ignored. Always run `snapshot` in the stable coordination checkout, verify its input/content hashes, and inline its complete compiled `planText` in worker prompts; never assume a child worktree contains the plan directory.
+The backlog is normally local and Git-ignored. Always run `snapshot` in the stable coordination checkout and verify its input/content hashes. Materialize the immutable compiled plan set as a read-only, Git-ignored RUN bundle in the integration worktree, and materialize each assigned plan's exact compiled snapshot as a corresponding bundle in its stable plan worktree with `assignment-bundle.mjs`; pass the applicable absolute path and SHA-256 to every worker instead of sending workers to the source plan directory. Never copy the full backlog, mutable index, leak drafts, usage ledger, or coordinator paths into an execution worktree.
 
 ## Agent Roles
 
@@ -65,7 +66,7 @@ Use the configured role, model, and effort; never substitute a generic agent or 
 
 For `--runtime orca`, read [references/orca-runtime.md](references/orca-runtime.md) completely before action. Validate and preflight the explicit runtime profile, require the controller to be inside Orca, let Orca exclusively own worktree creation/removal, and use tracked Orca tasks plus adapter-delivered lifecycle prompts for every child. Native spawn rules below do not apply to Orca children; all plan, review, Judge, Saver, gate, lifecycle, and integration semantics still do.
 
-Codex requires Multi-Agent V2, the `herder_agents` namespace, and the four installed custom agents. Its spawn interface must accept `agent_type` and `fork_turns`; otherwise stop before mutation and direct the user to `$herder:install` and a new session. There is no `codex exec` fallback. Dispatch the exact profile with `fork_turns: "none"`, placing the immutable plan snapshot and all repository context in the initial message. Do not pass model, effort, or service-tier overrides. A task name is only a coordinator label.
+Codex requires Multi-Agent V2, the `herder_agents` namespace, and the four installed custom agents. Its spawn interface must accept `agent_type` and `fork_turns`; otherwise stop before mutation and direct the user to `$herder:install` and a new session. There is no `codex exec` fallback. Dispatch the exact profile with `fork_turns: "none"`, placing the worktree-local assignment path and hash plus all attempt-specific repository context in the initial message. Do not pass model, effort, or service-tier overrides. A task name is only a coordinator label.
 
 Claude uses the native role identifiers shipped with the plugin.
 
@@ -74,6 +75,7 @@ Claude uses the native role identifiers shipped with the plugin.
 - Preserve the user's branch, index, source changes, and untracked files. Plans status/usage updates and Judge-retained deferred findings under `plan_dir/leak/` are the only coordination-checkout writes.
 - Before mutation, capture the checkout guard's compact state token with the plan directory excluded. Verify it immediately before and after every worker attempt and before final handoff; any mismatch is an unattributed preservation breach that stops scheduling without restoring or rewriting user state.
 - Keep integration and each plan isolated in their own worktrees. Implementer, Reviewer, Judge, Saver, and resume use the same `herder/<plan-name>/<id>` branch/worktree serially; never create candidate, staging, rescue, attempt, or generation branches. Never push, open a PR, deploy, publish, or merge into the user's branch. Native runtime uses the cleanup runner's Git-owned removal; Orca runtime uses the same proofs but removes Orca-owned worktrees only through Orca. Never delegate cleanup to a worker.
+- Materialize only compiled immutable context: `<plan-relative-dir>/.herder/assignment.json` in each plan worktree and `<plan-relative-dir>/.herder/run-assignment.json` in integration. Require the deterministic helper to prove each bundle is ignored, read-only, branch-bound, free of coordinator metadata paths, and byte-identical to its recorded SHA-256 before and after every worker. Workers never read the coordinator checkout or source backlog.
 - On Codex, require complete transcript mutation evidence after every child: all command workdirs and canonical apply-patch targets must be inside the assigned worktree, no apply-patch call may be unresolved, and Reviewers/Judges must have made no apply-patch call.
 - Keep integration history linear and repository-native. Restack a clean plan branch onto current integration only after saving its prior HEAD under a private checkpoint ref, review the exact restacked base/HEAD/tree, and fast-forward integration to that approved HEAD. Track completion only through a private plan-set-scoped Git ref. Never create a plan merge commit, marker commit, trailer, tag, or Herder-branded commit message. The only normal user-branch handoff is `git merge --ff-only herder/<plan-name>/integration`.
 - Fork dependents only from canonical integration HEAD after every dependency is reviewed, integrated, `DONE`, and represented by a reachable private completion ref.

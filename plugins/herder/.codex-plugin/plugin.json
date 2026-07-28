@@ -1,6 +1,6 @@
 {
   "name": "herder",
-  "version": "0.10.1+codex.20260728013143",
+  "version": "0.10.2+codex.20260728112209",
   "description": "Shape focused plans and execute them with bounded review, independent judging, recovery, usage accounting, and optional Orca cross-harness routing.",
   "author": {
     "name": "minhuw",

@@ -590,6 +590,13 @@ process.stdout.write("grok-4.5 kimi-coding/k3 openai/gpt-5.6-sol authenticated\\
   assert.match(protocol, /do not reread transcripts, request status, or call `list_agents`/)
   assert.match(protocol, /node <checkout_guard> --repo <repo_root> --exclude <plan_dir> --pretty/)
   assert.match(protocol, /--expect <checkout_state_token>/)
+  assert.match(protocol, /node <assignment_manager> materialize --plan <id>/)
+  assert.match(protocol, /node <assignment_manager> materialize-run --plan-dir <plan_dir>/)
+  assert.match(protocol, /node <assignment_manager> verify --worktree <absolute-worktree>/)
+  assert.match(protocol, /missing, writable, symlinked, moved, branch-mismatched, or hash-mismatched bundle is a containment failure/)
+  assert.match(protocol, /never give it the source `plan_dir` as evidence/)
+  assert.match(protocol, /Do not derive a new trusted hash from the file itself/)
+  assert.doesNotMatch(protocol, /complete compiled `planText`.*always inlined/)
   assert.match(protocol, /mutationEvidenceComplete: true/)
   assert.match(protocol, /unresolvedApplyPatchCalls: 0/)
   assert.match(protocol, /every canonical `applyPatchPaths` entry inside it/)
@@ -707,6 +714,11 @@ process.stdout.write("grok-4.5 kimi-coding/k3 openai/gpt-5.6-sol authenticated\\
   for (const profile of [codexImplementer, claudeImplementer, codexReviewer, claudeReviewer, codexJudge, claudeJudge, codexSaver, claudeSaver]) {
     assert.match(profile, /longest event-driven or blocking process wait the host supports/)
     assert.match(profile, /A quiet process is not a failure/)
+    assert.match(profile, /assignment bundle inside that worktree/)
+    assert.match(profile, /supplied bundle SHA-256/)
+    assert.match(profile, /final .*RUN.*plans\[\]\.planText/)
+    assert.match(profile, /Never modify the assignment bundle/)
+    assert.match(profile, /Never search or read the coordinator checkout, source plan directory, sibling worktrees, common Git directory/)
   }
   for (const profile of [codexImplementer, claudeImplementer]) {
     assert.match(profile, /Write every commit subject and body solely in repository and domain terms/)

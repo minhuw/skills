@@ -778,8 +778,10 @@ function main() {
       assert.match(installedReviewer, /sandbox_mode = "read-only"/)
       assert.match(installedReviewer, /P2\/P3, FOLLOWUP, and INVALID findings are advisory and never block approval/)
       assert.match(installedReviewer, /In every later VERIFICATION round, verify the supplied open finding IDs and inspect only the repair delta/)
+      assert.match(installedReviewer, /assignment bundle inside that worktree/)
       const installedJudge = fs.readFileSync(path.join(codexHome, "agents", "plan_judge.toml"), "utf8")
-      assert.match(installedJudge, /DECISION: DONE \| SAVER \| NEEDS_INPUT \| BLOCKED/)
+      assert.match(installedJudge, /DECISION: DONE \| REPAIR \| SAVER \| NEEDS_INPUT \| BLOCKED/)
+      assert.match(installedJudge, /Never search or read the coordinator checkout, source plan directory/)
 
       if (options.live) {
         const opened = runCodex("01-grill-intake", `Use $herder:grill to plan a --version flag for this tiny CLI. Print only the package version followed by one newline, preserve the no-argument output, and add no dependencies. Use your recommendations for any remaining decisions. Follow the skill exactly: inspect the repository, summarize the shared understanding, ask for final confirmation, and do not edit yet.`, context, { ephemeral: false })
@@ -865,6 +867,7 @@ function main() {
 
         const fireTranscript = fs.readFileSync(path.join(transcripts, "02-fire-run.jsonl"), "utf8")
         assert.doesNotMatch(fireTranscript, /run-codex-worker\.mjs/)
+        assert.match(fireTranscript, /assignment-bundle\.mjs/, "Fire did not materialize and verify worktree-local assignment context")
         assert.match(fireTranscript, /run-gate\.mjs/, "Fire did not isolate coordinator gate output")
         assert.match(fireTranscript, /namespace-run\.mjs/, "Fire did not run deterministic namespace preflight")
 
