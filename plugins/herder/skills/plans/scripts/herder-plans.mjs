@@ -180,16 +180,15 @@ function sectionText(text, heading) {
 
 function parseReviewBudget(value, id, file) {
   const normalized = String(value).trim()
-  const match = normalized.match(/^files\s*<=\s*(\d+)\s*,\s*(?:changed[_\s-]*lines|lines)\s*<=\s*(\d+)$/i)
+  const match = normalized.match(/^files\s*<=\s*(\d+)(?:\s*,\s*(?:changed[_\s-]*lines|lines)\s*<=\s*\d+)?$/i)
   if (!match) {
-    fail(`Plan ${id} has invalid Review budget; use "files<=N, changed_lines<=N": ${file}`)
+    fail(`Plan ${id} has invalid Review budget; use "files<=N": ${file}`)
   }
   const files = Number.parseInt(match[1], 10)
-  const changedLines = Number.parseInt(match[2], 10)
-  if (!Number.isSafeInteger(files) || files < 1 || !Number.isSafeInteger(changedLines) || changedLines < 1) {
-    fail(`Plan ${id} Review budget limits must be positive safe integers: ${file}`)
+  if (!Number.isSafeInteger(files) || files < 1) {
+    fail(`Plan ${id} Review budget limit must be a positive safe integer: ${file}`)
   }
-  return { files, changedLines, source: normalized }
+  return { files, source: `files<=${files}` }
 }
 
 function extractInScopePaths(text) {

@@ -38,7 +38,7 @@ function planBody() {
 - **Planned at**: commit \`abc1234\`, 2026-07-28
 - **Kind**: behavioral
 - **Parent objective**: Keep every worker inside its assigned worktree
-- **Review budget**: files<=2, changed_lines<=80
+- **Review budget**: files<=2
 
 ## Why this matters
 
@@ -88,7 +88,7 @@ Run \`node --test\`.
 - Modified symbols: \`src/worker.mjs\`.
 - Proof: \`node --test\`.
 - Expected unchanged behavior: coordination files remain unchanged.
-- Expected diff: at most 2 files and 80 changed lines.
+- Expected diff: at most 2 files.
 
 ## Done criteria
 
@@ -169,8 +169,7 @@ try {
     assert.equal(bundle.plan.title, "Keep assignment context local")
     assert.deepEqual(bundle.plan.reviewBudget, {
       files: 2,
-      changedLines: 80,
-      source: "files<=2, changed_lines<=80",
+      source: "files<=2",
     })
     assert.equal(bundle.planText, fixture.snapshot.planText)
     assert.equal(bundle.snapshotSha256, fixture.snapshot.snapshotSha256)

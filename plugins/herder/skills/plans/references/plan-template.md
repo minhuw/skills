@@ -7,11 +7,11 @@ Three properties make a plan executable by a weaker model:
 1. **Self-contained context** — everything needed is in the file: paths, code excerpts, conventions, commands.
 2. **Verification gates** — every step ends with a command and its expected result. The executor never has to *judge* whether it succeeded.
 3. **Hard boundaries and escape hatches** — explicit out-of-scope list, and "STOP and report" conditions instead of letting the model improvise when reality doesn't match the plan.
-4. **Bounded review surface** — one independently verifiable invariant, a numeric file/line ceiling, and an exact review map.
+4. **Bounded review surface** — one independently verifiable invariant, a numeric file ceiling, and an exact review map.
 
 File naming: `herder-plans/NNN-short-slug.md`, numbered in recommended execution order.
 
-Shape an objective before drafting. Prefer a dependency DAG of focused behavioral slices over one large plan or layer-by-layer fragments. A normal plan targets one package, 5–8 edited files, 300–500 changed lines, one focused verification command, and at most one public-contract transition. Split larger work through valid intermediate states such as characterization tests, additive seams, bounded caller migrations, and compatibility cleanup.
+Shape an objective before drafting. Prefer a dependency DAG of focused behavioral slices over one large plan or layer-by-layer fragments. A normal plan targets one package, 5–8 edited files, one focused verification command, and at most one public-contract transition. Split larger work through valid intermediate states such as characterization tests, additive seams, bounded caller migrations, and compatibility cleanup. Line count is never a scope or reviewability criterion.
 
 Compactness is part of executability. Target 500–900 words per local plan and never exceed 1,200; the manager reports the count and marks larger plans shape-incomplete. State each fact once, prefer dense bullets/tables, and do not repeat acceptance language across decisions, steps, test plan, review map, and done criteria. Inline only the evidence needed to locate and verify the change. Shared `CONTEXT.md` must stay at or below 1,600 words.
 
@@ -43,7 +43,7 @@ Compactness is part of executability. Target 500–900 words per local plan and 
 - **Planned at**: commit `<short SHA>`, <YYYY-MM-DD>
 - **Kind**: behavioral | mechanical | migration | spike
 - **Parent objective**: <the durable plan-set outcome this subplan advances>
-- **Review budget**: files<=8, changed_lines<=500
+- **Review budget**: files<=8
 
 ## Why this matters
 
@@ -167,8 +167,8 @@ Give the reviewer the shortest evidence path:
 - **Expected unchanged behavior**: nearby behavior the reviewer should prove was
   preserved without reopening unrelated code.
 - **Proof**: focused commands and named test cases.
-- **Expected diff**: estimated production/test files and changed lines within the
-  numeric Status budget.
+- **Expected diff**: expected production/test files, modified symbols, and
+  observable behavior within the numeric file budget.
 
 ## Done criteria
 
@@ -189,8 +189,8 @@ Use 3–6 plan-specific triggers. Stop and report back (do not improvise) if:
   (the codebase has drifted since this plan was written).
 - A step's verification fails twice after a reasonable fix attempt.
 - The fix appears to require touching an out-of-scope file.
-- The actual diff would exceed the declared review budget or cross another
-  package/bounded subsystem.
+- The actual diff would exceed the declared file budget, touch an out-of-scope
+  path, or cross another package/bounded subsystem.
 - You discover the assumption "<key assumption>" is false.
 
 ## Maintenance notes

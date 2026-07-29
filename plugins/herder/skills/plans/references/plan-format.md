@@ -56,10 +56,14 @@ Every plan follows the shared template and begins with:
 - **Planned at**: commit `<short SHA>`, <YYYY-MM-DD>
 - **Kind**: behavioral | mechanical | migration | spike
 - **Parent objective**: <one durable outcome shared by this plan set>
-- **Review budget**: files<=8, changed_lines<=500
+- **Review budget**: files<=8
 ```
 
 Use [plan-template.md](plan-template.md) for all required evidence, decisions, dependency guarantees, scope, ordered work, tests, review map, done criteria, STOP conditions, and maintenance guidance. New producers always write the three shape fields above plus `## Dependency contract` and `## Review map`. The numeric budget is a review-surface ceiling, not an estimate to ignore. Fire compares the actual diff with it before review.
+
+Legacy `files<=N, changed_lines<=N` values remain readable, but the manager
+normalizes them to `files<=N` and ignores the line-count component. Line count
+must never stop, block, repair, reject, or authorize a plan.
 
 When terminology or architecture decisions change, schedule the relevant repository `CONTEXT.md`, `CONTEXT-MAP.md`, or ADR update in scope, steps, and done criteria; keep implementation details out of glossaries. Do not confuse a repository domain `CONTEXT.md` with `herder-plans/CONTEXT.md`, which is only shared snapshot input.
 
@@ -67,15 +71,15 @@ The executor receives the repository and the compiled snapshot, not the Grill in
 
 ## 4. Plan Shaping
 
-Partition an objective into a dependency DAG before drafting prose. A normal subplan targets one independently verifiable invariant, one package or bounded subsystem, no more than 5–8 edited files, no more than roughly 300–500 changed lines, one focused verification command, and at most one public-contract or migration transition.
+Partition an objective into a dependency DAG before drafting prose. A normal subplan targets one independently verifiable invariant, one package or bounded subsystem, no more than 5–8 edited files, one focused verification command, and at most one public-contract or migration transition. Line count is descriptive only and never determines plan shape or reviewability.
 
 Target 500–900 words and require at most 1,200 words in each local plan. Shared `CONTEXT.md` is capped at 1,600 words. The manager includes local line/word counts in `shape`, marks larger content shape-incomplete, and leaves legacy content readable with warnings. Compact plans state each fact once and include only evidence needed to locate, implement, and verify their bounded outcome.
 
 Split when work contains multiple observable outcomes, independently releasable caller cohorts, ownership/package boundaries, more than one public transition, or no focused verification command. Every cut must leave integration valid. Prefer additive seams: characterize current behavior, add an adapter or expansion, migrate bounded caller groups, then remove compatibility code. Do not split by architectural layer when an intermediate layer cannot pass required gates.
 
-`mechanical` plans may declare a larger numeric budget only when the transformation is deterministic, the review map names the invariant and generated churn, and a repository command proves completeness. `migration` plans must be phased through backward-compatible states. `spike` plans produce evidence or a confirmed design and do not silently become implementation plans.
+`mechanical` plans may declare a larger numeric file budget only when the transformation is deterministic, the review map names the invariant and generated churn, and a repository command proves completeness. `migration` plans must be phased through backward-compatible states. `spike` plans produce evidence or a confirmed design and do not silently become implementation plans.
 
-Two ready plans with the same machine-readable in-scope path must be ordered by dependency or reshaped. The manager reports unordered overlap. Exceeding the budget or crossing an undeclared subsystem is a STOP condition and requires split/replan before broad review.
+Two ready plans with the same machine-readable in-scope path must be ordered by dependency or reshaped. The manager reports unordered overlap. Exceeding the file budget, touching an undeclared path, or crossing an undeclared subsystem is a STOP condition and requires split/replan before broad review.
 
 ## 5. Status
 

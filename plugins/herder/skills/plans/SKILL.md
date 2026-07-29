@@ -1,6 +1,6 @@
 ---
 name: plans
-description: Initialize, shape, validate, inspect, and manage Herder Markdown plan backlogs, compiled snapshots, and execution-token ledgers. Use when creating or repairing herder-plans/, checking plan granularity, review budgets, dependencies and readiness, changing plan tracking policy, inspecting execution status, reporting token coverage, or preparing plans for $herder:fire. Do not use to implement plans or orchestrate subagents.
+description: Initialize, shape, validate, inspect, and manage Herder Markdown plan backlogs, compiled snapshots, and execution-token ledgers. Use when creating or repairing herder-plans/, checking plan granularity, file budgets, dependencies and readiness, changing plan tracking policy, inspecting execution status, reporting token coverage, or preparing plans for $herder:fire. Do not use to implement plans or orchestrate subagents.
 ---
 
 # Herder Plans
@@ -35,8 +35,8 @@ node <skill-dir>/scripts/herder-plans.mjs <command> <remaining arguments> --pret
 
 - `init`: create the index if absent and locally exclude `/herder-plans/` via `.git/info/exclude`.
 - `init --track`: keep the backlog trackable and ignore only `herder-plans/.herder/`.
-- `validate`: check index/files, headings, metadata, review-budget syntax, dependency agreement, statuses, missing/unknown plans, cycles, and overlapping machine-readable write scopes. Legacy plans without new shape fields remain readable but produce warnings.
-- `shape`: report each plan's kind, parent objective, numeric review budget, write paths, local line/word count, shape issues, shared-context size, and cross-plan overlaps without changing files.
+- `validate`: check index/files, headings, metadata, file-budget syntax, dependency agreement, statuses, missing/unknown plans, cycles, and overlapping machine-readable write scopes. Legacy plans without new shape fields remain readable but produce warnings.
+- `shape`: report each plan's kind, parent objective, numeric file budget, write paths, local line/word count, shape issues, shared-context size, and cross-plan overlaps without changing files.
 - `status`: validate, then show totals, ready/waiting/terminal plans, and warnings.
 - `usage`: group the ledger by plan, role, and model/effort; numeric values are only known subtotals when coverage is incomplete.
 - `track`: remove the broad local exclude and create the internal `.gitignore`; do not stage files.
@@ -56,6 +56,11 @@ record-usage <plan-id|RUN> <role> [<plan-dir>] --attempt <id> --model <model> --
 ```
 
 Producers run `init`, shape the objective into focused independently verifiable nodes, follow both shared references, reread drafts for the template's semantic Producer self-review, then run both `shape` and `validate`. New plans always declare `Kind`, `Parent objective`, `Review budget`, `## Dependency contract`, and `## Review map`. Target 500–900 words per local plan and never exceed the manager's 1,200-word ceiling; shared context never exceeds 1,600 words.
+
+New plans use `Review budget: files<=N`. Legacy
+`files<=N, changed_lines<=N` values remain readable, but the manager discards
+the line-count component. LOC never determines plan scope, reviewability,
+repair authority, integration, or lifecycle status.
 
 Use optional `herder-plans/CONTEXT.md` only for verified context genuinely shared by multiple plans. Fire schedules only through `ready`, obtains a complete compiled snapshot through `snapshot`, and changes status only through `transition`. `snapshot.planText` is either the local plan or deterministic shared-context-plus-local-plan composition and includes input/content hashes. Because the backlog may be Git-ignored, Fire must inline `planText` rather than expect any plan file in worktrees.
 

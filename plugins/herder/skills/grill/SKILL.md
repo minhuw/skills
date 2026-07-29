@@ -59,18 +59,18 @@ If the user accepts your recommendations wholesale, fill unresolved choices but 
 
 After decisions settle and before confirmation, build an impact graph from the objective to affected packages, writable files and symbols, public contracts, callers, tests, migrations, documentation, and verification commands. Partition it at safe integration points.
 
-A normal subplan targets one independently verifiable invariant, one package or bounded subsystem, no more than 5–8 edited files, no more than roughly 300–500 changed lines, one focused verification command, and at most one public-contract or migration transition. Split multiple outcomes, packages, caller cohorts, or transitions. Prefer characterization tests, additive adapters or schema expansions, bounded migrations, and compatibility cleanup. Every subplan must leave required gates passing; never split by layer when the intermediate state is broken.
+A normal subplan targets one independently verifiable invariant, one package or bounded subsystem, no more than 5–8 edited files, one focused verification command, and at most one public-contract or migration transition. Split multiple outcomes, packages, caller cohorts, or transitions. Prefer characterization tests, additive adapters or schema expansions, bounded migrations, and compatibility cleanup. Every subplan must leave required gates passing; never split by layer when the intermediate state is broken. Line count is never a scope or reviewability criterion.
 
 Give each proposed node:
 
 - one outcome and parent objective;
 - `behavioral`, `mechanical`, `migration`, or `spike` kind;
-- numeric `files<=N, changed_lines<=N` review budget;
+- numeric `files<=N` review budget;
 - exact write paths and review map;
 - explicit consumed/provided dependency guarantees;
 - a focused verification command and safe intermediate state.
 
-Use a larger `mechanical` budget only for a deterministic transformation with a completeness proof. If the impact graph cannot be estimated inside a credible budget, propose a spike or characterization/seam plan first.
+Use a larger `mechanical` file budget only for a deterministic transformation with a completeness proof. If the impact graph cannot be bounded to credible files and paths, propose a spike or characterization/seam plan first.
 
 Keep each local plan compact: target 500–900 words and never exceed 1,200. State each fact once, omit non-load-bearing code excerpts, and use plan-set context for genuinely repeated facts. A long explanation is evidence that the node needs a sharper boundary, not a reason to waive the prose budget.
 

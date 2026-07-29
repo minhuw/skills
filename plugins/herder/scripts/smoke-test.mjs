@@ -362,7 +362,7 @@ ${usageSection}
 - **Planned at**: commit \`${plannedAt}\`, ${plannedDate}
 - **Kind**: behavioral
 - **Parent objective**: Expose package version metadata without changing default CLI behavior.
-- **Review budget**: files<=3, changed_lines<=100
+- **Review budget**: files<=3
 
 ## Why this matters
 
@@ -424,7 +424,7 @@ Add tests for exact \`--version\` output, successful exit, and the existing no-a
 - **Direct contracts**: both supported CLI invocations.
 - **Expected unchanged behavior**: the no-argument greeting.
 - **Proof**: \`npm test\` and both direct commands.
-- **Expected diff**: no more than 3 files and 100 changed lines.
+- **Expected diff**: no more than 3 files.
 
 ## Done criteria
 
@@ -465,7 +465,7 @@ function writeValidatePlan(project) {
 - **Planned at**: commit \`${plannedAt}\`, ${plannedDate}
 - **Kind**: behavioral
 - **Parent objective**: Expose package version metadata without changing default CLI behavior.
-- **Review budget**: files<=3, changed_lines<=100
+- **Review budget**: files<=3
 
 ## Why this matters
 
@@ -554,7 +554,7 @@ Extend \`test/cli.test.mjs\` with child-process assertions for the exact \`--ver
 - **Direct contracts**: version and no-argument process behavior.
 - **Expected unchanged behavior**: \`message()\` and default output.
 - **Proof**: \`npm test\` plus both direct commands.
-- **Expected diff**: no more than 3 files and 100 changed lines.
+- **Expected diff**: no more than 3 files.
 
 ## Done criteria
 
@@ -644,7 +644,8 @@ function main() {
     assert.match(grillText, /Producer self-review/)
     assert.match(grillText, /resume the one-question interview/)
     assert.match(grillText, /Shape the Plan Graph/)
-    assert.match(grillText, /files<=N, changed_lines<=N/)
+    assert.match(grillText, /files<=N/)
+    assert.doesNotMatch(grillText, /files<=N, changed_lines<=N/)
     assert.match(improveText, /Route user intent to .*herder:grill/)
     assert.match(improveText, /Producer self-review/)
     assert.match(improveText, /impact graph/)

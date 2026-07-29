@@ -35,7 +35,7 @@ function planBody(id, title, dependencies) {
 - **Planned at**: commit \`abc1234\`, 2026-07-15
 - **Kind**: behavioral
 - **Parent objective**: Exercise the plan manager fixture
-- **Review budget**: files<=4, changed_lines<=200
+- **Review budget**: files<=4
 
 ## Why this matters
 
@@ -85,7 +85,7 @@ Run the fixture test.
 - Modified symbols: the scoped fixture file only.
 - Proof: \`true\`.
 - Expected unchanged behavior: every other fixture remains unchanged.
-- Expected diff: at most 4 files and 200 changed lines.
+- Expected diff: at most 4 files.
 
 ## Done criteria
 
@@ -170,8 +170,7 @@ try {
   assert.equal(Number.isSafeInteger(shape.plans.find((plan) => plan.id === "002").planLines), true)
   assert.deepEqual(shape.plans.find((plan) => plan.id === "002").reviewBudget, {
     files: 4,
-    changedLines: 200,
-    source: "files<=4, changed_lines<=200",
+    source: "files<=4",
   })
 
   const implementerUsage = {
@@ -285,9 +284,20 @@ Keep shared fixture facts in one compiled snapshot input.
   const invalidBudgetPlan = path.join(invalidBudget, "002-second.md")
   fs.writeFileSync(
     invalidBudgetPlan,
-    fs.readFileSync(invalidBudgetPlan, "utf8").replace("files<=4, changed_lines<=200", "large"),
+    fs.readFileSync(invalidBudgetPlan, "utf8").replace("files<=4", "large"),
   )
   expectFailure(() => buildGraph(invalidBudget), /invalid Review budget/)
+
+  const legacyBudget = writeFixture(path.join(root, "legacy-budget"))
+  const legacyBudgetPlan = path.join(legacyBudget, "002-second.md")
+  fs.writeFileSync(
+    legacyBudgetPlan,
+    fs.readFileSync(legacyBudgetPlan, "utf8").replace("files<=4", "files<=4, changed_lines<=0"),
+  )
+  assert.deepEqual(buildGraph(legacyBudget).plans.find((plan) => plan.id === "002").reviewBudget, {
+    files: 4,
+    source: "files<=4",
+  })
 
   const legacyShape = writeFixture(path.join(root, "legacy-shape"))
   const legacyShapePlan = path.join(legacyShape, "002-second.md")
@@ -296,7 +306,7 @@ Keep shared fixture facts in one compiled snapshot input.
     fs.readFileSync(legacyShapePlan, "utf8")
       .replace("- **Kind**: behavioral\n", "")
       .replace("- **Parent objective**: Exercise the plan manager fixture\n", "")
-      .replace("- **Review budget**: files<=4, changed_lines<=200\n", "")
+      .replace("- **Review budget**: files<=4\n", "")
       .replace(/## Dependency contract[\s\S]*?(?=## Git workflow)/, "")
       .replace(/## Review map[\s\S]*?(?=## Done criteria)/, ""),
   )

@@ -59,7 +59,7 @@ Read every indexed compiled snapshot as though no sibling plan or prior conversa
 - current-state paths, line references, excerpts, commands, conventions, and planned commit are supported by the live repository;
 - drift is distinguished from a bad plan, with the affected scope identified;
 - in-scope and out-of-scope boundaries are exact and do not conflict with steps or done criteria;
-- `Kind`, `Parent objective`, and numeric review budget fit the work; large mechanical budgets have deterministic transformations and completeness proofs;
+- `Kind`, `Parent objective`, and numeric file budget fit the work; large mechanical file budgets have deterministic transformations and completeness proofs; any legacy changed-line budget is ignored;
 - the local plan is concise and non-repetitive, targets 500–900 words, never exceeds 1,200 words, and any shared context stays within 1,600 words;
 - the dependency contract names consumed and provided guarantees and leaves a gate-passing intermediate state;
 - the review map names exact modified symbols, direct contracts, preserved behavior, focused proof, and a credible expected diff;
