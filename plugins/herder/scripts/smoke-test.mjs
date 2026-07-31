@@ -656,6 +656,8 @@ function main() {
     assert.match(fireText, /--finalize/)
     assert.match(fireText, /Only the root coordinator may invoke the cleanup runner/)
     assert.match(fireText, /Keep integration history linear/)
+    assert.match(fireText, /Default parallel limit: `5`/)
+    assert.match(fireText, /global role-agnostic pool for Implementer, Reviewer, Judge, and Saver attempts/)
     assert.match(configureText, /Ask one focused question at a time/)
     assert.match(configureText, /live validation makes one minimal call per unique/)
     assert.match(configureText, /Do not accept an API key in chat/)
@@ -818,7 +820,7 @@ function main() {
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
 
         const originalHead = run("git", ["rev-parse", "HEAD"], { cwd: project }).stdout.trim()
-        const fireMessage = runCodex("02-fire-run", `Use $herder:fire herder-plans --max-parallel 1. Execute the validated backlog end to end in this disposable repository. Use ${fireRoot} as the worktree root. Do not push or merge into the current branch. Follow the skill exactly and report the integration branch, verification, and token usage.`, context, {
+        const fireMessage = runCodex("02-fire-run", `Use $herder:fire herder-plans. Exercise the default parallel limit and execute the validated backlog end to end in this disposable repository. Use ${fireRoot} as the worktree root. Do not push or merge into the current branch. Follow the skill exactly and report the integration branch, verification, and token usage.`, context, {
           ephemeral: false,
         }).message
         assert.match(fireMessage, /completed|done|integration/i)

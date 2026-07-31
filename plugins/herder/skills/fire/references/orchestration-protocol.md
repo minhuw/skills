@@ -32,6 +32,8 @@ Resolve:
 - `base_commit`: current user-checkout `HEAD` for a new plan set, or `base_ref` for resume.
 - `worktree_root`: a directory outside the user's checkout, with integration at `<worktree_root>/<plan_name>/integration` and plans at `<worktree_root>/<plan_name>/<id>`.
 - `gate_log_root`: `<worktree_root>/<plan_name>/logs`, outside every Git worktree.
+- `parallel_limit`: explicit positive integer `--max-parallel`, otherwise `5`, capped by host-available worker capacity. It is one global limit across Implementer, Reviewer, Judge, and Saver roles.
+- `scheduler_state`: active role attempt per plan, queued mutation work, completed branches waiting for review, and the optional single transaction-lane owner/phase. One claimed transaction lane reserves one parallel slot, including its coordinator-only restack and gate phases; its active Reviewer or Judge consumes that reservation rather than another slot.
 - `usage_attempts`: stable per-role ordinals reconstructed from the README ledger on resume. Use attempt IDs `<plan-name>-<plan-id|RUN>-<role>-<ordinal>`; never reuse an ID.
 - `recovery_state`: per-plan generation IDs, whether the single substantive Saver attempt is consumed, one clarification cycle, bounded non-capacity interruption restarts, and transient-capacity backoff state.
 - `review_state`: per-plan-generation substantive Implementation attempt count out of five, separate review-pass count, exact reviewed base/HEAD/tree/status, ordered repair deltas and guidance, per-review Judge outcomes, leak records, and a coordinator-owned stable finding ledger. Use a separate ledger with the same rules for the final cross-plan audit.
@@ -106,7 +108,9 @@ Immediately before dispatching any worker, and again after it becomes terminal b
 
 ## 4. Dispatch Ready Plans
 
-At each scheduling pass:
+Use one event-driven, role-agnostic worker pool for the whole run. The occupied capacity is every active Implementer or Saver outside the transaction lane plus the lane's single reservation; a Reviewer or Judge running in the lane uses that reservation. Never let occupied capacity exceed `parallel_limit`, and never give one plan more than one active owner.
+
+At each scheduling pass, preserve or claim the transaction-lane reservation before allocating mutation slots, then prepare fresh implementation work for the remaining capacity:
 
 1. Run `node <plan_manager> ready <plan_dir> --pretty` from the coordination checkout. Route `blocked` and `inProgress` plans through resume semantics; never treat either as fresh work or dispatch Saver without reconstructed five-attempt and Judge evidence.
 2. Select `TODO` plans whose dependencies are all `DONE`.
@@ -121,9 +125,18 @@ At each scheduling pass:
 
    Require the returned path to be inside the exact plan worktree and Git-ignored, retain its bundle SHA-256 as generation evidence, and immediately verify it. The helper must leave visible Git status unchanged. Never hand-create, overwrite, or repair this bundle.
 7. Mark selected plans `IN PROGRESS` through `plan_manager transition` as a batch before dispatch; workers never edit the index.
-8. Dispatch up to available concurrency. Independent plan implementers may run concurrently, but one plan has only one active owner.
+8. Dispatch initial Implementers only into unoccupied global slots. Independent mutation attempts may run concurrently, but one plan has only one active owner.
 
 Do not dispatch a dependent merely because an implementer finished; wait for reviewed integration, a reachable completion ref, and `DONE` status.
+
+After every worker event, drain all queued terminal updates, record and verify their evidence, then run another scheduling pass before waiting again:
+
+1. Continue the current transaction-lane chain first: a completed Reviewer is followed by Judge in the same reserved slot, and a retryable read-only transport failure retains the reservation.
+2. If the lane is free and a completed implementation or recovery branch is ready for restack/gates/review, claim the lane for the oldest dependency-order candidate and reserve one slot immediately. Do not fill that slot with new mutation work while coordinator gates run.
+3. Fill every other available slot with dependency-ready initial Implementers, Judge-authorized guided-repair Implementers, or eligible Savers in stable dependency/attempt order.
+4. Wait only after no lane transition, terminal result, or eligible dispatch can make progress. Never wait for all implementations in a wave to finish before starting the first review transaction.
+
+Mixed roles are intentional. With effective limit `5`, one plan may use the reserved lane for Reviewer or Judge while up to four different plans run Implementer, guided-repair Implementer, or Saver attempts. Two plans may never restack, gate, review, Judge, or advance integration concurrently.
 
 ### Implementer prompt contract
 
@@ -157,13 +170,13 @@ Tell the worker to use `unknown` for values not exposed by the host and never es
 
 ### Coordinator wait discipline
 
-After dispatching native Codex workers, call native `wait_agent` with `timeout_ms: 1800000`. For Orca workers, call `orca orchestration check --wait --types worker_done,escalation,decision_gate --timeout-ms 1800000` from the recorded controller terminal. Either is a long poll: an update ends the wait immediately; otherwise the timeout supplies a thirty-minute heartbeat. The timeout caps idle wakeups, not result-delivery latency. Process every queued update before waiting again.
+After dispatching native Codex workers, call native `wait_agent` with `timeout_ms: 1800000`. For Orca workers, call `orca orchestration check --wait --types worker_done,escalation,decision_gate --timeout-ms 1800000` from the recorded controller terminal. Either is a long poll: an update ends the wait immediately; otherwise the timeout supplies a thirty-minute heartbeat. The timeout caps idle wakeups, not result-delivery latency. Process every queued update and immediately backfill eligible global slots before waiting again.
 
 A timeout is not a state change. If no local work became ready, do not reread transcripts, request status, or call `list_agents`; issue the next long wait. Use `list_agents` only for initial bookkeeping or reconciliation after an ambiguous, missing, or contradictory terminal event. On Claude Code, use the native blocking wait with the same event-first behavior.
 
 ## 5. Restack, Verify, Review, and Integrate
 
-Never test a plan by first advancing integration. Serialize restacking, coordinator gates, review, and integration advancement across the plan set. Once one plan enters this lane, do not advance integration for another plan until the transaction approves, enters recovery, or stops.
+Never test a plan by first advancing integration. Serialize restacking, coordinator gates, Reviewer, Judge, and integration advancement through one transaction lane across the plan set. Claiming the lane reserves one global slot until the transaction approves and integrates, releases into mutation recovery, or stops. The lane serializes review/integration transactions, not unrelated mutation work: keep other slots available to Implementer and Saver attempts on different plans, and do not wait for a mutation wave to drain before claiming the lane.
 
 Run every coordinator-owned verification gate through:
 
@@ -206,7 +219,7 @@ Allow at most five substantive normal Implementation attempts per generation, an
 
 1. An `INITIAL` or `GUIDED_REPAIR` attempt that may have mutated the branch consumes one Implementation attempt even when its envelope is missing or it fails before review. A proven clean host interruption is free. A restack whose patch is unchanged consumes no attempt.
 2. Every completed, gate-passing, file-scoped frozen branch receives a Reviewer pass followed by Judge. The first evidence-complete review in a generation uses `DISCOVERY` against the complete plan diff regardless of the Implementation attempt ordinal. This is the only broad review.
-3. For Judge `REPAIR`, when an Implementation attempt remains, dispatch a fresh `plan_implementer` in `GUIDED_REPAIR` mode on the same branch/worktree. Give it only the original compiled plan, Judge-authorized blocking IDs, direct evidence, and narrowed repair contracts. Suggested directions are non-binding; the plan and observable invariants remain authoritative.
+3. For Judge `REPAIR`, when an Implementation attempt remains, release the transaction-lane reservation and dispatch a fresh `plan_implementer` in `GUIDED_REPAIR` mode through the global pool on the same branch/worktree. Give it only the original compiled plan, Judge-authorized blocking IDs, direct evidence, and narrowed repair contracts. Suggested directions are non-binding; the plan and observable invariants remain authoritative. Its terminal branch queues to reacquire the lane for gates and targeted verification.
 4. Rerun all gates and changed-path/file-count measurement. Every review pass after the first uses `VERIFICATION`: verify only open authorized blocker IDs and inspect only the new repair delta for regressions. Never reopen broad discovery. Diff line counts may be reported descriptively but never gate the plan.
 
 If verification discovers a new evidence-complete `PATCH_REGRESSION` in the repair delta, add it to the ledger and let Judge decide whether it authorizes another guided attempt. Judge sends valid findings outside the original task and repair delta to `leak/` rather than sending Implementer toward B or C. If actionable in-scope blockers remain after attempt 5, Judge may select the one-shot Saver path. Never start a sixth normal Implementation attempt.
@@ -271,7 +284,7 @@ Integrate only after Judge `DONE`, effective scope `PASS`, all required checks p
 
 After fast-forward, require integration HEAD to equal approved plan HEAD. Create `completion_ref(<id>)` with an absent-old-value guard, verify it is reachable, then transition the plan to `DONE`. If transition fails, stop dependency dispatch and reconcile from the private ref. After `DONE`, prove no agent can access the plan worktree, unlock it, and invoke cleanup with `--plan <id>`. Cleanup failure is a maintenance warning, not a rollback.
 
-Any restack, gate, reviewer mutation/transport failure, Judge failure, or compare-and-advance failure leaves integration unchanged on the same plan branch/worktree. Retry proven read-only transport failures without consuming an Implementation attempt; otherwise use the next normal Implementer attempt with exact operational evidence. An evidence-complete Reviewer `REVISE` is not an operational failure: it always enters Judge gating above.
+Any restack, gate, reviewer mutation/transport failure, Judge failure, or compare-and-advance failure leaves integration unchanged on the same plan branch/worktree. Retry proven read-only transport failures in the reserved lane without consuming an Implementation attempt; otherwise release the lane before dispatching the next normal Implementer attempt through the global pool with exact operational evidence. An evidence-complete Reviewer `REVISE` is not an operational failure: it always enters Judge gating above.
 
 ## 6. One-shot Recovery Implementation
 
@@ -289,7 +302,7 @@ Dispatch Saver only when all of these are true:
 4. No unresolved user input, external authority, declared path/file-scope violation, or containment failure prevents safe work.
 5. The generation's one substantive Saver attempt is unused.
 
-Never ask Saver to reconstruct failed work elsewhere. Dispatch it in the exact plan worktree containing the current committed, dirty, conflicted, or interrupted state. Do not create a recovery branch. Before dispatch, record integration HEAD; plan branch HEAD and tree; exact porcelain status; generation and snapshot SHA-256; all five Implementation attempt outcomes; every completed review/Judge outcome; Saver attempt ordinal; and any rebase state. Never abort a rebase, reset, clean, stash, or discard to make recovery easier.
+Never ask Saver to reconstruct failed work elsewhere. Release any transaction-lane reservation for that plan, then dispatch Saver through an available global pool slot in the exact plan worktree containing the current committed, dirty, conflicted, or interrupted state. Saver may overlap unrelated mutation attempts and another plan's single review transaction, but never another role on its own plan. Do not create a recovery branch. Before dispatch, record integration HEAD; plan branch HEAD and tree; exact porcelain status; generation and snapshot SHA-256; all five Implementation attempt outcomes; every completed review/Judge outcome; Saver attempt ordinal; and any rebase state. Never abort a rebase, reset, clean, stash, or discard to make recovery easier.
 
 Give Saver only:
 
@@ -325,7 +338,7 @@ For a proven interruption, record exact usage, consume no substantive or clarifi
 
 Handle Saver outcomes:
 
-- `REPAIRED`: consume the one Saver attempt, record its commits/delta, rerun all gates and review-surface measurement, then run one targeted `VERIFICATION` Reviewer and Judge pass over the authorized IDs plus only the Saver delta. Never reopen broad discovery. Judge may return `DONE`, record leaks, request one irreducible input, or `BLOCKED`; it may not authorize another normal repair or Saver attempt.
+- `REPAIRED`: consume the one Saver attempt, record its commits/delta, and queue the branch to reacquire the transaction lane. When acquired, rerun all gates and review-surface measurement, then run one targeted `VERIFICATION` Reviewer and Judge pass over the authorized IDs plus only the Saver delta. Never reopen broad discovery. Judge may return `DONE`, record leaks, request one irreducible input, or `BLOCKED`; it may not authorize another normal repair or Saver attempt.
 - `NEEDS_INPUT`: accept only when pre/post Git evidence proves no mutation. Ask one irreducible question and redispatch the same one-shot recovery with the answer; allow one clarification cycle. Mutation or a second question consumes the attempt and transitions to `BLOCKED`.
 - `TERMINAL`, malformed output, or a failure that may have mutated the worktree consumes the one Saver attempt and transitions to `BLOCKED` with exact evidence.
 
@@ -344,6 +357,8 @@ Use `plan_manager usage` for reporting. Always report coverage beside known subt
 ## 8. Resume Semantics
 
 Run namespace preflight in `resume` mode, then reconstruct from Plans status, `base_ref`, completion/checkpoint refs, the exact integration/plan branches, recorded assignment paths and bundle hashes, worktree leases/status/rebase state, persisted child evidence, gate evidence, reviewer envelopes, finding IDs, and usage rows. Conversation history is never a dependency; every replacement child receives a fresh self-contained task plus the verified worktree-local assignment reference.
+
+Reconstruct `scheduler_state`; never store it as a second source of truth. Count every proven-live role attempt against `parallel_limit`, preserve its one-plan owner lease, and treat a proven-live Reviewer or Judge as holding the transaction-lane reservation. A crashed coordinator-only lane phase holds no durable reservation: queue its unchanged branch to reacquire the lane and rerun the exact gates. If role ownership or lane ownership is ambiguous, preserve the affected plan and stop it rather than risk duplicate work.
 
 Before classifying or redispatching any retained plan branch, verify its assignment bundle against the originally recorded bundle SHA-256. Do not derive a new trusted hash from the file itself and do not rebuild it from the possibly changed source plan. If the original hash cannot be reconstructed uniquely from persisted coordinator/dispatch evidence, or if the file is missing or mismatched, preserve the worktree and stop that plan for reconciliation.
 
