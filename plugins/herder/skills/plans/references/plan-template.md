@@ -168,7 +168,9 @@ Give the reviewer the shortest evidence path:
   preserved without reopening unrelated code.
 - **Proof**: focused commands and named test cases.
 - **Expected diff**: expected production/test files, modified symbols, and
-  observable behavior within the numeric file budget.
+  observable behavior within the numeric file target. Name likely companion
+  test or documentation paths; implementation-time discovery has at most a
+  three-file contingency and requires explicit justification and adjudication.
 
 ## Done criteria
 
@@ -177,7 +179,8 @@ Machine-checkable; use 3–8 non-duplicative criteria. ALL must hold:
 - [ ] `pnpm typecheck` exits 0
 - [ ] `pnpm test` exits 0; new tests for <X> exist and pass
 - [ ] `grep -rn "<old pattern>" src/` returns no matches
-- [ ] No files outside the in-scope list are modified (`git status`)
+- [ ] Every modified path is declared in scope or is a directly necessary,
+  justified companion path accepted under the three-file contingency
 - [ ] Required `CONTEXT.md` or ADR changes, when applicable, are present and match the accepted decision
 - [ ] All done criteria above pass; the Herder coordinator owns status updates
 
@@ -188,9 +191,10 @@ Use 3–6 plan-specific triggers. Stop and report back (do not improvise) if:
 - The code at the locations in "Current state" doesn't match the excerpts
   (the codebase has drifted since this plan was written).
 - A step's verification fails twice after a reasonable fix attempt.
-- The fix appears to require touching an out-of-scope file.
-- The actual diff would exceed the declared file budget, touch an out-of-scope
-  path, or cross another package/bounded subsystem.
+- The fix appears to require an explicitly out-of-scope path.
+- The actual diff would exceed the target plus three files, discover more than
+  three companion paths, overlap an unordered plan, add an undeclared public
+  transition, or cross another package/bounded subsystem.
 - You discover the assumption "<key assumption>" is false.
 
 ## Maintenance notes

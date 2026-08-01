@@ -50,7 +50,7 @@ Complete every check before creating a ref, branch, or worktree:
 
 1. Confirm `git rev-parse --show-toplevel` and `git worktree list` succeed.
 2. Run `node <checkout_guard> --repo <repo_root> --exclude <plan_dir> --pretty`; require `ok: true`, retain its `stateToken`, and never expose file contents. The guard fingerprints HEAD, symbolic branch, logical index state, Git status, and the bytes of pre-existing dirty tracked and untracked files while allowing only coordinator-owned plan-directory writes. A racing checkout fails preflight.
-3. Run `node <plan_manager> validate <plan_dir> --pretty` and reject graph errors. Run `node <plan_manager> shape <plan_dir> --pretty`; reject invalid file budgets, local-plan/shared-context prose overflow, and unordered overlapping ready-plan write scopes. A legacy plan with missing shape fields remains resumable, but assign the conservative fallback `files<=8` and report the compatibility warning. Accept legacy `changed_lines<=N` text for compatibility but ignore it completely: line counts are never a scope, STOP, review, repair, Saver, or integration criterion.
+3. Run `node <plan_manager> validate <plan_dir> --pretty` and reject graph errors. Run `node <plan_manager> shape <plan_dir> --pretty`; reject invalid file budgets, local-plan/shared-context prose overflow, and unordered overlapping ready-plan write scopes. Treat `files<=N` as the expected target, with the manager-derived fixed contingency of three files and hard ceiling `N+3`. A legacy plan with missing shape fields remains resumable, but assign the conservative legacy fallback target `files<=8`, contingency `3`, and hard ceiling `11`, and report the compatibility warning. Accept legacy `changed_lines<=N` text for compatibility but ignore it completely: line counts are never a scope, STOP, review, repair, Saver, or integration criterion.
 4. Confirm every indexed non-rejected plan file exists and is readable.
 5. Run `node <namespace_runner> --repo <repo_root> --plan-dir <plan_dir> [--plan-name <plan_name>] --mode <fire|resume> --pretty`.
 6. For fresh `fire`, require the complete branch and private-ref namespace to be unused. For `resume`, require the integration branch and base ref, and reject unknown, unindexed, parent-blocking, or contradictory state. A namespace conflict is a deliberate stop: report every conflict and tell the user to inspect it, explicitly resume it, clean it, or choose another name. Never invent a timestamp, adopt a branch, delete evidence, or overwrite a ref.
@@ -145,12 +145,12 @@ Give the resolved implementer:
 - its role and prohibition on spawning agents;
 - the absolute plan worktree path and branch;
 - the recorded branch base SHA;
-- the absolute assignment-bundle path inside that worktree, exact bundle SHA-256, compiled `snapshotSha256`, and numeric file budget; require it to verify the bundle hash and read `planText` locally before any repository action;
+- the absolute assignment-bundle path inside that worktree, exact bundle SHA-256, compiled `snapshotSha256`, expected file target, fixed contingency, and hard ceiling; require it to verify the bundle hash and read `planText` locally before any repository action;
 - applicable repository instructions;
 - an instruction never to read the coordinator checkout, source `plan_dir`, sibling worktrees, common Git directory, or another plan file as assignment input;
 - an instruction never to edit the plan index or statuses;
 - the stable attempt ID and resolved model/effort attribution;
-- mode `INITIAL`, requirements to stay in declared paths and within the file budget, honor non-LOC STOP conditions, run every gate, and commit all intended changes. Explicitly state that any legacy `changed_lines` value or LOC-based STOP text is nonbinding and must not stop or block the attempt;
+- mode `INITIAL`, requirements to stay in declared paths when possible and within the hard file ceiling, honor non-LOC STOP conditions, run every gate, and commit all intended changes. Give the expected target, three-file contingency, and hard ceiling. Permit an implementation-discovered companion path only when it directly supports the original outcome, remains in the declared bounded subsystem, adds no unplanned public-contract or migration transition, and does not overlap an unordered live sibling plan. Require an explicit necessity and plan-step/done-criterion link for every discovered path. Explicitly state that any legacy `changed_lines` value or LOC-based STOP text is nonbinding and must not stop or block the attempt;
 - a requirement that commit messages describe only repository changes and reasons, without Herder or orchestration metadata;
 - a requirement to summarize checks without pasting logs;
 - this exact response shape:
@@ -161,6 +161,7 @@ COMMITS: <ordered SHAs, or none>
 ADDRESSED: <finding IDs, or none>
 CHECKS: <command — result, one per line>
 FILES CHANGED: <paths>
+DISCOVERED_PATHS: <one `<path> — necessity=...; plan_link=...` entry per changed path not declared in scope, or none>
 STOPPED BECAUSE: <only when not COMPLETE>
 NOTES: <material facts only>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
@@ -195,7 +196,7 @@ For each completed plan branch:
 3. If its recorded base differs from current integration HEAD, create a unique immutable checkpoint ref naming the pre-restack HEAD with an absent-old-value guard. Restack the same checked-out plan branch in place with `git rebase --onto <integration-head> <recorded-base>`. Never merge integration into it. A conflict or interrupted rebase remains in that exact worktree and uses the next normal guided Implementer attempt when available; after attempt 5 it must pass through Judge before one-shot Saver eligibility. Never abort, reset, clean, or create another branch merely to recover cleanliness.
 4. After restacking, require clean status, a merge-free unique range from the new integration base, and patch equivalence with the pre-restack checkpoint using `git cherry`. Record the new exact base, HEAD, tree, and commit list.
 5. Run every plan done criterion and applicable project-wide gate in the plan worktree.
-6. Measure the exact changed-path surface from recorded integration base to plan HEAD with Git name-status/name-only evidence: deduplicate changed paths and count each path once. Use the snapshot's numeric file budget, or the conservative legacy fallback. A rename counts once. Any changed path outside the declared scope or any file-count overflow stops before broad review and requires a user-authorized, validated narrower plan generation through Grill or Improve. It never authorizes Saver. Do not compute or enforce a changed-line ceiling; numstat or LOC may be reported descriptively but never gates the plan.
+6. Measure the exact changed-path surface from recorded integration base to plan HEAD with Git name-status/name-only evidence: deduplicate changed paths and count each path once. Use the snapshot's expected target, three-file contingency, and hard ceiling, or the conservative legacy values `8/3/11`. A rename counts once. Classify changed paths absent from the machine-readable in-scope paths as discovered. Hard-stop before broad review and require a user-authorized validated replan when the actual count exceeds the hard ceiling, more than three paths were discovered, an explicitly out-of-scope path was changed, a discovered path crosses the declared package/bounded subsystem or adds an unplanned public-contract/migration transition, or it overlaps the declared or actual scope of an unordered nonterminal sibling. It never authorizes Saver. Otherwise forward the Implementer's justification, expected target, hard ceiling, actual count, and discovered paths to Reviewer and Judge for explicit adjudication; an actual count above `N` alone is not a violation. Do not compute or enforce a changed-line ceiling; numstat or LOC may be reported descriptively but never gates the plan.
 7. Dispatch the read-only reviewer against the complete diff from recorded integration base to plan HEAD. Record clean status and tree before dispatch; prove base, HEAD, tree, status, and assignment-bundle verification are unchanged afterward. Reviewer mutation is failure even when its verdict says `APPROVE`.
 
 Do not add Herder metadata to a commit subject or body.
@@ -237,7 +238,7 @@ Give the reviewer:
 - the absolute worktree-local assignment path and exact bundle SHA-256; require it to verify the hash and read the complete compiled plan from `planText`;
 - exact integration-base, plan-HEAD, and tree SHAs;
 - actual checks and compact results;
-- numeric file budget and actual changed paths/file count; legacy line-count metadata is ignored;
+- expected file target, three-file contingency, hard ceiling, actual changed paths/file count, discovered paths, and Implementer justifications; legacy line-count metadata is ignored;
 - review mode, Implementation attempt number, review-pass number, remaining attempt count, and complete finding ledger;
 - for verification, exact repair commit range and open blocker IDs;
 - stable attempt ID and model/effort attribution;
@@ -248,6 +249,7 @@ Give the reviewer:
 VERDICT: APPROVE | REVISE | BLOCK
 FINDINGS: <ordered `[<existing-id|NEW>][P0|P1|P2|P3][BLOCKING|ADVISORY][PLAN_REQUIREMENT|PATCH_REGRESSION|FOLLOWUP|INVALID] file:line — issue; scenario=...; evidence=...; introduced_by=...` entries, or none>
 FIX_GUIDANCE: <one `[finding-id] observed=...; expected=...; reproduction=...; constraints=...; suggested_direction=...` entry per open blocker, or none>
+DISCOVERED_PATHS: <one `<path> — JUSTIFIED|SCOPE_VIOLATION — reason` entry per discovered path, or none>
 SCOPE: PASS | FAIL
 CHECKS: <independently verified commands/results>
 RATIONALE: <concise>
@@ -256,15 +258,16 @@ USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; ou
 
 ### Judge prompt contract
 
-Judge is independent and read-only. Dispatch it after every Reviewer response, including `APPROVE`, and once at attempt-budget exhaustion when the last attempt cannot reach review. It classifies evidence rather than personalities. Give it the absolute worktree-local assignment path and exact bundle/snapshot hashes, exact base/HEAD/tree/status, current Implementation attempt, review-pass count, remaining five-attempt budget, file budget and actual changed paths/file count, all required gate evidence, the complete ledger, all completed attempt/review envelopes, latest repair delta, reviewer guidance when present, and whether the single Saver attempt remains. Require Judge to verify the local bundle before reading its compiled plan; never give it the source `plan_dir` as evidence. Tell Judge that LOC is nonbinding even when legacy plan text contains a changed-line limit.
+Judge is independent and read-only. Dispatch it after every Reviewer response, including `APPROVE`, and once at attempt-budget exhaustion when the last attempt cannot reach review. It classifies evidence rather than personalities. Give it the absolute worktree-local assignment path and exact bundle/snapshot hashes, exact base/HEAD/tree/status, current Implementation attempt, review-pass count, remaining five-attempt budget, expected file target, contingency, hard ceiling, actual changed paths/file count, every discovered path with Implementer justification and Reviewer classification, all required gate evidence, the complete ledger, all completed attempt/review envelopes, latest repair delta, reviewer guidance when present, and whether the single Saver attempt remains. Require Judge to verify the local bundle before reading its compiled plan; never give it the source `plan_dir` as evidence. Tell Judge that LOC is nonbinding even when legacy plan text contains a changed-line limit.
 
-Judge cannot override a failed required gate, explicit non-LOC done criterion, declared path/file-scope violation, or evidence-complete patch regression. It must ignore changed-line counts. It returns:
+Judge cannot override a failed required gate, explicit non-LOC done criterion, hard-ceiling or hard-scope violation, or evidence-complete patch regression. It independently accepts a discovered companion only when evidence proves it is directly necessary for the original outcome, linked to a plan step or done criterion, inside the declared bounded subsystem, free of an unplanned public transition, and nonoverlapping with unordered live work. It must ignore changed-line counts. It returns:
 
 ```text
 DECISION: DONE | REPAIR | SAVER | NEEDS_INPUT | BLOCKED
 FINDINGS: <ordered `[finding-id][BLOCKING_IN_SCOPE|NONBLOCKING_IN_SCOPE|DEFERRED_OUT_OF_SCOPE|REJECTED][PLAN_REQUIREMENT|PATCH_REGRESSION|FOLLOWUP|INVALID|NEEDS_INPUT] decision; evidence=...` entries, or none>
 AUTHORIZED_BLOCKERS: <ordered finding IDs, or none>
 REPAIR_CONTRACTS: <one `[finding-id] observed=...; expected=...; reproduction=...; constraints=...` entry per authorized blocker, or none>
+DISCOVERED_PATHS: <one `<path> — ACCEPTED|REJECTED — evidence` entry per discovered path, or none>
 LEAKS: <one `[finding-id] title=...; problem=...; evidence=...; acceptance=...; non_goals=...; dedupe_key=...` entry per deferred finding, or none>
 QUESTION: <one focused question only for NEEDS_INPUT>
 CHECKS: <independently verified commands/results>
@@ -272,7 +275,7 @@ RATIONALE: <concise original-task closure rationale>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-- `DONE`: normalize the original task to approval after coordinator gates; no authorized blocker remains.
+- `DONE`: normalize the original task to approval after coordinator gates; no authorized blocker remains, the actual file count is within the hard ceiling, and every discovered path is explicitly accepted.
 - `REPAIR`: when an Implementation attempt remains, dispatch Implementer only with Judge-authorized IDs and narrowed repair contracts.
 - `SAVER`: only after attempt 5, dispatch Saver when the original task remains incomplete, actionable Judge-authorized blockers remain, and its one substantive attempt is unused.
 - `NEEDS_INPUT`: ask the one irreducible product/authority question, then redispatch Judge with the answer.
@@ -288,7 +291,7 @@ Any restack, gate, reviewer mutation/transport failure, Judge failure, or compar
 
 ## 6. One-shot Recovery Implementation
 
-Saver is an optional fresh recovery Implementer, not the default handler for failed work. While any of the five normal Implementation attempts remain, give ordinary implementation, restack, gate, dirty-state, or reconciliation failures to a fresh `plan_implementer` in `GUIDED_REPAIR` mode on the same branch/worktree with exact coordinator-proven evidence. That substantive mutation attempt consumes the next normal attempt and, when it reaches a frozen passing state, must be followed by Reviewer and Judge. Declared path/file-scope violations, missing authority, and containment failure are not Saver work; LOC is never relevant.
+Saver is an optional fresh recovery Implementer, not the default handler for failed work. While any of the five normal Implementation attempts remain, give ordinary implementation, restack, gate, dirty-state, or reconciliation failures to a fresh `plan_implementer` in `GUIDED_REPAIR` mode on the same branch/worktree with exact coordinator-proven evidence. That substantive mutation attempt consumes the next normal attempt and, when it reaches a frozen passing state, must be followed by Reviewer and Judge. Saver inherits the expected target, three-file contingency, hard ceiling, and accepted discovered-path set; it may not expand that set. Hard path/file-scope violations, missing authority, and containment failure are not Saver work; LOC is never relevant.
 
 An **agent attempt** is one host spawn and always receives a unique usage row. A **substantive implementation attempt** is a result or failed attempt that may have mutated the worktree. A proven clean host interruption is free only when every no-mutation invariant below holds.
 
@@ -299,7 +302,7 @@ Dispatch Saver only when all of these are true:
 1. Five substantive normal Implementation attempts are exhausted.
 2. The latest read-only Judge returns `SAVER` because the immutable original task is still incomplete.
 3. At least one actionable `BLOCKING_IN_SCOPE` `PLAN_REQUIREMENT` or `PATCH_REGRESSION` remains with a narrowed repair contract.
-4. No unresolved user input, external authority, declared path/file-scope violation, or containment failure prevents safe work.
+4. No unresolved user input, external authority, hard path/file-scope violation, or containment failure prevents safe work.
 5. The generation's one substantive Saver attempt is unused.
 
 Never ask Saver to reconstruct failed work elsewhere. Release any transaction-lane reservation for that plan, then dispatch Saver through an available global pool slot in the exact plan worktree containing the current committed, dirty, conflicted, or interrupted state. Saver may overlap unrelated mutation attempts and another plan's single review transaction, but never another role on its own plan. Do not create a recovery branch. Before dispatch, record integration HEAD; plan branch HEAD and tree; exact porcelain status; generation and snapshot SHA-256; all five Implementation attempt outcomes; every completed review/Judge outcome; Saver attempt ordinal; and any rebase state. Never abort a rebase, reset, clean, stash, or discard to make recovery easier.

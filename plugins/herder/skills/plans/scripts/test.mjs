@@ -170,6 +170,8 @@ try {
   assert.equal(Number.isSafeInteger(shape.plans.find((plan) => plan.id === "002").planLines), true)
   assert.deepEqual(shape.plans.find((plan) => plan.id === "002").reviewBudget, {
     files: 4,
+    contingencyFiles: 3,
+    hardCeilingFiles: 7,
     source: "files<=4",
   })
 
@@ -288,6 +290,14 @@ Keep shared fixture facts in one compiled snapshot input.
   )
   expectFailure(() => buildGraph(invalidBudget), /invalid Review budget/)
 
+  const overflowingBudget = writeFixture(path.join(root, "overflowing-budget"))
+  const overflowingBudgetPlan = path.join(overflowingBudget, "002-second.md")
+  fs.writeFileSync(
+    overflowingBudgetPlan,
+    fs.readFileSync(overflowingBudgetPlan, "utf8").replace("files<=4", `files<=${Number.MAX_SAFE_INTEGER}`),
+  )
+  expectFailure(() => buildGraph(overflowingBudget), /plus contingency must be a safe integer/)
+
   const legacyBudget = writeFixture(path.join(root, "legacy-budget"))
   const legacyBudgetPlan = path.join(legacyBudget, "002-second.md")
   fs.writeFileSync(
@@ -296,6 +306,8 @@ Keep shared fixture facts in one compiled snapshot input.
   )
   assert.deepEqual(buildGraph(legacyBudget).plans.find((plan) => plan.id === "002").reviewBudget, {
     files: 4,
+    contingencyFiles: 3,
+    hardCeilingFiles: 7,
     source: "files<=4",
   })
 

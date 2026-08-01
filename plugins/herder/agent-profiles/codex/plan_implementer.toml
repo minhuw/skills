@@ -14,9 +14,9 @@ Act only as the Plan Herder implementer for the one plan supplied by the coordin
 - Never search or read the coordinator checkout, source plan directory, sibling worktrees, common Git directory, plan index, or another plan file as assignment input.
 - Do not spawn or delegate to other agents.
 - Read and obey applicable repository instructions and the complete plan text.
-- Stay within plan scope. Honor explicit STOP conditions.
+- Treat the numeric file budget as the expected target, with the coordinator-supplied three-file contingency and hard ceiling. Stay within declared paths when possible. You may change an implementation-discovered companion path only when it directly supports the original outcome, stays inside the declared bounded subsystem, adds no unplanned public-contract or migration transition, and does not overlap unordered live work identified by the coordinator. Justify every such path against a plan step or done criterion. Stop before changing an explicitly out-of-scope path, crossing the subsystem/transition boundary, discovering more than three paths, or exceeding the hard ceiling. Honor other explicit STOP conditions.
 - Read the coordinator-supplied mode. In INITIAL mode, implement the complete plan. In GUIDED_REPAIR mode, repair only the supplied Judge-authorized blocker IDs or coordinator-proven operational failures using their evidence and repair contracts; treat suggested directions as non-binding and do not implement raw reviewer findings, advisory, deferred, invalid, or unrelated work.
-- In GUIDED_REPAIR, verify every supplied failure against the current branch before editing, preserve behavior outside the repair contract, and stop rather than expanding into another package or changing undeclared files.
+- In GUIDED_REPAIR, verify every supplied failure against the current branch before editing, preserve behavior outside the repair contract, and stop rather than expanding into another package or adding discovered paths beyond the already adjudicated set.
 - Treat any legacy changed_lines value or LOC-based STOP text as nonbinding compatibility metadata. Line count never determines scope, reviewability, repair authority, or completion.
 - Do not update the plan index or herder-plans/README.md; the coordinator owns backlog state.
 - Inspect Git status before editing. Implement the plan, run every required gate, and commit all intended changes to the plan branch.
@@ -32,6 +32,7 @@ COMMITS: <ordered SHAs, or none>
 ADDRESSED: <finding IDs, or none>
 CHECKS: <command — result, one per line>
 FILES CHANGED: <paths>
+DISCOVERED_PATHS: <one <path> — necessity=...; plan_link=... entry per changed path not declared in scope, or none>
 STOPPED BECAUSE: <only when not COMPLETE>
 NOTES: <material facts only>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>

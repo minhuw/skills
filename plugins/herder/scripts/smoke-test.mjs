@@ -575,6 +575,36 @@ Keep \`package.json\` as the version source of truth. Reviewers should reject du
   return plan
 }
 
+function configureSoftBudgetFixture(graph) {
+  assert.equal(graph.plans.length, 1)
+  const plan = graph.plans[0].file
+  let text = fs.readFileSync(plan, "utf8")
+  text = text.replace(/^(- \*\*Review budget\*\*:)\s*files<=\d+\s*$/m, "$1 files<=2")
+  const scopeStart = text.search(/^## Scope\s*$/m)
+  const workflowStart = text.search(/^## Git workflow\s*$/m)
+  if (scopeStart === -1 || workflowStart <= scopeStart) fail("Generated live-Fire plan has no replaceable Scope section")
+  const scope = `## Scope
+
+**In scope** (expected paths):
+
+- \`package.json\`
+- \`src/cli.mjs\`
+
+The implementation-time contingency may cover directly necessary companion
+documentation and existing black-box test coverage in this same CLI subsystem.
+The Implementer must justify each discovered path against the plan's documented
+usage and regression-proof requirements for Reviewer and Judge adjudication.
+
+**Out of scope**:
+
+- Dependencies, a general argument parser, aliases, unrelated packages or
+  subsystems, and changes to no-argument behavior.
+
+`
+  text = `${text.slice(0, scopeStart)}${scope}${text.slice(workflowStart)}`
+  fs.writeFileSync(plan, text)
+}
+
 function installPlugin(codexHome, project) {
   const env = { ...process.env, CODEX_HOME: codexHome }
   const marketplace = run("codex", ["plugin", "marketplace", "add", marketplaceRoot, "--json"], { cwd: project, env })
@@ -632,6 +662,7 @@ function main() {
     assert.match(sharedTemplateText, /Producer self-review/)
     assert.match(sharedTemplateText, /never exceed 1,200/)
     assert.match(sharedTemplateText, /Mechanical validation complements self-review/)
+    assert.match(sharedTemplateText, /three-file contingency/)
     assert.doesNotMatch(sharedTemplateText, /\*\*Issue\*\*/)
     const grillText = fs.readFileSync(path.join(installedPath, "skills", "grill", "SKILL.md"), "utf8")
     const improveText = fs.readFileSync(path.join(installedPath, "skills", "improve", "SKILL.md"), "utf8")
@@ -658,6 +689,7 @@ function main() {
     assert.match(fireText, /Keep integration history linear/)
     assert.match(fireText, /Default parallel limit: `5`/)
     assert.match(fireText, /global role-agnostic pool for Implementer, Reviewer, Judge, and Saver attempts/)
+    assert.match(fireText, /fixed three-file contingency and hard ceiling `N\+3`/)
     assert.match(configureText, /Ask one focused question at a time/)
     assert.match(configureText, /live validation makes one minimal call per unique/)
     assert.match(configureText, /Do not accept an API key in chat/)
@@ -683,6 +715,8 @@ function main() {
     assert.match(fireProtocolText, /Dispatch it after every Reviewer response, including `APPROVE`, and once at attempt-budget exhaustion/)
     assert.match(fireProtocolText, /<plan_dir>\/leak\/<source-plan-id>-<finding-id>-<slug>\.md/)
     assert.match(fireProtocolText, /DECISION: DONE \| REPAIR \| SAVER \| NEEDS_INPUT \| BLOCKED/)
+    assert.match(fireProtocolText, /DISCOVERED_PATHS:/)
+    assert.match(fireProtocolText, /actual count above `N` alone is not a violation/)
     assert.match(fireProtocolText, /For an Orca attempt, create a fresh configured role terminal/)
     assert.match(validateText, /herder:validate \[<plan-dir>\] \[--fix\]/)
     assert.match(validateText, /herder-plans\.mjs/)
@@ -809,13 +843,22 @@ function main() {
         const fireMessage = runCodex("04-fire-status", `Use $herder:fire status herder-plans. Stay read-only, do not spawn workers, and report the ready plan IDs.`, context).message
         assert.match(fireMessage, /001/)
       } else if (options.liveFire) {
-        const improveMessage = runCodex("01-improve", `Use $herder:improve plan to add a --version flag to this tiny CLI. Write exactly one self-contained plan under herder-plans/, do not modify source code, do not ask questions, and validate the backlog before finishing.`, context).message
+        const improveMessage = runCodex("01-improve", `Use $herder:improve plan to add a --version flag to this tiny CLI, update its existing black-box tests, and document the flag in the README usage. Write exactly one self-contained plan under herder-plans/, do not modify source code, do not ask questions, and validate the backlog before finishing.`, context).message
         assert.match(improveMessage, /herder-plans|plan/i)
 
         const graph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "generated validation")
         assert.equal(graph.counts.total, 1)
         assert.deepEqual(graph.ready, ["001"])
         assert.equal(graph.shapeReady, true, "Improve generated a plan without the bounded review shape")
+        configureSoftBudgetFixture(graph)
+        const softBudgetGraph = parseJson(run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project }).stdout, "soft-budget validation")
+        assert.deepEqual(softBudgetGraph.plans[0].reviewBudget, {
+          files: 2,
+          contingencyFiles: 3,
+          hardCeilingFiles: 5,
+          source: "files<=2",
+        })
+        assert.deepEqual(softBudgetGraph.plans[0].inScopePaths, ["package.json", "src/cli.mjs"])
         assert.equal(parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "preserved usage report").attempts, 1)
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout.trim(), "")
 
@@ -873,10 +916,16 @@ function main() {
         assert.match(fireTranscript, /assignment-bundle\.mjs/, "Fire did not materialize and verify worktree-local assignment context")
         assert.match(fireTranscript, /run-gate\.mjs/, "Fire did not isolate coordinator gate output")
         assert.match(fireTranscript, /namespace-run\.mjs/, "Fire did not run deterministic namespace preflight")
+        assert.match(fireTranscript, /DISCOVERED_PATHS:/, "Fire did not collect implementation-discovered path evidence")
 
         const integrationBranches = run("git", ["branch", "--list", "herder/herder-plans/integration", "--format=%(refname:short)"], { cwd: project }).stdout.trim().split(/\r?\n/).filter(Boolean)
         assert.equal(integrationBranches.length, 1)
         const integrationBranch = integrationBranches[0]
+        const changedPaths = run("git", ["diff", "--name-only", `${originalHead}..${integrationBranch}`], { cwd: project }).stdout.trim().split(/\r?\n/).filter(Boolean)
+        const discoveredPaths = changedPaths.filter((changedPath) => !["package.json", "src/cli.mjs"].includes(changedPath))
+        assert.equal(changedPaths.length > 2, true, "live Fire did not exercise the file-target contingency")
+        assert.equal(changedPaths.length <= 5, true, "live Fire exceeded the target-plus-three hard ceiling")
+        assert.equal(discoveredPaths.length > 0 && discoveredPaths.length <= 3, true, "live Fire did not keep discovered paths inside the contingency")
         const integrationMergeNodes = run("git", ["rev-list", "--min-parents=2", `${originalHead}..${integrationBranch}`], { cwd: project }).stdout.trim()
         assert.equal(integrationMergeNodes, "", "Fire created a merge node in the integration history")
         const integrationWorktree = worktreeForBranch(project, integrationBranch)

@@ -59,7 +59,7 @@ Every plan follows the shared template and begins with:
 - **Review budget**: files<=8
 ```
 
-Use [plan-template.md](plan-template.md) for all required evidence, decisions, dependency guarantees, scope, ordered work, tests, review map, done criteria, STOP conditions, and maintenance guidance. New producers always write the three shape fields above plus `## Dependency contract` and `## Review map`. The numeric budget is a review-surface ceiling, not an estimate to ignore. Fire compares the actual diff with it before review.
+Use [plan-template.md](plan-template.md) for all required evidence, decisions, dependency guarantees, scope, ordered work, tests, review map, done criteria, STOP conditions, and maintenance guidance. New producers always write the three shape fields above plus `## Dependency contract` and `## Review map`. The numeric budget is the expected review-surface target. Fire derives a fixed three-file implementation contingency and a hard ceiling of `N+3`.
 
 Legacy `files<=N, changed_lines<=N` values remain readable, but the manager
 normalizes them to `files<=N` and ignores the line-count component. Line count
@@ -79,7 +79,7 @@ Split when work contains multiple observable outcomes, independently releasable 
 
 `mechanical` plans may declare a larger numeric file budget only when the transformation is deterministic, the review map names the invariant and generated churn, and a repository command proves completeness. `migration` plans must be phased through backward-compatible states. `spike` plans produce evidence or a confirmed design and do not silently become implementation plans.
 
-Two ready plans with the same machine-readable in-scope path must be ordered by dependency or reshaped. The manager reports unordered overlap. Exceeding the file budget, touching an undeclared path, or crossing an undeclared subsystem is a STOP condition and requires split/replan before broad review.
+Two ready plans with the same machine-readable in-scope path must be ordered by dependency or reshaped. The manager reports unordered overlap. Up to three implementation-discovered companion paths may exceed the expected path list or target only when they directly support the original outcome, stay in the declared bounded subsystem, add no public-contract or migration transition, do not overlap an unordered live plan, and receive explicit Reviewer and Judge approval. The Implementer must justify each discovered path against a step or done criterion. More than three discovered paths, more than `N+3` changed files, an explicitly out-of-scope path, or a subsystem/transition boundary crossing is a STOP condition and requires split/replan before broad review.
 
 ## 5. Status
 

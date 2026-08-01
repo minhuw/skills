@@ -27,6 +27,7 @@ const REQUIRED_PLAN_HEADINGS = [
 const REQUIRED_PLAN_METADATA = ["Priority", "Effort", "Risk", "Depends on", "Category", "Planned at"]
 const SHAPE_PLAN_HEADINGS = ["Dependency contract", "Review map"]
 const SHAPE_PLAN_METADATA = ["Kind", "Parent objective", "Review budget"]
+const FILE_BUDGET_CONTINGENCY = 3
 const PLAN_KINDS = new Set(["behavioral", "mechanical", "migration", "spike"])
 const SHARED_CONTEXT_FILE = "CONTEXT.md"
 const MAX_PLAN_WORDS = 1200
@@ -188,7 +189,16 @@ function parseReviewBudget(value, id, file) {
   if (!Number.isSafeInteger(files) || files < 1) {
     fail(`Plan ${id} Review budget limit must be a positive safe integer: ${file}`)
   }
-  return { files, source: `files<=${files}` }
+  const hardCeilingFiles = files + FILE_BUDGET_CONTINGENCY
+  if (!Number.isSafeInteger(hardCeilingFiles)) {
+    fail(`Plan ${id} Review budget plus contingency must be a safe integer: ${file}`)
+  }
+  return {
+    files,
+    contingencyFiles: FILE_BUDGET_CONTINGENCY,
+    hardCeilingFiles,
+    source: `files<=${files}`,
+  }
 }
 
 function extractInScopePaths(text) {

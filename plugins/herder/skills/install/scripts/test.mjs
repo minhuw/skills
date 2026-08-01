@@ -54,6 +54,10 @@ process.stdout.write("multi_agent_v2                       under development  tr
     assert.deepEqual(await readFile(installedProfile), await readFile(sourceProfile));
     assert.equal((await readFile(installedProfile, "utf8")).includes(declaration), true, `wrong nicknames for ${profile}`);
   }
+  assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_implementer.toml"), "utf8"), /DISCOVERED_PATHS:/);
+  assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_reviewer.toml"), "utf8"), /JUSTIFIED\|SCOPE_VIOLATION/);
+  assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_judge.toml"), "utf8"), /ACCEPTED\|REJECTED/);
+  assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_saver.toml"), "utf8"), /never expand the discovered-path set/);
 
   const second = run(...common);
   assert.match(second, /Unchanged: .*plan_implementer\.toml/);

@@ -169,6 +169,8 @@ try {
     assert.equal(bundle.plan.title, "Keep assignment context local")
     assert.deepEqual(bundle.plan.reviewBudget, {
       files: 2,
+      contingencyFiles: 3,
+      hardCeilingFiles: 5,
       source: "files<=2",
     })
     assert.equal(bundle.planText, fixture.snapshot.planText)

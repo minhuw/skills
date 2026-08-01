@@ -65,12 +65,19 @@ Give each proposed node:
 
 - one outcome and parent objective;
 - `behavioral`, `mechanical`, `migration`, or `spike` kind;
-- numeric `files<=N` review budget;
+- numeric `files<=N` expected review target; Fire provides only a fixed
+  three-file adjudicated contingency for implementation-discovered companions;
 - exact write paths and review map;
 - explicit consumed/provided dependency guarantees;
 - a focused verification command and safe intermediate state.
 
 Use a larger `mechanical` file budget only for a deterministic transformation with a completeness proof. If the impact graph cannot be bounded to credible files and paths, propose a spike or characterization/seam plan first.
+
+The contingency is not planning slack. Producers still name every credible
+path. A discovered companion must directly support the original outcome, stay
+inside the declared bounded subsystem, add no new public transition, avoid
+unordered plan overlap, and be justified for Reviewer/Judge approval. Work that
+cannot satisfy those conditions needs a new or reshaped plan.
 
 Keep each local plan compact: target 500–900 words and never exceed 1,200. State each fact once, omit non-load-bearing code excerpts, and use plan-set context for genuinely repeated facts. A long explanation is evidence that the node needs a sharper boundary, not a reason to waive the prose budget.
 

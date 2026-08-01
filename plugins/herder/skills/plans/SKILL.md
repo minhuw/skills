@@ -36,7 +36,9 @@ node <skill-dir>/scripts/herder-plans.mjs <command> <remaining arguments> --pret
 - `init`: create the index if absent and locally exclude `/herder-plans/` via `.git/info/exclude`.
 - `init --track`: keep the backlog trackable and ignore only `herder-plans/.herder/`.
 - `validate`: check index/files, headings, metadata, file-budget syntax, dependency agreement, statuses, missing/unknown plans, cycles, and overlapping machine-readable write scopes. Legacy plans without new shape fields remain readable but produce warnings.
-- `shape`: report each plan's kind, parent objective, numeric file budget, write paths, local line/word count, shape issues, shared-context size, and cross-plan overlaps without changing files.
+- `shape`: report each plan's kind, parent objective, expected file target,
+  fixed contingency, hard ceiling, write paths, local line/word count, shape
+  issues, shared-context size, and cross-plan overlaps without changing files.
 - `status`: validate, then show totals, ready/waiting/terminal plans, and warnings.
 - `usage`: group the ledger by plan, role, and model/effort; numeric values are only known subtotals when coverage is incomplete.
 - `track`: remove the broad local exclude and create the internal `.gitignore`; do not stage files.
@@ -61,6 +63,16 @@ New plans use `Review budget: files<=N`. Legacy
 `files<=N, changed_lines<=N` values remain readable, but the manager discards
 the line-count component. LOC never determines plan scope, reviewability,
 repair authority, integration, or lifecycle status.
+
+`N` is the expected changed-file target. Every plan also receives a fixed
+three-file implementation contingency and a hard ceiling of `N+3`. A worker
+may use the contingency only for directly necessary companion files discovered
+while implementing the original outcome. Each discovered path needs a written
+necessity and plan link, must remain in the declared bounded subsystem, must not
+add a public-contract or migration transition, and must not overlap an
+unordered live plan. Reviewer and Judge must explicitly approve it. More than
+three discovered paths, a different subsystem, or more than `N+3` changed
+files requires split/replan before broad review.
 
 Use optional `herder-plans/CONTEXT.md` only for verified context genuinely shared by multiple plans. Fire schedules only through `ready`, obtains a complete compiled snapshot through `snapshot`, and changes status only through `transition`. `snapshot.planText` is either the local plan or deterministic shared-context-plus-local-plan composition and includes input/content hashes. Because the backlog may be Git-ignored, Fire must inline `planText` rather than expect any plan file in worktrees.
 
