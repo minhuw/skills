@@ -9,6 +9,8 @@ Install or verify the four host-native agent profiles required by Herder. The pr
 
 Codex Fire uses these profiles as native custom agent types. It requires Codex Multi-Agent V2 and never falls back to nested `codex exec` processes. Claude Fire uses the bundled host-native agents directly.
 
+The bundled Codex Implementer uses Luna with Fast tier. Sol-backed roles and the parent coordinator remain on Standard tier.
+
 ## Invocation
 
 Interpret tokens after the skill name as installer arguments:

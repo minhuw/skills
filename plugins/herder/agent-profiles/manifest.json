@@ -8,7 +8,7 @@
         {
           "source": "agent-profiles/codex/plan_implementer.toml",
           "target": "plan_implementer.toml",
-          "sha256": "975d01fbe5d986adef6439f72ef58ba7842cd4fea227eaddf96afe6c741a9402"
+          "sha256": "98d022fd100e885c795a1f5bd8738b8f2897ab9d781f1accb2bbfb3f4f3f103b"
         },
         {
           "source": "agent-profiles/codex/plan_reviewer.toml",

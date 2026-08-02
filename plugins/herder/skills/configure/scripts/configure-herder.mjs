@@ -171,6 +171,14 @@ function piRoute(model) {
   return { provider: model.slice(0, slash), model: model.slice(slash + 1) }
 }
 
+function isLunaModel(model) {
+  return model.toLowerCase().endsWith("-luna")
+}
+
+function childUsesFastTier(roleName, mapping) {
+  return roleName !== "controller" && mapping.harness === "codex" && isLunaModel(mapping.model)
+}
+
 function orcaRole(roleName, mapping) {
   const mutates = MUTATES[roleName]
   if (mapping.harness === "codex") {
@@ -179,6 +187,7 @@ function orcaRole(roleName, mapping) {
       "--model", mapping.model,
       "-c", `model_reasoning_effort="${mapping.effort}"`,
     ]
+    if (childUsesFastTier(roleName, mapping)) command.push("-c", 'service_tier="fast"')
     if (mutates) command.push("--dangerously-bypass-approvals-and-sandbox")
     else command.push("--sandbox", "read-only", "--ask-for-approval", "never")
     return {
@@ -267,6 +276,17 @@ function replaceTomlValue(text, key, value, label) {
   return text.replace(expression, `${key} = ${JSON.stringify(value)}`)
 }
 
+function setNativeServiceTier(text, model, label) {
+  const expression = /^service_tier\s*=.*$/gm
+  const matches = text.match(expression) || []
+  if (matches.length > 1) fail(`Bundled ${label} must contain at most one service_tier`)
+  if (!isLunaModel(model)) {
+    return text.replace(/^service_tier\s*=.*(?:\r?\n|$)/m, "")
+  }
+  if (matches.length === 1) return text.replace(/^service_tier\s*=.*$/m, 'service_tier = "fast"')
+  return text.replace(/^model\s*=.*$/m, (line) => `${line}\nservice_tier = "fast"`)
+}
+
 function buildNativeProfiles(answers) {
   const files = {}
   for (const role of CHILD_ROLES) {
@@ -275,6 +295,7 @@ function buildNativeProfiles(answers) {
     let text = readFileSync(source, "utf8")
     text = replaceTomlValue(text, "model", answers.roles[role].model, filename)
     text = replaceTomlValue(text, "model_reasoning_effort", answers.roles[role].effort, filename)
+    text = setNativeServiceTier(text, answers.roles[role].model, filename)
     files[filename] = text
   }
   const controller = answers.roles.controller
@@ -329,6 +350,9 @@ function runProbe(route, live) {
       "--ask-for-approval", "never",
       "--model", route.model,
       "-c", `model_reasoning_effort="${route.effort}"`,
+      ...(route.roles.some((role) => role !== "controller") && isLunaModel(route.model)
+        ? ["-c", 'service_tier="fast"']
+        : []),
       "--json",
       `Return exactly ${MARKER}.`,
     ]

@@ -39,6 +39,8 @@ Use schema version 1. The temporary answers file contains no credentials:
 
 `backend` is `orca` or `native-codex`. Native Codex still includes all five roles; every harness must be `codex`. Its controller mapping becomes a launch command while the four child mappings become project or user agent profiles.
 
+For native Codex profiles and Orca roles backed by Codex, the generator adds `service_tier = "fast"` to child roles whose model ID ends in `-luna`. It removes that setting from non-Luna child profiles and never enables Fast tier for the controller.
+
 Role names are exact. Unknown or missing roles fail validation.
 
 Harness rules:

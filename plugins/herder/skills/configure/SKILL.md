@@ -26,6 +26,7 @@ Ask one focused question at a time:
    - harness when the backend permits a choice;
    - exact model;
    - effort.
+   For Codex child roles, any model ID ending in `-luna` automatically uses Fast tier. Keep the controller on Standard tier even when it uses Luna.
 4. For Pi, require the model as `provider/model`. Do not infer a provider from a bare model.
 5. Present one compact mapping table and the destination. Explain that live validation makes one minimal call per unique harness/provider/model/effort route and may consume tokens. Ask for confirmation before probing or writing.
 
@@ -95,6 +96,7 @@ Report:
 
 - backend and destination;
 - exact role routing without credentials;
+- the derived service tier for every Codex role;
 - structural, availability, and live-probe status;
 - backups created, if any;
 - whether a new Codex session is required;

@@ -811,6 +811,8 @@ function main() {
       for (const profile of ["plan_implementer", "plan_reviewer", "plan_judge", "plan_saver"]) {
         assert.equal(fs.existsSync(path.join(codexHome, "agents", `${profile}.toml`)), true, `missing installed profile ${profile}`)
       }
+      const installedImplementer = fs.readFileSync(path.join(codexHome, "agents", "plan_implementer.toml"), "utf8")
+      assert.match(installedImplementer, /^service_tier = "fast"$/m)
       const installedReviewer = fs.readFileSync(path.join(codexHome, "agents", "plan_reviewer.toml"), "utf8")
       assert.match(installedReviewer, /sandbox_mode = "read-only"/)
       assert.match(installedReviewer, /P2\/P3, FOLLOWUP, and INVALID findings are advisory and never block approval/)

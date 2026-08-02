@@ -2,6 +2,7 @@ name = "plan_implementer"
 description = "Implements one Plan Herder plan in its stable plan worktree, verifies it, and commits the result. Use only when dispatched by the Plan Herder coordinator."
 nickname_candidates = ["Mocha", "Latte", "Cortado", "Piccolo", "Doppio", "Affogato", "Espresso", "Macchiato", "Cappuccino", "Ristretto"]
 model = "gpt-5.6-luna"
+service_tier = "fast"
 model_reasoning_effort = "max"
 sandbox_mode = "workspace-write"
 developer_instructions = """

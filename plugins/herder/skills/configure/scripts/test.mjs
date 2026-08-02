@@ -92,7 +92,8 @@ else process.exit(2)
 
   const alternateAnswers = structuredClone(orcaAnswers)
   alternateAnswers.name = "alternate-routing"
-  alternateAnswers.roles["plan-reviewer"] = { harness: "codex", model: "gpt-5.6-sol", effort: "xhigh" }
+  alternateAnswers.roles.controller = { harness: "codex", model: "gpt-5.6-luna", effort: "max" }
+  alternateAnswers.roles["plan-reviewer"] = { harness: "codex", model: "gpt-5.6-luna", effort: "xhigh" }
   alternateAnswers.roles["plan-judge"] = { harness: "grok-build", model: "grok-4.5", effort: "high" }
   alternateAnswers.roles["plan-saver"] = { harness: "pi", model: "openai/gpt-5.6-sol", effort: "max" }
   const alternateAnswersPath = path.join(root, "alternate-answers.json")
@@ -100,7 +101,9 @@ else process.exit(2)
   await writeFile(alternateAnswersPath, JSON.stringify(alternateAnswers))
   run(["generate", "--answers", alternateAnswersPath, "--output", alternateProfilePath], env)
   const alternateProfile = JSON.parse(await readFile(alternateProfilePath, "utf8"))
+  assert.equal(alternateProfile.roles.controller.command.includes('service_tier="fast"'), false)
   assert.equal(alternateProfile.roles["plan-reviewer"].command.includes("read-only"), true)
+  assert.equal(alternateProfile.roles["plan-reviewer"].command.includes('service_tier="fast"'), true)
   assert.equal(alternateProfile.roles["plan-judge"].command.includes("plan"), true)
   assert.equal(alternateProfile.roles["plan-saver"].command.some((argument) => argument.includes("edit,write")), true)
   execFileSync(process.execPath, [orcaRuntime, "validate", "--profile", alternateProfilePath])
@@ -164,11 +167,12 @@ else process.exit(2)
   const nativeAnswers = structuredClone(orcaAnswers)
   nativeAnswers.backend = "native-codex"
   delete nativeAnswers.name
-  for (const [index, role] of Object.keys(nativeAnswers.roles).entries()) {
+  for (const role of Object.keys(nativeAnswers.roles)) {
+    const luna = ["plan-reviewer", "plan-judge"].includes(role)
     nativeAnswers.roles[role] = {
       harness: "codex",
-      model: index % 2 === 0 ? "gpt-5.6-sol" : "gpt-5.6-luna",
-      effort: index % 2 === 0 ? "max" : "high",
+      model: luna ? "gpt-5.6-luna" : "gpt-5.6-sol",
+      effort: luna ? "high" : "max",
     }
   }
   const nativeAnswersPath = path.join(root, "native-answers.json")
@@ -183,8 +187,14 @@ else process.exit(2)
   assert.equal(nativeGenerated.files.length, 4)
   assert.equal(nativeGenerated.newSessionRequired, true)
   const implementer = await readFile(path.join(agentDir, "plan_implementer.toml"), "utf8")
-  assert.match(implementer, /^model = "gpt-5\.6-luna"$/m)
-  assert.match(implementer, /^model_reasoning_effort = "high"$/m)
+  const reviewer = await readFile(path.join(agentDir, "plan_reviewer.toml"), "utf8")
+  const judge = await readFile(path.join(agentDir, "plan_judge.toml"), "utf8")
+  assert.match(implementer, /^model = "gpt-5\.6-sol"$/m)
+  assert.match(implementer, /^model_reasoning_effort = "max"$/m)
+  assert.doesNotMatch(implementer, /^service_tier\s*=/m)
+  assert.match(reviewer, /^model = "gpt-5\.6-luna"$/m)
+  assert.match(reviewer, /^service_tier = "fast"$/m)
+  assert.match(judge, /^service_tier = "fast"$/m)
 
   await writeFile(path.join(agentDir, "plan_saver.toml"), "custom\n")
   const nativeConflict = spawnSync(process.execPath, [
