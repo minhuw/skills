@@ -1,6 +1,6 @@
 # Orca Cross-Harness Runtime
 
-Use this reference only when Fire is invoked with `--runtime orca`. The normal review, Judge, Saver, integration, usage, and completion rules in `orchestration-protocol.md` remain authoritative. Orca replaces native child spawning and owns execution worktrees; it does not replace the Plans manager or Herder lifecycle.
+Use this reference only when Fire is invoked with `--runtime orca`. The independent plan-loop, escalated Judge, integration-lock, usage, and completion rules in `orchestration-protocol.md` remain authoritative. Orca replaces native child spawning and owns execution worktrees; it does not replace the Plans manager or Herder lifecycle.
 
 ## Runtime profile
 
@@ -27,7 +27,7 @@ It deliberately exercises:
 | Implementer | Grok Build | `xai/grok-4.5` |
 | Reviewer | Pi | `kimi-coding/k3` |
 | Judge | Pi | `openai/gpt-5.6-sol` |
-| Saver | Grok Build | `xai/grok-4.5` |
+| Saver (legacy resume only) | Grok Build | `xai/grok-4.5` |
 
 Model/provider names belong to the runtime profile, not the plan. Never copy credentials into a profile, prompt, task, log, or command. A role may use its harness's normal permissive mode, but it still receives the Herder role contract and must not create Herder workers, push, publish, deploy, or alter another worktree.
 
@@ -147,6 +147,8 @@ For each attempt:
 9. Re-run checkout guard and exact Git state proofs before interpreting the role envelope.
 10. Close the terminal only after terminal evidence and usage are captured and no retry can reuse it. Every replacement attempt gets a fresh terminal and task.
 
+`plan-saver` is accepted here only for resuming a durable legacy Saver dispatch. Fresh six-round generations use the other three roles.
+
 The adapter assigns the tracked task without `dispatch --inject`, then sends the full task plus live lifecycle preamble directly to the assigned terminal. Herder's custom commands pin provider, model, effort, permissions, and extension state; Orca may not classify such a command as an injectable built-in agent even when its TUI is ready. `tracked-terminal-send` is the documented custom-terminal fallback: the task/dispatch still supplies provenance, and only matching `worker_done` from the assigned pane supplies completion authority.
 
 Never use an untracked ad hoc `terminal send` prompt for a Herder attempt. Never treat terminal idleness, exit, a message without matching provenance, or Orca task status alone as a completed role envelope.
@@ -162,7 +164,7 @@ Use the generic role contract from:
 <plugin-root>/agents/plan-saver.md
 ```
 
-Strip only the plugin frontmatter and inline the complete remaining contract before the normal role-specific prompt envelope from `orchestration-protocol.md`.
+Strip only the plugin frontmatter and inline the complete remaining contract before the normal role-specific prompt envelope from `orchestration-protocol.md`. Load `plan-saver.md` only for a durable legacy Saver resume.
 
 The Reviewer and Judge profiles intentionally omit Pi's edit and write tools. Their shell remains available for checks, so coordinator-side before/after Git proofs are still mandatory. Any Reviewer or Judge mutation is a failed attempt regardless of its verdict.
 
@@ -196,7 +198,7 @@ Repository failures and evidence-complete review revisions keep their normal Her
 
 The rich live test has two layers:
 
-1. Execute a normal focused plan through Codex controller, Grok implementer, Pi/Kimi reviewer, and Pi/GPT Judge, including gates, per-review adjudication, and linear integration.
-2. On a separate disposable probe plan branch that can never advance integration, dispatch a synthetic, evidence-complete five-attempt ledger with separate review-pass accounting to Pi/GPT Judge and a Judge-authorized one-shot recovery contract to Grok Saver. Verify Saver changes only the probe worktree, commits the repair, passes the supplied check, and receives one targeted read-only Reviewer/Judge pass with no second substantive Saver dispatch. Delete the probe only through Orca after all evidence is retained.
+1. Execute at least two independent focused plans and prove that an Implementer or Reviewer for one overlaps a different plan's Reviewer or Judge. Approving reviews skip Judge, and integration remains linear under the single coordinator lock.
+2. On a disposable non-integrating probe plan, supply an evidence-complete round-3 nonapproval to Pi/GPT Judge, apply the authorized round-4 repair through Grok Implementer, and run targeted verification. Prove the deterministic round policy blocks any attempted seventh round and never dispatches Saver for the fresh generation.
 
-The drill must be labeled test-only and must not manufacture a failure in an otherwise approving production plan. Success requires all five configured roles across the three supported harnesses, exact task/dispatch provenance, correct worktree isolation, zero Reviewer/Judge mutation, expected Implementer/Saver mutation, preserved source checkout, and no model or harness substitution.
+The drill must be labeled test-only and must not manufacture a failure in an otherwise approving production plan. Success requires the controller plus all three fresh-run roles across the configured harnesses, exact task/dispatch provenance, correct worktree isolation, zero Reviewer/Judge mutation, expected Implementer mutation, preserved source checkout, no fresh Saver dispatch, and no model or harness substitution.
