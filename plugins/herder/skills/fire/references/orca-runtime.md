@@ -184,7 +184,7 @@ For every attempt, retain:
 - terminal state and timestamps;
 - structured host usage when the harness exposes it.
 
-Do not claim Codex transcript-equivalent apply-patch containment for Grok or Pi. Their containment proof is the exact Orca worktree identity plus coordinator Git and checkout-guard evidence. Record unavailable token fields as `unknown`; never trust model-written usage numbers over host telemetry and never estimate.
+Do not claim filesystem containment from any harness transcript. Use the exact Orca worktree identity plus coordinator Git and checkout-guard evidence for repository-state protection. Record unavailable token fields as `unknown`; never trust model-written usage numbers over host telemetry and never estimate.
 
 Orca terminal handles are runtime-scoped. After restart, reacquire terminals by recorded Orca worktree ID, correlate task/dispatch provenance, and apply normal resume ambiguity rules. A missing or contradictory task, dispatch, terminal, branch, or worktree mapping preserves state and stops that plan.
 

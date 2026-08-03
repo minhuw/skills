@@ -49,7 +49,7 @@ node <manager> validate <plan-dir> --pretty
 node <manager> shape <plan-dir> --pretty
 ```
 
-Capture nonzero output as validation evidence rather than aborting the audit. Check index/file agreement, required headings and metadata, filenames and IDs, allowed values, dependencies, statuses, missing plans, unknown dependencies, cycles, review-budget syntax, machine-readable in-scope paths, and unordered write-scope overlap through the manager. Legacy shape warnings do not make an old backlog unreadable, but a newly produced plan is not semantically Fire-ready until its shape report is clean.
+Capture nonzero output as validation evidence rather than aborting the audit. Check index/file agreement, required headings and metadata, filenames and IDs, allowed values, dependencies, statuses, missing plans, unknown dependencies, cycles, machine-readable in-scope paths, and unordered write-scope overlap through the manager. Legacy shape warnings do not make an old backlog unreadable, but a newly produced plan is not semantically Fire-ready until its shape report is clean.
 
 ### 2. Per-plan semantics
 
@@ -58,8 +58,8 @@ Read every indexed compiled snapshot as though no sibling plan or prior conversa
 - intent, accepted decisions, non-goals, and terminology are explicit and consistent;
 - current-state paths, line references, excerpts, commands, conventions, and planned commit are supported by the live repository;
 - drift is distinguished from a bad plan, with the affected scope identified;
-- in-scope and out-of-scope boundaries are credible and do not conflict with steps or done criteria; likely paths are declared rather than intentionally deferred to contingency;
-- `Kind`, `Parent objective`, and numeric expected file target fit the work; the fixed three-file discovery contingency can only cover directly necessary companions inside the same bounded subsystem, not an unplanned public transition; large mechanical file budgets have deterministic transformations and completeness proofs; any legacy changed-line budget is ignored;
+- in-scope and out-of-scope boundaries are credible and do not conflict with steps or done criteria; likely paths are declared, while any discovered companion is directly necessary inside the same bounded subsystem and introduces no unplanned public transition or unordered-plan overlap;
+- `Kind` and `Parent objective` fit the work; mechanical plans name deterministic transformations and completeness proofs; file and line counts do not affect readiness;
 - the local plan is concise and non-repetitive, targets 500–900 words, never exceeds 1,200 words, and any shared context stays within 1,600 words;
 - the dependency contract names consumed and provided guarantees and leaves a gate-passing intermediate state;
 - the review map names exact modified symbols, direct contracts, preserved behavior, focused proof, and a credible expected diff;

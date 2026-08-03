@@ -26,8 +26,7 @@ const REQUIRED_PLAN_HEADINGS = [
 ]
 const REQUIRED_PLAN_METADATA = ["Priority", "Effort", "Risk", "Depends on", "Category", "Planned at"]
 const SHAPE_PLAN_HEADINGS = ["Dependency contract", "Review map"]
-const SHAPE_PLAN_METADATA = ["Kind", "Parent objective", "Review budget"]
-const FILE_BUDGET_CONTINGENCY = 3
+const SHAPE_PLAN_METADATA = ["Kind", "Parent objective"]
 const PLAN_KINDS = new Set(["behavioral", "mechanical", "migration", "spike"])
 const SHARED_CONTEXT_FILE = "CONTEXT.md"
 const MAX_PLAN_WORDS = 1200
@@ -179,28 +178,6 @@ function sectionText(text, heading) {
   return next === -1 ? tail : tail.slice(0, next)
 }
 
-function parseReviewBudget(value, id, file) {
-  const normalized = String(value).trim()
-  const match = normalized.match(/^files\s*<=\s*(\d+)(?:\s*,\s*(?:changed[_\s-]*lines|lines)\s*<=\s*\d+)?$/i)
-  if (!match) {
-    fail(`Plan ${id} has invalid Review budget; use "files<=N": ${file}`)
-  }
-  const files = Number.parseInt(match[1], 10)
-  if (!Number.isSafeInteger(files) || files < 1) {
-    fail(`Plan ${id} Review budget limit must be a positive safe integer: ${file}`)
-  }
-  const hardCeilingFiles = files + FILE_BUDGET_CONTINGENCY
-  if (!Number.isSafeInteger(hardCeilingFiles)) {
-    fail(`Plan ${id} Review budget plus contingency must be a safe integer: ${file}`)
-  }
-  return {
-    files,
-    contingencyFiles: FILE_BUDGET_CONTINGENCY,
-    hardCeilingFiles,
-    source: `files<=${files}`,
-  }
-}
-
 function extractInScopePaths(text) {
   const scope = sectionText(text, "Scope")
   const inScope = scope.match(/\*\*In scope\*\*[^\n]*([\s\S]*?)(?=\*\*Out of scope\*\*|$)/i)?.[1] ?? ""
@@ -260,9 +237,6 @@ function parsePlanFile(file, id) {
   if (kind && !PLAN_KINDS.has(kind)) {
     fail(`Plan ${id} has unsupported Kind ${JSON.stringify(metadata.get("Kind"))}: ${file}`)
   }
-  const reviewBudget = metadata.has("Review budget")
-    ? parseReviewBudget(metadata.get("Review budget"), id, file)
-    : null
   const inScopePaths = extractInScopePaths(text)
   if (inScopePaths.length === 0) shapeIssues.push("has no machine-readable backticked in-scope paths")
   const planWords = wordCount(text)
@@ -275,7 +249,6 @@ function parsePlanFile(file, id) {
     text,
     kind,
     parentObjective: metadata.get("Parent objective")?.trim() || null,
-    reviewBudget,
     inScopePaths,
     planWords,
     planLines,
@@ -560,7 +533,6 @@ export function buildGraph(inputDir = DEFAULT_PLAN_DIR) {
       file,
       kind: parsedPlan.kind,
       parentObjective: parsedPlan.parentObjective,
-      reviewBudget: parsedPlan.reviewBudget,
       inScopePaths: parsedPlan.inScopePaths,
       planWords: parsedPlan.planWords,
       planLines: parsedPlan.planLines,
@@ -722,7 +694,7 @@ function ensureRuntimeIgnore(planDir) {
 function initialReadme() {
   return `# Herder Plans
 
-Implementation plans managed by Herder. Each plan snapshot must be self-contained, review-budgeted, and safe to execute from a fresh integration commit. Producers may place verified facts shared by multiple plans in \`CONTEXT.md\`; the Plans manager composes that file into every immutable snapshot.
+Implementation plans managed by Herder. Each plan snapshot must be self-contained, semantically bounded, and safe to execute from a fresh integration commit. Producers may place verified facts shared by multiple plans in \`CONTEXT.md\`; the Plans manager composes that file into every immutable snapshot.
 
 ## Execution order & status
 
@@ -823,7 +795,6 @@ export function getShapeReport(inputDir = DEFAULT_PLAN_DIR) {
       id: plan.id,
       kind: plan.kind,
       parentObjective: plan.parentObjective,
-      reviewBudget: plan.reviewBudget,
       inScopePaths: plan.inScopePaths,
       planWords: plan.planWords,
       planLines: plan.planLines,

@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
-import { chmod, mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import process from "node:process"
@@ -18,8 +18,6 @@ const root = await mkdtemp(path.join(tmpdir(), "herder-agent-evidence-test-"))
 const sessions = path.join(root, "sessions", "2026", "07", "15")
 const archivedSessions = path.join(root, "archived_sessions")
 const candidateReal = path.join(root, "candidate-real")
-const candidateAlias = path.join(root, "candidate-alias")
-const candidateNested = path.join(candidateReal, "nested")
 const agentId = "019f0000-0000-7000-8000-000000000001"
 const interruptedAgentId = "019f0000-0000-7000-8000-000000000002"
 const priorAgentId = "019f0000-0000-7000-8000-000000000003"
@@ -28,8 +26,6 @@ try {
   await mkdir(sessions, { recursive: true })
   await mkdir(archivedSessions, { recursive: true })
   await mkdir(candidateReal)
-  await symlink(candidateReal, candidateAlias)
-  const candidateCanonical = await realpath(candidateReal)
   const events = [
     {
       type: "session_meta",
@@ -50,61 +46,6 @@ try {
         multi_agent_version: "v2",
         approval_policy: "never",
         sandbox_policy: { type: "workspace-write" },
-      },
-    },
-    {
-      type: "response_item",
-      payload: {
-        type: "custom_tool_call",
-        name: "exec",
-        input: `const r = await tools.exec_command({ cmd: "npm test", workdir: ${JSON.stringify(candidateReal)} });`,
-      },
-    },
-    {
-      type: "response_item",
-      payload: {
-        type: "function_call",
-        name: "exec_command",
-        arguments: JSON.stringify({ cmd: "git status --short", workdir: candidateNested }),
-      },
-    },
-    {
-      type: "response_item",
-      payload: {
-        type: "custom_tool_call",
-        name: "exec",
-        input: `const patch = ${JSON.stringify(`*** Begin Patch
-*** Update File: ${path.join(candidateAlias, "source.txt")}
-*** Move to: ${path.join(candidateAlias, "moved.txt")}
-@@
--old
-+new
-+const example = tools.apply_patch(otherPatch)
-*** Add File: relative.txt
-+new
-*** End Patch`)}; text(await tools.apply_patch(patch));`,
-      },
-    },
-    {
-      type: "response_item",
-      payload: {
-        type: "custom_tool_call",
-        name: "apply_patch",
-        input: `*** Begin Patch
-*** Add File: ${path.join(candidateAlias, "direct.txt")}
-+direct
-*** End Patch`,
-      },
-    },
-    {
-      type: "response_item",
-      payload: {
-        type: "function_call",
-        name: "apply_patch",
-        arguments: `*** Begin Patch
-*** Add File: ${path.join(candidateAlias, "function-direct.txt")}
-+direct
-*** End Patch`,
       },
     },
     { type: "event_msg", payload: { type: "user_message", message: "self-contained plan" } },
@@ -160,14 +101,6 @@ try {
         info: { total_token_usage: { input_tokens: 55, cached_input_tokens: 34, output_tokens: 8, reasoning_output_tokens: 3 } },
       },
     },
-    {
-      type: "response_item",
-      payload: {
-        type: "custom_tool_call",
-        name: "exec",
-        input: "const patch = recoverPatch(); text(await tools.apply_patch(patch));",
-      },
-    },
     { type: "event_msg", payload: { type: "task_complete" } },
   ]
   await writeFile(path.join(sessions, "rollout-interrupted.jsonl"), `${interruptedEvents.map(JSON.stringify).join("\n")}\n`)
@@ -179,17 +112,6 @@ try {
   assert.equal(evidence.effort, "max")
   assert.equal(evidence.multiAgentVersion, "v2")
   assert.equal(evidence.sandbox, "workspace-write")
-  assert.deepEqual(evidence.executionWorkdirs, [candidateReal, candidateNested])
-  assert.equal(evidence.applyPatchCalls, 3)
-  assert.deepEqual(evidence.applyPatchPaths, [
-    path.join(candidateCanonical, "source.txt"),
-    path.join(candidateCanonical, "moved.txt"),
-    path.join(candidateCanonical, "relative.txt"),
-    path.join(candidateCanonical, "direct.txt"),
-    path.join(candidateCanonical, "function-direct.txt"),
-  ])
-  assert.equal(evidence.unresolvedApplyPatchCalls, 0)
-  assert.equal(evidence.mutationEvidenceComplete, true)
   assert.equal(evidence.userMessageCount, 1)
   assert.equal(evidence.taskMessageCount, 0)
   assert.deepEqual(evidence.terminal, {
@@ -208,11 +130,6 @@ try {
   const byTask = JSON.parse(execFileSync(process.execPath, [reader, "--agent", "/root/run-001", "--codex-home", root], { encoding: "utf8" }))
   assert.equal(byTask.agentId, agentId)
 
-  const byWorkdir = JSON.parse(execFileSync(process.execPath, [reader, "--workdir", candidateAlias, "--codex-home", root], { encoding: "utf8" }))
-  assert.equal(byWorkdir.ok, true)
-  assert.equal(byWorkdir.workdir, candidateAlias)
-  assert.deepEqual(byWorkdir.agents.map((item) => item.agentId), [agentId, priorAgentId])
-
   const archived = JSON.parse(execFileSync(process.execPath, [reader, "--agent-id", priorAgentId, "--codex-home", root], { encoding: "utf8" }))
   assert.equal(archived.agentRole, "plan_saver")
   assert.equal(archived.transcript, path.join(archivedSessions, "rollout-prior.jsonl"))
@@ -224,10 +141,6 @@ try {
     turnAborted: false,
     finalEnvelopePresent: false,
   })
-  assert.equal(interrupted.applyPatchCalls, 1)
-  assert.deepEqual(interrupted.applyPatchPaths, [])
-  assert.equal(interrupted.unresolvedApplyPatchCalls, 1)
-  assert.equal(interrupted.mutationEvidenceComplete, false)
   assert.deepEqual(interrupted.usage, {
     inputTokens: 55,
     cachedInputTokens: 34,
@@ -616,15 +529,13 @@ process.stdout.write("grok-4.5 kimi-coding/k3 openai/gpt-5.6-sol authenticated\\
   assert.match(protocol, /node <assignment_manager> materialize-run --plan-dir <plan_dir>/)
   assert.match(protocol, /node <assignment_manager> verify --worktree <absolute-worktree>/)
   assert.match(protocol, /missing, writable, symlinked, moved, branch-mismatched, or hash-mismatched bundle is a containment failure/)
-  assert.match(protocol, /Every command—including the first bundle hash\/type check—must set the assigned worktree as its explicit workdir/)
-  assert.match(protocol, /`\/tmp`, the coordinator checkout, and other neutral directories are forbidden command workdirs/)
-  assert.match(protocol, /Do not compute or enforce a changed-line ceiling/)
-  assert.match(protocol, /LOC may be reported descriptively but never gates the plan/)
+  assert.match(protocol, /number of changed or undeclared paths and the number of changed lines may be reported descriptively but never gate the plan/)
+  assert.doesNotMatch(protocol, /files<=|N\+3|hard file|8\/3\/11/)
   assert.doesNotMatch(protocol, /sum added plus deleted lines|file\/line overflow/)
   assert.match(protocol, /Do not derive a new trusted hash from the file itself/)
-  assert.match(protocol, /mutationEvidenceComplete: true/)
-  assert.match(protocol, /unresolvedApplyPatchCalls: 0/)
-  assert.match(protocol, /canonical `applyPatchPaths` entry inside it/)
+  assert.match(protocol, /Never parse tool-call text to infer filesystem containment/)
+  assert.match(protocol, /Both runtimes require checkout-guard and exact before\/after Git proofs/)
+  assert.doesNotMatch(protocol, /mutationEvidenceComplete|unresolvedApplyPatchCalls|applyPatchPaths|forbidden command workdirs/)
   assert.match(protocol, /node <gate_runner> --cwd/)
   assert.match(protocol, /returns metadata and no command output on success or failure/)
   assert.match(protocol, /herder\/<plan-name>\/integration/)
@@ -662,7 +573,6 @@ process.stdout.write("grok-4.5 kimi-coding/k3 openai/gpt-5.6-sol authenticated\\
   assert.match(protocol, /A `REVISE` containing only P2\/P3, `FOLLOWUP`, `INVALID`/)
   assert.match(protocol, /DECISION: DONE \| REPAIR \| NEEDS_INPUT \| BLOCKED/)
   assert.match(protocol, /<plan_dir>\/leak\/<source-plan-id>-<finding-id>-<slug>\.md/)
-  assert.match(protocol, /legacy plans use conservative `8\/3\/11`/)
   assert.match(protocol, /Do not convert fresh or merely five-attempt-exhausted legacy work into Saver/)
   assert.match(protocol, /For transient capacity, do not increment any round, retry, interruption, or clarification bound/)
   assert.match(protocol, /30, 60, 120, then 300 seconds/)
@@ -716,6 +626,7 @@ process.stdout.write("grok-4.5 kimi-coding/k3 openai/gpt-5.6-sol authenticated\\
     assert.match(profile, /rounds 1–2.*direct repair authority/)
     assert.match(profile, /Beginning with a nonapproving round 3, Judge adjudicates/)
     assert.match(profile, /APPROVE.*skips Judge/)
+    assert.match(profile, /Never use the number of changed or discovered paths as verdict evidence/)
   }
 
   const codexJudge = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_judge.toml"), "utf8")
@@ -728,6 +639,7 @@ process.stdout.write("grok-4.5 kimi-coding/k3 openai/gpt-5.6-sol authenticated\\
     assert.match(profile, /round 6.*BLOCKED.*seventh mutation/)
     assert.match(profile, /DECISION: DONE \| REPAIR \| NEEDS_INPUT \| BLOCKED/)
     assert.match(profile, /herder-plans\/leak\//)
+    assert.match(profile, /path count alone is never a violation/)
   }
 
   const codexSaver = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_saver.toml"), "utf8")
@@ -753,8 +665,9 @@ process.stdout.write("grok-4.5 kimi-coding/k3 openai/gpt-5.6-sol authenticated\\
     assert.match(profile, /final .*RUN.*plans\[\]\.planText/)
     assert.match(profile, /Never modify the assignment bundle/)
     assert.match(profile, /Never search or read the coordinator checkout, source plan directory, sibling worktrees, common Git directory/)
-    assert.match(profile, /Give every command—including the initial assignment-bundle hash\/type check—the exact assigned worktree as its explicit workdir/)
-    assert.match(profile, /Never use .*\/tmp.*coordinator checkout.*another directory as a command workdir/)
+    assert.match(profile, /provided plan worktree and branch as the only repository target/)
+    assert.match(profile, /Temporary directories may be used for non-repository scratch work/)
+    assert.doesNotMatch(profile, /explicit workdir|command workdir|absolute apply-patch targets/)
     assert.match(profile, /legacy .*changed_lines.*nonbinding compatibility metadata/)
   }
   for (const profile of [codexImplementer, claudeImplementer]) {
@@ -762,11 +675,8 @@ process.stdout.write("grok-4.5 kimi-coding/k3 openai/gpt-5.6-sol authenticated\\
     assert.match(profile, /Never mention Herder, plan IDs, worker roles/)
     assert.match(profile, /GUIDED_REPAIR/)
     assert.match(profile, /suggested directions as non-binding/)
+    assert.match(profile, /Never stop merely because of the number of changed or discovered paths/)
   }
-  for (const profile of [codexImplementer, claudeImplementer, codexSaver, claudeSaver]) {
-    assert.match(profile, /absolute apply-patch targets inside that worktree/)
-  }
-
   const gateWorktree = path.join(root, "gate-worktree")
   const gateLogs = path.join(root, "gate-logs")
   await mkdir(gateWorktree)

@@ -2,16 +2,16 @@
 
 Every compiled plan snapshot is written for an executor model that has **zero context**: it has not seen the Grill interview, Improve audit, sibling plans, or prior conversation. It may be a smaller/cheaper model. Assume it is competent at following explicit instructions and weak at filling gaps, recovering from ambiguity, or knowing when to stop. A snapshot may compose an optional plan-set `CONTEXT.md` before the local plan, but the local plan must still state its own outcome, dependency guarantees, boundaries, and proof.
 
-Three properties make a plan executable by a weaker model:
+Four properties make a plan executable by a weaker model:
 
 1. **Self-contained context** — everything needed is in the file: paths, code excerpts, conventions, commands.
 2. **Verification gates** — every step ends with a command and its expected result. The executor never has to *judge* whether it succeeded.
 3. **Hard boundaries and escape hatches** — explicit out-of-scope list, and "STOP and report" conditions instead of letting the model improvise when reality doesn't match the plan.
-4. **Bounded review surface** — one independently verifiable invariant, a numeric file ceiling, and an exact review map.
+4. **Bounded review surface** — one independently verifiable invariant, explicit semantic boundaries, and an exact review map.
 
 File naming: `herder-plans/NNN-short-slug.md`, numbered in recommended execution order.
 
-Shape an objective before drafting. Prefer a dependency DAG of focused behavioral slices over one large plan or layer-by-layer fragments. A normal plan targets one package, 5–8 edited files, one focused verification command, and at most one public-contract transition. Split larger work through valid intermediate states such as characterization tests, additive seams, bounded caller migrations, and compatibility cleanup. Line count is never a scope or reviewability criterion.
+Shape an objective before drafting. Prefer a dependency DAG of focused behavioral slices over one large plan or layer-by-layer fragments. A normal plan targets one bounded subsystem, one focused verification command, and at most one public-contract transition. Split multiple outcomes or transitions through valid intermediate states such as characterization tests, additive seams, bounded caller migrations, and compatibility cleanup. File and line counts are never scope or reviewability criteria.
 
 Compactness is part of executability. Target 500–900 words per local plan and never exceed 1,200; the manager reports the count and marks larger plans shape-incomplete. State each fact once, prefer dense bullets/tables, and do not repeat acceptance language across decisions, steps, test plan, review map, and done criteria. Inline only the evidence needed to locate and verify the change. Shared `CONTEXT.md` must stay at or below 1,600 words.
 
@@ -43,7 +43,6 @@ Compactness is part of executability. Target 500–900 words per local plan and 
 - **Planned at**: commit `<short SHA>`, <YYYY-MM-DD>
 - **Kind**: behavioral | mechanical | migration | spike
 - **Parent objective**: <the durable plan-set outcome this subplan advances>
-- **Review budget**: files<=8
 
 ## Why this matters
 
@@ -110,7 +109,7 @@ executor's environment. Skip the section otherwise.)
 
 ## Scope
 
-**In scope** (the only files you should modify):
+**In scope** (declared write paths):
 - `src/orders/api.ts`
 - `src/orders/api.test.ts` (create)
 
@@ -167,10 +166,9 @@ Give the reviewer the shortest evidence path:
 - **Expected unchanged behavior**: nearby behavior the reviewer should prove was
   preserved without reopening unrelated code.
 - **Proof**: focused commands and named test cases.
-- **Expected diff**: expected production/test files, modified symbols, and
-  observable behavior within the numeric file target. Name likely companion
-  test or documentation paths; implementation-time discovery has at most a
-  three-file contingency and requires explicit justification and adjudication.
+- **Expected diff**: expected production/test paths, modified symbols, and
+  observable behavior. Name likely companion test or documentation paths;
+  any implementation-discovered path requires semantic justification and review.
 
 ## Done criteria
 
@@ -180,7 +178,7 @@ Machine-checkable; use 3–8 non-duplicative criteria. ALL must hold:
 - [ ] `pnpm test` exits 0; new tests for <X> exist and pass
 - [ ] `grep -rn "<old pattern>" src/` returns no matches
 - [ ] Every modified path is declared in scope or is a directly necessary,
-  justified companion path accepted under the three-file contingency
+  justified companion path accepted by review
 - [ ] Required `CONTEXT.md` or ADR changes, when applicable, are present and match the accepted decision
 - [ ] All done criteria above pass; the Herder coordinator owns status updates
 
@@ -192,8 +190,7 @@ Use 3–6 plan-specific triggers. Stop and report back (do not improvise) if:
   (the codebase has drifted since this plan was written).
 - A step's verification fails twice after a reasonable fix attempt.
 - The fix appears to require an explicitly out-of-scope path.
-- The actual diff would exceed the target plus three files, discover more than
-  three companion paths, overlap an unordered plan, add an undeclared public
+- The actual diff would overlap an unordered plan, add an undeclared public
   transition, or cross another package/bounded subsystem.
 - You discover the assumption "<key assumption>" is false.
 
@@ -282,8 +279,8 @@ After writing a draft, reread the saved plan from disk as if the planning sessio
 3. **Executability** — a model new to the repository can execute the plan using only the plan and repository. Remove placeholders, "as discussed", vague references such as "the relevant module", judgment-only checks such as "make sure it works", and any hidden interview or audit context.
 4. **Internal consistency** — Scope, drift-check paths, Git workflow, steps, test plan, done criteria, STOP conditions, dependencies, and the index agree. The Git workflow delegates branch/worktree ownership to Herder Fire, and every step names exact files or symbols and ends with a command plus expected result.
 5. **Domain model** — accepted terminology, glossary changes, and ADR obligations are durable and consistent across current state, scope, ordered steps, and done criteria. Do not hide them in conversation history.
-6. **Plan shape** — the draft is one coherent, independently testable invariant. Its numeric review budget is credible, its review map gives a short evidence path, its dependency contract leaves a gate-passing intermediate state, and its steps are ordered and explicit about inputs, outputs, and boundaries.
-7. **Split discipline** — split multiple outcomes, packages, public transitions, or caller cohorts before writing long prose. Do not split at a point where integration would be broken. A larger `mechanical` budget names the deterministic transformation and completeness proof; it is not a waiver for broad semantic work.
+6. **Plan shape** — the draft is one coherent, independently testable invariant. Its semantic scope is credible, its review map gives a short evidence path, its dependency contract leaves a gate-passing intermediate state, and its steps are ordered and explicit about inputs, outputs, and boundaries.
+7. **Split discipline** — split multiple outcomes, packages, public transitions, or caller cohorts before writing long prose. Do not split at a point where integration would be broken. A `mechanical` plan names the deterministic transformation and completeness proof; generated churn is not a waiver for broad semantic work.
 8. **Overlap and composition** — repeated verified facts may live in plan-set `CONTEXT.md`, but no local outcome or dependency guarantee does. Overlapping in-scope paths are explicitly ordered by dependency or the plans are reshaped.
 
 Repair omissions or inconsistencies directly when doing so only clarifies already confirmed intent or verified evidence. If review exposes a missing product decision, material scope or approach choice, or a second plan, return to the producer's clarification or selection phase and obtain confirmation before finalizing. A STOP condition is not a substitute for a decision required to begin implementation.

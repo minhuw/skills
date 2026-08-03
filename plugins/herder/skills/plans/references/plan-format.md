@@ -20,7 +20,7 @@ The zero-context invariant applies to the immutable snapshot Fire dispatches. A 
 
 `leak/` contains non-executable findings that Judge found valid but outside the original task. They are never indexed, scheduled, or treated as accepted intent. Fire deduplicates them by recorded key; Grill or Improve must confirm, promote, number, and validate them before Fire can execute them.
 
-Before manager validation, reread every draft and complete [plan-template.md](plan-template.md)'s semantic Producer self-review. Validation checks structure, graph integrity, machine-readable review budgets, and write-scope overlap. It reports legacy shape omissions as warnings rather than making an older backlog unreadable; producers and Validate still own semantic evidence quality.
+Before manager validation, reread every draft and complete [plan-template.md](plan-template.md)'s semantic Producer self-review. Validation checks structure, graph integrity, and write-scope overlap. It reports legacy shape omissions as warnings rather than making an older backlog unreadable; producers and Validate still own semantic evidence quality.
 
 ## 2. Index
 
@@ -56,14 +56,11 @@ Every plan follows the shared template and begins with:
 - **Planned at**: commit `<short SHA>`, <YYYY-MM-DD>
 - **Kind**: behavioral | mechanical | migration | spike
 - **Parent objective**: <one durable outcome shared by this plan set>
-- **Review budget**: files<=8
 ```
 
-Use [plan-template.md](plan-template.md) for all required evidence, decisions, dependency guarantees, scope, ordered work, tests, review map, done criteria, STOP conditions, and maintenance guidance. New producers always write the three shape fields above plus `## Dependency contract` and `## Review map`. The numeric budget is the expected review-surface target. Fire derives a fixed three-file implementation contingency and a hard ceiling of `N+3`.
+Use [plan-template.md](plan-template.md) for all required evidence, decisions, dependency guarantees, scope, ordered work, tests, review map, done criteria, STOP conditions, and maintenance guidance. New producers always write the two shape fields above plus `## Dependency contract` and `## Review map`.
 
-Legacy `files<=N, changed_lines<=N` values remain readable, but the manager
-normalizes them to `files<=N` and ignores the line-count component. Line count
-must never stop, block, repair, reject, or authorize a plan.
+File count and line count must never stop, block, repair, reject, authorize, or otherwise shape a plan.
 
 When terminology or architecture decisions change, schedule the relevant repository `CONTEXT.md`, `CONTEXT-MAP.md`, or ADR update in scope, steps, and done criteria; keep implementation details out of glossaries. Do not confuse a repository domain `CONTEXT.md` with `herder-plans/CONTEXT.md`, which is only shared snapshot input.
 
@@ -71,15 +68,15 @@ The executor receives the repository and the compiled snapshot, not the Grill in
 
 ## 4. Plan Shaping
 
-Partition an objective into a dependency DAG before drafting prose. A normal subplan targets one independently verifiable invariant, one package or bounded subsystem, no more than 5–8 edited files, one focused verification command, and at most one public-contract or migration transition. Line count is descriptive only and never determines plan shape or reviewability.
+Partition an objective into a dependency DAG before drafting prose. A normal subplan targets one independently verifiable invariant, one package or bounded subsystem, one focused verification command, and at most one public-contract or migration transition. File and line counts are descriptive only and never determine plan shape or reviewability.
 
 Target 500–900 words and require at most 1,200 words in each local plan. Shared `CONTEXT.md` is capped at 1,600 words. The manager includes local line/word counts in `shape`, marks larger content shape-incomplete, and leaves legacy content readable with warnings. Compact plans state each fact once and include only evidence needed to locate, implement, and verify their bounded outcome.
 
 Split when work contains multiple observable outcomes, independently releasable caller cohorts, ownership/package boundaries, more than one public transition, or no focused verification command. Every cut must leave integration valid. Prefer additive seams: characterize current behavior, add an adapter or expansion, migrate bounded caller groups, then remove compatibility code. Do not split by architectural layer when an intermediate layer cannot pass required gates.
 
-`mechanical` plans may declare a larger numeric file budget only when the transformation is deterministic, the review map names the invariant and generated churn, and a repository command proves completeness. `migration` plans must be phased through backward-compatible states. `spike` plans produce evidence or a confirmed design and do not silently become implementation plans.
+`mechanical` plans name the deterministic transformation and a repository command that proves completeness. `migration` plans must be phased through backward-compatible states. `spike` plans produce evidence or a confirmed design and do not silently become implementation plans.
 
-Two ready plans with the same machine-readable in-scope path must be ordered by dependency or reshaped. The manager reports unordered overlap. Up to three implementation-discovered companion paths may exceed the expected path list or target only when they directly support the original outcome, stay in the declared bounded subsystem, add no public-contract or migration transition, do not overlap an unordered live plan, and receive explicit Reviewer and Judge approval. The Implementer must justify each discovered path against a step or done criterion. More than three discovered paths, more than `N+3` changed files, an explicitly out-of-scope path, or a subsystem/transition boundary crossing is a STOP condition and requires split/replan before broad review.
+Two ready plans with the same machine-readable in-scope path must be ordered by dependency or reshaped. The manager reports unordered overlap. An implementation-discovered companion path may proceed only when it directly supports the original outcome, stays in the declared bounded subsystem, adds no unplanned public-contract or migration transition, and does not overlap an unordered live plan. The Implementer must justify each discovered path against a step or done criterion; Reviewer must accept it, and escalated rounds additionally require Judge acceptance. An explicitly out-of-scope path or a subsystem/transition boundary crossing is a STOP condition and requires split/replan before broad review. The number of changed or discovered paths is never a STOP condition.
 
 ## 5. Status
 

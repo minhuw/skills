@@ -1,6 +1,6 @@
 # Herder
 
-Herder is a task orchestrator engine for Claude Code and Codex. It shapes objectives into focused review-budgeted plan graphs, executes bounded implementation/review rounds, uses an independent Judge to prevent scope divergence, and escalates only verified blockers to Saver. Its optional Orca runtime can route those roles across different CLI harnesses while preserving one plan, review, and recovery protocol.
+Herder is a task orchestrator engine for Claude Code and Codex. It shapes objectives into focused semantically bounded plan graphs, executes independent six-round implementation/review loops, and uses an independent Judge to filter unresolved findings from round three onward. Its optional Orca runtime can route those roles across different CLI harnesses while preserving one plan, review, and integration protocol.
 
 ## Claude Code
 

@@ -194,7 +194,6 @@ function snapshotEntry(snapshot) {
       kind: snapshot.plan.kind,
       parentObjective: snapshot.plan.parentObjective,
       dependencies: snapshot.plan.dependencies,
-      reviewBudget: snapshot.plan.reviewBudget,
       inScopePaths: snapshot.plan.inScopePaths,
     },
     planText: snapshot.planText,

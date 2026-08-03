@@ -46,7 +46,7 @@ Complete every check before creating refs, branches, or worktrees:
 
 1. Confirm repository and worktree inventory are readable.
 2. Run `node <checkout_guard> --repo <repo_root> --exclude <plan_dir> --pretty`; require `ok: true` and retain its `stateToken` without exposing file contents.
-3. Run Plans `validate` and `shape`. Reject graph, scope, overlap, or file-budget errors. Treat `files<=N` as an expected target with fixed contingency `3` and hard ceiling `N+3`; legacy plans use conservative `8/3/11`. Ignore every legacy changed-line value or LOC STOP rule.
+3. Run Plans `validate` and `shape`. Reject graph, semantic-scope, or overlap errors. Ignore legacy review-budget metadata and every file-count or LOC STOP rule.
 4. Run `node <namespace_runner> ... --mode <fire|resume> --pretty`. A namespace conflict is a deliberate stop; never invent a timestamp, adopt unknown state, or overwrite evidence.
 5. Resolve Implementer, Reviewer, and Judge profiles and their configured routing. A packaged Saver profile is not part of fresh scheduling and is probed only when resuming a persisted legacy Saver state.
 6. For native Codex require Multi-Agent V2 `herder_agents` spawning with `agent_type` and `fork_turns`; never fall back to `codex exec` or a generic worker. For Orca, validate the explicit runtime profile and every required route.
@@ -94,7 +94,7 @@ git worktree lock --reason plan-herder:<plan-name>:<plan-id>:<role>:<attempt-id>
 
 One plan may have at most one active owner. A lock is a cleanup lease, not lifecycle state. The coordinator alone unlocks after the worker is terminal.
 
-For native Codex, dispatch the exact `plan_implementer`, `plan_reviewer`, or `plan_judge` profile with `fork_turns: "none"`; omit model, effort, and service-tier overrides. Every command—including the first bundle hash/type check—must set the assigned worktree as its explicit workdir. `/tmp`, the coordinator checkout, and other neutral directories are forbidden command workdirs. For Orca use one tracked task and adapter-delivered lifecycle prompt per attempt; matching `worker_done` task/dispatch/pane provenance replaces native terminal evidence.
+For native Codex, dispatch the exact `plan_implementer`, `plan_reviewer`, or `plan_judge` profile with `fork_turns: "none"`; omit model, effort, and service-tier overrides. For Orca use one tracked task and adapter-delivered lifecycle prompt per attempt; matching `worker_done` task/dispatch/pane provenance replaces native terminal evidence.
 
 Immediately before and after every worker attempt, run:
 
@@ -152,7 +152,7 @@ An Implementer result that may have mutated consumes its current round even if i
 
 ### Implementation and gates
 
-Give Implementer its exact worktree/branch/base, assignment path and hashes, current round, mode `INITIAL` or `GUIDED_REPAIR`, expected file target/contingency/hard ceiling, applicable instructions, required gates, accepted discovered paths, and only coordinator-authorized repair contracts. In rounds 1–2, those contracts may come directly from Reviewer; in rounds 3–6 they must come from Judge. Never pass advisory, deferred, invalid, or unrelated findings.
+Give Implementer its exact worktree/branch/base, assignment path and hashes, current round, mode `INITIAL` or `GUIDED_REPAIR`, applicable instructions, required gates, accepted discovered paths, and only coordinator-authorized repair contracts. In rounds 1–2, those contracts may come directly from Reviewer; in rounds 3–6 they must come from Judge. Never pass advisory, deferred, invalid, or unrelated findings.
 
 Require this response:
 
@@ -176,7 +176,7 @@ node <gate_runner> --cwd <absolute-worktree> --log-dir <gate_log_root>/<plan-or-
 
 The runner returns metadata and no command output on success or failure. Preserve full logs outside worktrees and give repair workers compact direct evidence, not theories or log dumps.
 
-Before review, require clean status, at least one merge-free commit, exact base/HEAD/tree, all required gates passing, and assignment verification. Measure changed paths from base to HEAD. The expected `files<=N` target may use its three-file contingency, but hard-stop for replan when actual paths exceed `N+3`, more than three undeclared paths appear, an explicit out-of-scope path changed, a path crosses the bounded subsystem/public transition, or it overlaps unordered live work. An actual count above `N` alone is not a violation. Do not compute or enforce a changed-line ceiling; LOC may be reported descriptively but never gates the plan.
+Before review, require clean status, at least one merge-free commit, exact base/HEAD/tree, all required gates passing, and assignment verification. Measure changed paths from base to HEAD and require a necessity/plan-link explanation for each undeclared path. Hard-stop for replan only when an explicit out-of-scope path changed, a path crosses the bounded subsystem or public-transition boundary, or it overlaps unordered live work. The number of changed or undeclared paths and the number of changed lines may be reported descriptively but never gate the plan.
 
 ### Review convergence
 
@@ -199,7 +199,7 @@ RATIONALE: <concise>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Judge is read-only and is dispatched only for a nonapproving Reviewer result at round 3–6. It cannot override failed required gates, explicit non-LOC done criteria, the hard file/scope ceiling, or an evidence-complete patch regression. It filters findings under the same relationship policy and returns:
+Judge is read-only and is dispatched only for a nonapproving Reviewer result at round 3–6. It cannot override failed required gates, explicit semantic done criteria or scope violations, or an evidence-complete patch regression. It filters findings under the same relationship policy and returns:
 
 ```text
 DECISION: DONE | REPAIR | NEEDS_INPUT | BLOCKED
@@ -237,7 +237,7 @@ Do not add Herder metadata to commit subjects or bodies. Integration history rem
 
 The root coordinator alone calls `record-usage` after every terminal attempt, including attempts without a response. Continue stable per-role ordinals across resume. Copy uniquely attributable host telemetry; otherwise record `unknown`. Never estimate.
 
-Native Codex evidence must show matching role, Multi-Agent V2, `mutationEvidenceComplete: true`, `unresolvedApplyPatchCalls: 0`, every execution workdir inside the assigned worktree, and every canonical `applyPatchPaths` entry inside it. Reviewer and Judge additionally require zero apply-patch calls. Orca requires exact worktree/task/dispatch/pane provenance and before/after Git proofs.
+Native Codex evidence must show matching role, Multi-Agent V2, terminal response classification, and host-reported usage when available. Never parse tool-call text to infer filesystem containment. Both runtimes require checkout-guard and exact before/after Git proofs; Orca additionally requires exact worktree/task/dispatch/pane provenance.
 
 Classify `INTERRUPTED` only when host evidence proves infrastructure rather than repository failure, no parseable envelope exists, pre/post integration and plan HEAD/tree match, and the previously clean worktree remains clean including untracked files. Then consume no round, verify the assignment, and dispatch a fresh session; never resume the interrupted child conversation.
 

@@ -38,7 +38,6 @@ function planBody() {
 - **Planned at**: commit \`abc1234\`, 2026-07-28
 - **Kind**: behavioral
 - **Parent objective**: Keep every worker inside its assigned worktree
-- **Review budget**: files<=2
 
 ## Why this matters
 
@@ -56,7 +55,7 @@ The coordinator owns the source backlog.
 
 ## Scope
 
-**In scope** (the only files you should modify):
+**In scope** (declared write paths):
 - \`src/worker.mjs\`
 
 **Out of scope**:
@@ -88,7 +87,7 @@ Run \`node --test\`.
 - Modified symbols: \`src/worker.mjs\`.
 - Proof: \`node --test\`.
 - Expected unchanged behavior: coordination files remain unchanged.
-- Expected diff: at most 2 files.
+- Expected diff: the worker module and its direct tests.
 
 ## Done criteria
 
@@ -167,12 +166,7 @@ try {
     assert.equal(bundle.kind, "herder-plan-assignment")
     assert.equal(bundle.plan.id, "001")
     assert.equal(bundle.plan.title, "Keep assignment context local")
-    assert.deepEqual(bundle.plan.reviewBudget, {
-      files: 2,
-      contingencyFiles: 3,
-      hardCeilingFiles: 5,
-      source: "files<=2",
-    })
+    assert.equal(Object.hasOwn(bundle.plan, "reviewBudget"), false)
     assert.equal(bundle.planText, fixture.snapshot.planText)
     assert.equal(bundle.snapshotSha256, fixture.snapshot.snapshotSha256)
     assert.equal(bundle.assignment.branch, fixture.branch)

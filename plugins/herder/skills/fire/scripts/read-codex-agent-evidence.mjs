@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { opendir, readFile } from "node:fs/promises"
-import { realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import process from "node:process"
@@ -11,31 +10,27 @@ class UsageError extends Error {}
 function parseArgs(argv) {
   const options = {
     agent: "",
-    workdir: "",
     codexHome: process.env.CODEX_HOME || path.join(homedir(), ".codex"),
     pretty: false,
   }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === "--pretty") options.pretty = true
-    else if (["--agent", "--agent-id", "--workdir", "--codex-home"].includes(argument)) {
+    else if (["--agent", "--agent-id", "--codex-home"].includes(argument)) {
       const value = argv[index + 1]
       if (!value || value.startsWith("--")) throw new UsageError(`${argument} requires a value`)
       index += 1
       if (["--agent", "--agent-id"].includes(argument)) options.agent = value
-      else if (argument === "--workdir") options.workdir = path.resolve(value)
       else options.codexHome = path.resolve(value)
     } else if (["--help", "-h"].includes(argument)) options.help = true
     else throw new UsageError(`Unknown argument: ${argument}`)
   }
-  if (!options.help && Boolean(options.agent) === Boolean(options.workdir)) {
-    throw new UsageError("exactly one of --agent or --workdir is required")
-  }
+  if (!options.help && !options.agent) throw new UsageError("--agent is required")
   return options
 }
 
 function usage() {
-  return `Usage: read-codex-agent-evidence.mjs (--agent <id-or-canonical-task-name> | --workdir <absolute-path>) [--codex-home <path>] [--pretty]\n`
+  return `Usage: read-codex-agent-evidence.mjs --agent <id-or-canonical-task-name> [--codex-home <path>] [--pretty]\n`
 }
 
 async function *jsonlFiles(directory) {
@@ -66,66 +61,6 @@ function safeTokenUsage(value) {
   }
 }
 
-function toolWorkdirs(input) {
-  if (typeof input !== "string") return []
-  const workdirs = []
-  const pattern = /(?:"workdir"|workdir)\s*:\s*"([^"]+)"/g
-  for (const match of input.matchAll(pattern)) workdirs.push(match[1])
-  return workdirs
-}
-
-function applyPatchEvidence(name, input) {
-  if (typeof input !== "string") return { calls: 0, unresolvedCalls: 0, paths: [] }
-  const decoded = input.replaceAll("\\r\\n", "\n").replaceAll("\\n", "\n")
-  const blockPattern = /\*\*\* Begin Patch\s*\n([\s\S]*?)\n\*\*\* End Patch/g
-  const blocks = [...decoded.matchAll(blockPattern)]
-  const directCall = name === "apply_patch"
-  const wrappedCalls = directCall ? 0 : [...decoded.replace(blockPattern, "").matchAll(/\btools\.apply_patch\s*\(/g)].length
-  const calls = directCall ? 1 : wrappedCalls
-  if (calls === 0) return { calls: 0, unresolvedCalls: 0, paths: [] }
-
-  const paths = []
-  let resolvedBlocks = 0
-  for (const block of blocks) {
-    const targetPattern = /^\*\*\* (?:(Add|Update|Delete) File: |(Move) to: )(.+?)\s*$/gm
-    let targetCount = 0
-    for (const match of block[1].matchAll(targetPattern)) {
-      const target = match[3].trim()
-      if (target) {
-        paths.push(target)
-        targetCount += 1
-      }
-    }
-    if (targetCount > 0) resolvedBlocks += 1
-  }
-  return {
-    calls,
-    unresolvedCalls: Math.max(0, calls - resolvedBlocks),
-    paths,
-  }
-}
-
-function canonicalPath(value, base = process.cwd()) {
-  const absolute = path.resolve(base, value)
-  let candidate = absolute
-  const suffix = []
-  while (true) {
-    try {
-      return path.join(realpathSync.native(candidate), ...suffix)
-    } catch {
-      const parent = path.dirname(candidate)
-      if (parent === candidate) return absolute
-      suffix.unshift(path.basename(candidate))
-      candidate = parent
-    }
-  }
-}
-
-function isAtOrInside(parent, candidate) {
-  const relative = path.relative(parent, candidate)
-  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-}
-
 function parseSession(text, options, file) {
   let meta = null
   let context = null
@@ -136,10 +71,6 @@ function parseSession(text, options, file) {
   let taskComplete = false
   let turnAborted = false
   let finalEnvelopePresent = false
-  const executionWorkdirs = new Set()
-  const rawApplyPatchPaths = new Set()
-  let applyPatchCalls = 0
-  let unresolvedApplyPatchCalls = 0
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim().startsWith("{")) continue
     let event
@@ -173,19 +104,6 @@ function parseSession(text, options, file) {
         taskMessageCount += 1
       }
     }
-    if (
-      event.type === "response_item"
-      && ["custom_tool_call", "function_call"].includes(event.payload?.type)
-    ) {
-      const input = event.payload.type === "function_call"
-        ? event.payload.arguments
-        : event.payload.input
-      for (const workdir of toolWorkdirs(input)) executionWorkdirs.add(workdir)
-      const patchEvidence = applyPatchEvidence(event.payload.name, input)
-      applyPatchCalls += patchEvidence.calls
-      unresolvedApplyPatchCalls += patchEvidence.unresolvedCalls
-      for (const target of patchEvidence.paths) rawApplyPatchPaths.add(target)
-    }
     if (event.type === "event_msg" && event.payload?.type === "token_count") {
       tokenUsage = safeTokenUsage(event.payload.info?.total_token_usage) || tokenUsage
     }
@@ -194,18 +112,10 @@ function parseSession(text, options, file) {
   const spawn = meta.source?.subagent?.thread_spawn || {}
   const aliases = [meta.id, meta.session_id, meta.agent_path, spawn.agent_path]
   const cwd = context?.cwd || meta.cwd || null
-  const applyPatchPaths = [...rawApplyPatchPaths].map((target) => canonicalPath(target, cwd || process.cwd()))
-  if (options.agent && !aliases.includes(options.agent)) return null
-  if (options.workdir) {
-    const requestedWorkdir = canonicalPath(options.workdir)
-    const matchingWorkdir = [cwd, ...executionWorkdirs, ...applyPatchPaths].some((candidate) => (
-      typeof candidate === "string" && isAtOrInside(requestedWorkdir, canonicalPath(candidate))
-    ))
-    if (!matchingWorkdir) return null
-  }
+  if (!aliases.includes(options.agent)) return null
   return {
     ok: true,
-    lookup: options.agent || options.workdir,
+    lookup: options.agent,
     agentId: meta.id || meta.session_id || null,
     transcript: file,
     threadSource: meta.thread_source || null,
@@ -220,11 +130,6 @@ function parseSession(text, options, file) {
     sandbox: context?.sandbox_policy?.type || null,
     approvalPolicy: context?.approval_policy || null,
     cwd,
-    executionWorkdirs: [...executionWorkdirs],
-    applyPatchCalls,
-    applyPatchPaths: [...new Set(applyPatchPaths)],
-    unresolvedApplyPatchCalls,
-    mutationEvidenceComplete: unresolvedApplyPatchCalls === 0,
     lastEventAt,
     userMessageCount,
     taskMessageCount,
@@ -238,25 +143,17 @@ function parseSession(text, options, file) {
 }
 
 async function findEvidence(options) {
-  const matches = []
   for (const directory of ["sessions", "archived_sessions"]) {
     for await (const file of jsonlFiles(path.join(options.codexHome, directory))) {
       const evidence = parseSession(await readFile(file, "utf8"), options, file)
       if (!evidence) continue
-      if (options.agent) return evidence
-      matches.push(evidence)
+      return evidence
     }
-  }
-  if (options.workdir && matches.length > 0) {
-    matches.sort((left, right) => String(right.lastEventAt).localeCompare(String(left.lastEventAt)))
-    return { ok: true, lookup: options.workdir, workdir: options.workdir, agents: matches }
   }
   return {
     ok: false,
-    lookup: options.agent || options.workdir,
-    error: options.agent
-      ? "No persisted Codex session matched the agent ID or canonical task name"
-      : "No persisted Codex session used the requested worktree",
+    lookup: options.agent,
+    error: "No persisted Codex session matched the agent ID or canonical task name",
   }
 }
 
