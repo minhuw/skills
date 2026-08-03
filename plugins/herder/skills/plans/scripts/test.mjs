@@ -7,14 +7,17 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import {
   buildGraph,
+  getExecutionReport,
   getShapeReport,
   getUsageReport,
   initPlanDir,
+  migrateUsage,
   recordUsage,
   setTracking,
   snapshotPlan,
   transitionStatus,
 } from "./herder-plans.mjs"
+import { executionDatabasePath } from "./execution-store.mjs"
 
 function git(root, ...args) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
@@ -123,6 +126,20 @@ function expectFailure(fn, pattern) {
   assert.throws(fn, pattern)
 }
 
+function legacyUsageSection(attempt = "legacy-002-reviewer-1") {
+  return `
+<!-- herder-usage:start -->
+## Execution usage
+
+### Attempts
+
+| Attempt | Plan | Role | Model | Effort | Outcome | Input tokens | Cached input | Output tokens | Reasoning tokens | Source |
+|---|---|---|---|---|---|---:|---:|---:|---:|---|
+| ${attempt} | 002 | plan-reviewer | gpt-5.6-sol | xhigh | APPROVE | 300 | 100 | 50 | 20 | codex-exec |
+<!-- herder-usage:end -->
+`
+}
+
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "herder-plans-test-"))
 try {
   const repo = path.join(root, "repo")
@@ -134,8 +151,12 @@ try {
   assert.equal(initialized.tracking, "local")
   assert.equal(buildGraph(initialized.planDir).complete, true)
   assert.match(fs.readFileSync(path.join(initialized.planDir, "README.md"), "utf8"), /## Considered and rejected/)
-  assert.match(fs.readFileSync(initialized.readme, "utf8"), /## Execution usage/)
-  assert.equal(getUsageReport(initialized.planDir).attempts, 0)
+  assert.doesNotMatch(fs.readFileSync(initialized.readme, "utf8"), /## Execution usage/)
+  assert.equal(fs.existsSync(executionDatabasePath(initialized.planDir)), true)
+  assert.equal(fs.statSync(executionDatabasePath(initialized.planDir)).mode & 0o777, 0o600)
+  const emptyUsage = getUsageReport(initialized.planDir)
+  assert.equal(emptyUsage.attempts, 0)
+  assert.equal(emptyUsage.storage, "sqlite")
   const excludeFile = git(repo, "rev-parse", "--git-path", "info/exclude")
   const resolvedExclude = path.isAbsolute(excludeFile) ? excludeFile : path.join(repo, excludeFile)
   assert.match(fs.readFileSync(resolvedExclude, "utf8"), /^\/herder-plans\/$/m)
@@ -169,6 +190,7 @@ try {
   assert.equal(Number.isSafeInteger(shape.plans.find((plan) => plan.id === "002").planLines), true)
   assert.equal(Object.hasOwn(shape.plans.find((plan) => plan.id === "002"), "reviewBudget"), false)
 
+  const readmeBeforeUsage = fs.readFileSync(valid.readme, "utf8")
   const implementerUsage = {
     plan: "002",
     role: "plan-implementer",
@@ -181,6 +203,14 @@ try {
     outputTokens: "200",
     reasoningTokens: "50",
     source: "codex-exec",
+    round: "1",
+    generation: "generation-1",
+    runtime: "native",
+    harness: "codex",
+    serviceTier: "fast",
+    startedAt: "2026-08-03T00:00:00Z",
+    finishedAt: "2026-08-03T00:00:02Z",
+    durationMs: "2000",
   }
   assert.equal(recordUsage(valid.planDir, implementerUsage).recorded, true)
   assert.equal(recordUsage(valid.planDir, implementerUsage).recorded, false)
@@ -192,6 +222,14 @@ try {
     effort: "xhigh",
     outcome: "APPROVE",
     source: "unknown",
+    round: "1",
+    generation: "generation-1",
+    runtime: "native",
+    harness: "codex",
+    serviceTier: "standard",
+    startedAt: "2026-08-03T00:00:02Z",
+    finishedAt: "2026-08-03T00:00:05Z",
+    durationMs: "3000",
   }).recorded, true)
 
   const usage = getUsageReport(valid.planDir)
@@ -204,10 +242,24 @@ try {
   }])
   assert.equal(usage.byRole.find((row) => row.key === "plan-implementer").knownTokens, 1200)
   assert.equal(usage.byModel.find((row) => row.key === "gpt-5.6-sol / xhigh").tokenAttempts, 0)
-  const usageReadme = fs.readFileSync(valid.readme, "utf8")
-  assert.match(usageReadme, /### By plan/)
-  assert.match(usageReadme, /run-1-002-implementer-1/)
-  assert.match(usageReadme, /\| 002 \| 2 \| 1\/2 \| 1200 \|/)
+  assert.equal(usage.storage, "sqlite")
+  assert.equal(fs.readFileSync(valid.readme, "utf8"), readmeBeforeUsage)
+  assert.equal(fs.existsSync(executionDatabasePath(valid.planDir)), true)
+  const databaseBeforeReports = fs.readFileSync(executionDatabasePath(valid.planDir))
+  const planReport = getExecutionReport(valid.planDir, "002")
+  assert.equal(planReport.attempts, 2)
+  assert.deepEqual(planReport.rounds, [1])
+  assert.deepEqual(planReport.tokenCoverage, { reported: 1, total: 2 })
+  assert.equal(planReport.tokens.reportedInputOutput, 1200)
+  assert.equal(planReport.timing.wallClockMs, 5000)
+  assert.equal(planReport.timing.attemptDurationMs, 5000)
+  assert.deepEqual(planReport.timing.durationCoverage, { reported: 2, total: 2 })
+  assert.equal(planReport.byRole.find((row) => row.key === "plan-reviewer").attempts, 1)
+  assert.equal(planReport.byRuntime.find((row) => row.key === "native / codex").attempts, 2)
+  assert.equal(planReport.byGeneration.find((row) => row.key === "generation-1").attempts, 2)
+  assert.equal(planReport.byServiceTier.find((row) => row.key === "fast").attempts, 1)
+  assert.equal(planReport.lifecycle.status, "TODO")
+  assert.deepEqual(fs.readFileSync(executionDatabasePath(valid.planDir)), databaseBeforeReports)
   expectFailure(
     () => recordUsage(valid.planDir, { ...implementerUsage, outcome: "FAILED" }),
     /already recorded with different values/,
@@ -249,8 +301,42 @@ Keep shared fixture facts in one compiled snapshot input.
   assert.equal(buildGraph(valid.planDir).plans.find((plan) => plan.id === "002").statusDetail, "verification failed")
   expectFailure(() => transitionStatus(valid.planDir, "002", "DONE"), /Invalid plan transition/)
   transitionStatus(valid.planDir, "002", "IN PROGRESS")
-  transitionStatus(valid.planDir, "002", "DONE")
+  const completed = transitionStatus(valid.planDir, "002", "DONE")
+  assert.equal(completed.report.lifecycle.status, "DONE")
+  assert.equal(completed.report.attempts, 2)
   assert.equal(buildGraph(valid.planDir).plans.find((plan) => plan.id === "002").status, "DONE")
+
+  const legacyDir = writeFixture(path.join(root, "legacy-usage"))
+  const legacyReadme = path.join(legacyDir, "README.md")
+  fs.appendFileSync(legacyReadme, legacyUsageSection())
+  const legacyMarkdown = fs.readFileSync(legacyReadme, "utf8")
+  assert.equal(fs.existsSync(executionDatabasePath(legacyDir)), false)
+  const legacyReadOnly = getUsageReport(legacyDir)
+  assert.equal(legacyReadOnly.storage, "legacy-readonly")
+  assert.equal(legacyReadOnly.attempts, 1)
+  assert.equal(fs.existsSync(executionDatabasePath(legacyDir)), false)
+  assert.equal(fs.readFileSync(legacyReadme, "utf8"), legacyMarkdown)
+  const migrated = migrateUsage(legacyDir)
+  assert.equal(migrated.migrated, 1)
+  assert.equal(migrated.removedLegacySection, true)
+  assert.equal(fs.existsSync(executionDatabasePath(legacyDir)), true)
+  assert.doesNotMatch(fs.readFileSync(legacyReadme, "utf8"), /herder-usage|legacy-002-reviewer-1/)
+  const repeatedMigration = migrateUsage(legacyDir)
+  assert.equal(repeatedMigration.migrated, 0)
+  assert.equal(repeatedMigration.removedLegacySection, false)
+  assert.equal(getUsageReport(legacyDir).attempts, 1)
+
+  const malformedLegacyDir = writeFixture(path.join(root, "malformed-legacy-usage"))
+  const malformedLegacyReadme = path.join(malformedLegacyDir, "README.md")
+  fs.appendFileSync(malformedLegacyReadme, "\n<!-- herder-usage:start -->\n")
+  expectFailure(() => migrateUsage(malformedLegacyDir), /malformed legacy Herder usage section markers/)
+  assert.equal(fs.existsSync(executionDatabasePath(malformedLegacyDir)), false)
+
+  const symlinkDatabaseDir = writeFixture(path.join(root, "symlink-database"))
+  const externalDatabase = path.join(root, "external-database")
+  fs.mkdirSync(externalDatabase)
+  fs.symlinkSync(externalDatabase, path.join(symlinkDatabaseDir, ".herder"))
+  expectFailure(() => migrateUsage(symlinkDatabaseDir), /Execution runtime path must be a real directory/)
 
   expectFailure(
     () => buildGraph(writeFixture(path.join(root, "mismatch"), { mismatch: true })),

@@ -8,7 +8,7 @@
         {
           "source": "agent-profiles/codex/plan_accountant.toml",
           "target": "plan_accountant.toml",
-          "sha256": "1ddbb0530a42557c9c2054d6ed31479c39cb225cb71366c0df01a2850d0635de"
+          "sha256": "4eb094ba7e8627688a1eaa41ff58934a095300669165f8c737ee5ba55aa91e0a"
         },
         {
           "source": "agent-profiles/codex/plan_implementer.toml",
@@ -38,7 +38,7 @@
         {
           "source": "agents/plan-accountant.md",
           "identifier": "herder:plan-accountant",
-          "sha256": "905de091bdbda489a8163bed13cd7e7652c6cae3523045959ab70f5c0976a599"
+          "sha256": "e7a654b1e4527536a47cc6f9bfd4e658fc37484c59fae746586418afaca4d696"
         },
         {
           "source": "agents/plan-implementer.md",

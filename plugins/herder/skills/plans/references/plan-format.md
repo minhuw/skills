@@ -11,10 +11,11 @@ herder-plans/
   001-short-imperative-slug.md
   002-another-plan.md
   leak/                   # optional judge-deferred findings awaiting user choice
-  .herder/                 # optional runtime artifacts; never plan truth
+  .herder/                 # ignored runtime artifacts; never plan truth
+    execution.sqlite3      # manager-owned immutable attempt accounting
 ```
 
-Do not require YAML execution configuration, a database, or `.herder/state.json`. Plans owns format, parsing, validation, and transitions; Grill and Improve produce the same format; Fire owns execution, branches, and worktrees. Plans must use the canonical Fire-assigned branch instruction and never name a concrete execution branch. Provenance must not alter what Fire receives or require hidden session context.
+Do not require YAML execution configuration, another database, or `.herder/state.json`. The one manager-owned SQLite file records execution attempts and statistics only; README owns lifecycle and plan-graph truth, while Git refs/worktrees own completion and integration truth. Plans owns format, parsing, validation, and transitions; Grill and Improve produce the same format; Fire owns execution, branches, and worktrees. Plans must use the canonical Fire-assigned branch instruction and never name a concrete execution branch. Provenance must not alter what Fire receives or require hidden session context.
 
 The zero-context invariant applies to the immutable snapshot Fire dispatches. A plan may remain file-self-contained, or a producer may put facts reused by multiple plans in `CONTEXT.md`. `snapshot` deterministically composes the exact shared context followed by the local plan and returns hashes for both inputs and the compiled text. A plan must never rely on a sibling plan file or conversation history. Dependency guarantees belong in its local `## Dependency contract`.
 
@@ -106,8 +107,10 @@ Default initialization adds `/herder-plans/` to `.git/info/exclude` without chan
 
 An ignored backlog is absent from new worktrees. Fire uses manager `snapshot` and inlines compiled `planText` in implementer, reviewer, judge, and saver prompts; never copy the whole backlog into execution branches.
 
-## 7. Execution Usage
+## 7. Execution Accounting
 
-The manager may generate `README.md`'s `## Execution usage` section with summaries and one row per attempt. Only the persistent Fire Accountant writes it through `record-usage`; workers return usage envelopes through the root.
+The manager creates `.herder/execution.sqlite3` during initialization or the first accounting mutation. Only the persistent Fire Accountant writes it through `record-usage` or performs the one-time `migrate-usage`; workers return usage envelopes through the root. Read-only `usage` and `report` commands can inspect a legacy README ledger without migrating it.
 
-Record model, effort, outcome, and an idempotent attempt ID for every implementer, reviewer, judge, saver, and run-wide attempt. Copy only host telemetry; keep unavailable fields `unknown` and never estimate. Input-plus-output subtotals do not add cached-input or reasoning details again, and incomplete coverage must remain visible.
+Record model, effort, outcome, and an idempotent attempt ID for every implementer, reviewer, judge, saver, and run-wide attempt. When known, also record round, generation, runtime, harness, service tier, timestamps, and duration. Copy only host telemetry; keep unavailable token fields `unknown` and never estimate. Input-plus-output subtotals do not add cached-input or reasoning details again, and incomplete coverage must remain visible.
+
+`report <plan-id>` returns convergence, outcome, token-coverage, model/runtime, and timing statistics for one plan; `report RUN` aggregates the plan set. A transition to `DONE` returns that plan's report. The database never stores prompts, responses, repository contents, scheduler queues, or secrets, and it is excluded from assignment bundles and Git tracking.

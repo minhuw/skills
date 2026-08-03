@@ -1,6 +1,6 @@
 ---
 name: plans
-description: Initialize, shape, validate, inspect, and manage Herder Markdown plan backlogs, compiled snapshots, and execution-token ledgers. Use when creating or repairing herder-plans/, checking plan granularity, semantic scope, dependencies and readiness, changing plan tracking policy, inspecting execution status, reporting token coverage, or preparing plans for $herder:fire. Do not use to implement plans or orchestrate subagents.
+description: Initialize, shape, validate, inspect, and manage Herder Markdown plan backlogs, compiled snapshots, and SQLite execution accounting. Use when creating or repairing herder-plans/, checking plan granularity, semantic scope, dependencies and readiness, changing plan tracking policy, inspecting execution status, migrating legacy usage metadata, reporting run statistics, or preparing plans for $herder:fire. Do not use to implement plans or orchestrate subagents.
 ---
 
 # Herder Plans
@@ -19,11 +19,13 @@ herder:plans validate [<plan-dir>]
 herder:plans shape [<plan-dir>]
 herder:plans status [<plan-dir>]
 herder:plans usage [<plan-dir>]
+herder:plans report <plan-id|RUN> [<plan-dir>]
+herder:plans migrate-usage [<plan-dir>]
 herder:plans track [<plan-dir>]
 herder:plans untrack [<plan-dir>]
 ```
 
-Default to `herder-plans/`. Never add `plans/execution.yaml`, a database, or another state file.
+Default to `herder-plans/`. The manager owns only one accounting database, `herder-plans/.herder/execution.sqlite3`. Never add `plans/execution.yaml`, another database, an event journal, or another scheduler-state file.
 
 ## Manager
 
@@ -38,7 +40,9 @@ node <skill-dir>/scripts/herder-plans.mjs <command> <remaining arguments> --pret
 - `validate`: check index/files, headings, metadata, dependency agreement, statuses, missing/unknown plans, cycles, and overlapping machine-readable write scopes. Legacy plans without new shape fields remain readable but produce warnings.
 - `shape`: report each plan's kind, parent objective, write paths, local line/word count, shape issues, shared-context size, and cross-plan overlaps without changing files.
 - `status`: validate, then show totals, ready/waiting/terminal plans, and warnings.
-- `usage`: group the ledger by plan, role, and model/effort; numeric values are only known subtotals when coverage is incomplete.
+- `usage`: read SQLite and group attempts by plan, role, and model/effort; numeric values are only known subtotals when coverage is incomplete.
+- `report`: return rich per-plan or full-run attempt, round, outcome, model, runtime, token-coverage, and timing statistics. A successful transition to `DONE` includes that plan's report in its result.
+- `migrate-usage`: transactionally import the legacy generated README usage table into SQLite, then remove that section. It is idempotent and leaves malformed legacy data untouched for repair.
 - `track`: remove the broad local exclude and create the internal `.gitignore`; do not stage files.
 - `untrack`: restore the broad local exclude; do not change already tracked index entries.
 
@@ -53,6 +57,8 @@ ready [<plan-dir>]
 snapshot <plan-id> [<plan-dir>]
 transition <plan-id> <status> [<plan-dir>] [--detail <text>]
 record-usage <plan-id|RUN> <role> [<plan-dir>] --attempt <id> --model <model> --effort <effort> --outcome <outcome> [usage flags]
+report <plan-id|RUN> [<plan-dir>]
+migrate-usage [<plan-dir>]
 ```
 
 Producers run `init`, shape the objective into focused independently verifiable nodes, follow both shared references, reread drafts for the template's semantic Producer self-review, then run both `shape` and `validate`. New plans always declare `Kind`, `Parent objective`, `## Dependency contract`, and `## Review map`. Target 500–900 words per local plan and never exceed the manager's 1,200-word ceiling; shared context never exceeds 1,600 words.
@@ -63,10 +69,12 @@ A worker may change an undeclared companion path only when it directly supports 
 
 Use optional `herder-plans/CONTEXT.md` only for verified context genuinely shared by multiple plans. Fire schedules only through `ready`, obtains a complete compiled snapshot through `snapshot`, and changes status only through `transition`. `snapshot.planText` is either the local plan or deterministic shared-context-plus-local-plan composition and includes input/content hashes. Because the backlog may be Git-ignored, Fire must inline `planText` rather than expect any plan file in worktrees.
 
-Only the persistent Fire Accountant changes status or records usage. Workers report outcomes and usage envelopes; the root only transports those results and neither edits the index. Status details are valid only for `BLOCKED` and `REJECTED`.
+Only the persistent Fire Accountant changes status, migrates legacy usage, or records attempts. Workers report outcomes and usage envelopes; the root only transports those results and neither edits the index nor opens the database. Status details are valid only for `BLOCKED` and `REJECTED`.
 
 ## Usage
 
-The manager owns the generated `## Execution usage` section and appends idempotent attempts. Fire records every Implementer, Reviewer, Judge, Saver, and plan-set-wide attempt—including failures and missing responses—using a stable ID such as `<plan-name>-<plan-id>-<role>-<ordinal>`; use `RUN` when no plan owns the work and continue ordinals across resume. Use outcome `INTERRUPTED` for a host-level attempt that Fire proves produced neither a response envelope nor worktree mutation; it remains a usage attempt but does not consume a substantive implementation or Saver attempt.
+The manager stores attempt metadata in `.herder/execution.sqlite3`; README remains short and contains only human-readable plan graph and lifecycle state. The database is an immutable-attempt accounting ledger, not scheduler truth: lifecycle remains in README and execution completion remains in Git refs/worktrees. The manager uses built-in `node:sqlite`, short transactions, a busy timeout, integrity checks, schema versioning, and idempotent attempt IDs. It stores no prompts, responses, repository contents, or secrets.
 
-Pass host-reported `--input-tokens`, `--cached-input-tokens`, `--output-tokens`, and `--reasoning-tokens`. Use `unknown` for unavailable fields and `--source unknown` when all token fields are missing. Never estimate from transcript length.
+Fire records every Implementer, Reviewer, Judge, Saver, and plan-set-wide attempt—including failures and missing responses—using a stable ID such as `<plan-name>-<plan-id>-<role>-<ordinal>`; use `RUN` when no plan owns the work and continue ordinals across resume. Use outcome `INTERRUPTED` for a host-level attempt that Fire proves produced neither a response envelope nor worktree mutation; it remains a usage attempt but does not consume a substantive implementation or Saver attempt.
+
+Pass host-reported `--input-tokens`, `--cached-input-tokens`, `--output-tokens`, and `--reasoning-tokens`. Also pass known `--round`, `--generation`, `--runtime`, `--harness`, `--service-tier`, `--started-at`, `--finished-at`, and `--duration-ms` metadata so final reports can explain convergence and wall time. Use `unknown` for unavailable token fields and `--source unknown` when all token fields are missing. Never estimate from transcript length.

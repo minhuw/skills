@@ -530,6 +530,9 @@ process.stdout.write("grok-4.5 kimi-coding/k3 openai/gpt-5.6-sol authenticated\\
   assert.match(protocol, /DISPATCH_RESULTS.*real host handle or exact failure/)
   assert.match(protocol, /Event replay is idempotent/)
   assert.match(protocol, /Never add an event journal or second scheduler state file/)
+  assert.match(protocol, /execution_database.*\.herder\/execution\.sqlite3/)
+  assert.match(protocol, /migrate-usage <plan_dir>/)
+  assert.match(protocol, /report RUN <plan_dir>/)
   assert.match(protocol, /There is no global review lane/)
   assert.match(protocol, /Implementer on A, Reviewer on B, and Judge on C can all run concurrently/)
   assert.match(protocol, /Accountant occupies the separate reserved control slot/)
@@ -651,6 +654,8 @@ process.stdout.write("grok-4.5 kimi-coding/k3 openai/gpt-5.6-sol authenticated\\
     assert.match(profile, /control_reserved=1/)
     assert.match(profile, /Process duplicate events idempotently/)
     assert.match(profile, /Never create a second scheduler state file/)
+    assert.match(profile, /execution\.sqlite3.*immutable-attempt accounting, not scheduler state/)
+    assert.match(profile, /Plans manager as the sole SQLite writer/)
     assert.match(profile, /Accountant turns are coordinator overhead/)
   }
   const codexReviewer = await readFile(path.join(pluginRoot, "agent-profiles", "codex", "plan_reviewer.toml"), "utf8")

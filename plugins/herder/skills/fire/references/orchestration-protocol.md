@@ -22,6 +22,7 @@ Resolve:
 
 - `repo_root`: absolute repository root.
 - `plan_dir`: absolute Herder plan directory, normally `<repo_root>/herder-plans`.
+- `execution_database`: `<plan_dir>/.herder/execution.sqlite3`, the manager-owned immutable attempt ledger; never scheduler state.
 - `plan_name`: explicit `--plan-name`, otherwise the validated lowercase Git-safe basename of `plan_dir`.
 - `integration_branch`: `herder/<plan_name>/integration`.
 - `plan_branch(<id>)`: `herder/<plan_name>/<id>`.
@@ -37,7 +38,7 @@ Resolve:
 - `host_child_capacity`: the host-confirmed concurrent child-thread capacity, excluding the root. Fire/resume requires at least `2`; if capacity cannot be confirmed, stop before mutation rather than guess.
 - `parallel_limit`: `min(requested_worker_limit, host_child_capacity - control_slots)`. It is one global plan-worker limit across Implementer, Reviewer, and Judge. Default five-worker execution therefore requires child capacity of at least six.
 - `accountant_thread`: the one native `plan_accountant` / `herder:plan-accountant` child addressable across the run. It never counts in `parallel_limit`.
-- `scheduler_state`: Accountant-owned state for each plan: round 1–6, review pass, active role if any, queued next action, approved base/HEAD/tree, and integration-ready state; plus the optional integration-lock owner. Reconstruct this state from durable evidence on resume rather than writing a second state file.
+- `scheduler_state`: Accountant-owned state for each plan: round 1–6, review pass, active role if any, queued next action, approved base/HEAD/tree, and integration-ready state; plus the optional integration-lock owner. Reconstruct this state from README lifecycle, SQLite attempts, refs, worktrees, assignments, and proofs on resume rather than writing a second state file.
 - `review_state`: per-generation round count, exact review surfaces, repair deltas, finding ledger, Judge outcomes from round 3 onward, and leak records. Use a separate ledger for final cross-plan audit.
 - `checkout_state_token`: the checkout guard token excluding only `plan_dir`.
 - `assignment_state(<id|RUN>)`: worktree-local assignment path, bundle SHA-256, compiled snapshot SHA-256, generation base, and branch.
@@ -81,7 +82,7 @@ QUESTION: <one focused question only for NEEDS_INPUT, otherwise none>
 
 The root validates only this envelope and host-handle accounting. For `ACTIONS`, it dispatches up to `available`; for `WAIT`, it performs the host's event-driven long wait; for `NEEDS_INPUT`, it asks the user and returns `USER_INPUT`; for terminal states, it relays the Accountant's compact report. Accountant turns are control-plane overhead like the root session and do not recursively create worker usage rows.
 
-Event replay is idempotent. The Accountant reconciles every event and action against existing usage attempt IDs, lifecycle state, exact refs, locks, worktrees, assignments, and completion proofs before writing. Reusing an event ID with different payload is a hard stop. Never add an event journal or second scheduler state file.
+Event replay is idempotent. The Accountant reconciles every event and action against existing SQLite attempt IDs, lifecycle state, exact refs, locks, worktrees, assignments, and completion proofs before writing. Reusing an event ID with different payload is a hard stop. Never add an event journal or second scheduler state file; the execution database contains immutable attempt metadata only.
 
 ## 2. Preflight Without Mutation
 
@@ -95,6 +96,8 @@ The Accountant completes every check before creating refs, branches, or worktree
 6. For native Codex require Multi-Agent V2 `herder_agents` spawning with custom `agent_type`, `fork_turns`, follow-up, and long waits; never fall back to `codex exec` or a generic worker. For Claude require resumable `SendMessage` before mutation. For Orca, validate the explicit plan-worker runtime profile and every required route.
 7. Determine required verification commands from repository instructions, CI, and plan command tables. Do not guess when the plan specifies them.
 8. Confirm intended worktree paths are unused and Git metadata is writable.
+
+After every preflight check passes and before creating Git refs, branches, or worktrees, run `node <plan_manager> migrate-usage <plan_dir> --pretty`. This transactionally imports any legacy generated README attempt table into `execution_database` and only then removes that section. A malformed or conflicting legacy ledger stops without rewriting README. `status` remains read-only and never runs migration.
 
 For fresh native Fire, create absent `base_ref` and integration branch atomically with guarded `git update-ref --stdin`, then add the integration worktree. For Orca, let Orca create the worktree/branch and verify it before creating `base_ref`. Materialize and immediately verify the immutable RUN assignment:
 
@@ -156,7 +159,7 @@ There is no global review lane. Any combination of roles on different plans may 
 At every scheduling pass:
 
 1. The root drains every currently terminal worker into one `TERMINALS` event and includes the exact remaining active-worker inventory and available capacity.
-2. The Accountant verifies bundle/checkout/Git evidence, records worker usage, advances every eligible gate and lifecycle transition, and enqueues deterministic next actions.
+2. The Accountant verifies bundle/checkout/Git evidence, records the worker attempt in SQLite with known round, generation, runtime, harness, service tier, timestamps, duration, and host token telemetry, advances every eligible gate and lifecycle transition, and enqueues deterministic next actions.
 3. The Accountant advances the integration queue in dependency/plan order without withholding unrelated dispatch actions.
 4. The Accountant runs `node <plan_manager> ready <plan_dir> --pretty`, selects eligible `TODO` plans, creates their stable branches/worktrees, materializes assignments, and batch-transitions them to `IN PROGRESS`.
 5. The Accountant returns ordered actions for every available worker slot across eligible Implementer, Reviewer, and Judge work.
@@ -278,7 +281,9 @@ Do not add Herder metadata to commit subjects or bodies. Integration history rem
 
 ## 7. Usage and Interruption Accounting
 
-The Accountant alone calls `record-usage` after every terminal worker attempt, including attempts without a response. The root supplies uniquely attributable host telemetry in the `TERMINALS` event; otherwise the Accountant records `unknown`. Continue stable per-role ordinals across resume and never estimate. Accountant turns are control-plane overhead and do not recursively create usage rows.
+The Accountant alone calls `record-usage` after every terminal worker attempt, including attempts without a response. It writes `--round`, `--generation`, `--runtime`, `--harness`, `--service-tier`, `--started-at`, `--finished-at`, and `--duration-ms` whenever host evidence provides them. The root supplies uniquely attributable host telemetry in the `TERMINALS` event; otherwise the Accountant records unavailable token fields as `unknown`. Continue stable per-role ordinals across resume and never estimate. Accountant turns are control-plane overhead and do not recursively create usage rows.
+
+After a successful `transition <id> DONE`, retain the returned per-plan report in the Accountant's compact state evidence. On status, use read-only `usage` and `report`; do not open SQLite directly. The report exposes attempt and round counts, outcomes, interruptions, models, runtimes, token coverage/totals, wall-clock bounds, and summed attempt duration without storing transcripts or repository content.
 
 Native Codex evidence must show matching role, Multi-Agent V2, terminal response classification, and host-reported usage when available. Never parse tool-call text to infer filesystem containment. Both runtimes require checkout-guard and exact before/after Git proofs; Orca additionally requires exact worktree/task/dispatch/pane provenance.
 
@@ -310,7 +315,7 @@ The plan set succeeds when every plan is `DONE` or `REJECTED`, every dependency 
 
 Reviewer approval completes the final audit without Judge. A final-audit nonapproval is reported with evidence and does not mutate integration or start a hidden seventh per-plan round; route it through a user-visible validated repair plan. P2/P3 findings remain advisory.
 
-After success, the Accountant verifies the checkout token and invokes fail-closed `--finalize`. It returns integration branch/worktree, final SHA, outcomes, gates, audit, usage coverage, advisory/deferred findings, and preserved state for the root to report. Never merge, push, publish, or deploy.
+After success, the Accountant runs `node <plan_manager> report RUN <plan_dir> --pretty`. The Accountant verifies the checkout token and invokes fail-closed `--finalize`. It returns integration branch/worktree, final SHA, outcomes, gates, audit, the rich run report, advisory/deferred findings, and preserved state for the root to report. Never merge, push, publish, or deploy.
 
 When the intended target still equals `base_ref`, report:
 

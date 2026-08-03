@@ -6,6 +6,14 @@ import process from "node:process"
 import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import {
+  executionReport,
+  initializeExecutionStore,
+  migrateLegacyUsage,
+  readUsageState,
+  recordUsageRecord,
+  usageReport,
+} from "./execution-store.mjs"
 
 const DEFAULT_PLAN_DIR = "herder-plans"
 const TERMINAL = new Set(["DONE", "REJECTED"])
@@ -33,21 +41,6 @@ const MAX_PLAN_WORDS = 1200
 const MAX_SHARED_CONTEXT_WORDS = 1600
 const FIRE_BRANCH_INSTRUCTION = "use the exact branch/worktree assigned by Herder Fire; never create or switch branches."
 const REQUIRED_INDEX_HEADERS = ["plan", "title", "priority", "effort", "depends on", "status"]
-const USAGE_SECTION_START = "<!-- herder-usage:start -->"
-const USAGE_SECTION_END = "<!-- herder-usage:end -->"
-const USAGE_LEDGER_HEADERS = [
-  "attempt",
-  "plan",
-  "role",
-  "model",
-  "effort",
-  "outcome",
-  "input tokens",
-  "cached input",
-  "output tokens",
-  "reasoning tokens",
-  "source",
-]
 const TRANSITIONS = new Map([
   ["TODO", new Set(["IN PROGRESS", "BLOCKED", "REJECTED"])],
   ["IN PROGRESS", new Set(["TODO", "DONE", "BLOCKED", "REJECTED"])],
@@ -274,155 +267,6 @@ function findIndexTable(markdown, readme) {
     return { header, normalized, rows, lines }
   }
   fail(`${readme} has no Markdown table containing the required columns: Plan, Title, Priority, Effort, Depends on, Status`)
-}
-
-function findUsageTable(markdown, readme) {
-  const lines = markdown.split(/\r?\n/)
-  for (let index = 0; index < lines.length - 1; index += 1) {
-    const header = parseTableRow(lines[index])
-    const separator = parseTableRow(lines[index + 1])
-    if (!header || !separator || !isSeparatorRow(separator)) continue
-    const normalized = header.map(normalizeHeader)
-    if (!USAGE_LEDGER_HEADERS.every((name) => normalized.includes(name))) continue
-
-    const rows = []
-    for (let rowIndex = index + 2; rowIndex < lines.length; rowIndex += 1) {
-      const cells = parseTableRow(lines[rowIndex])
-      if (!cells || cells.length < header.length) break
-      rows.push({ cells: cells.slice(0, header.length), lineIndex: rowIndex })
-    }
-    return { header, normalized, rows, lines }
-  }
-  fail(`${readme} has a Herder usage section without its attempt ledger table`)
-}
-
-function usageCell(value, label) {
-  const normalized = String(value ?? "").trim()
-  if (!normalized) fail(`${label} cannot be empty`)
-  if (/[\r\n|]/.test(normalized)) fail(`${label} must be one line and cannot contain a table separator`)
-  return normalized
-}
-
-function optionalCount(value, label) {
-  const normalized = String(value ?? "unknown").trim().toLowerCase()
-  if (normalized === "unknown") return null
-  if (!/^\d+$/.test(normalized)) fail(`${label} must be a non-negative integer or "unknown"`)
-  const count = Number.parseInt(normalized, 10)
-  if (!Number.isSafeInteger(count)) fail(`${label} is too large`)
-  return count
-}
-
-function parseUsageRecords(markdown, readme) {
-  const start = markdown.indexOf(USAGE_SECTION_START)
-  const end = markdown.indexOf(USAGE_SECTION_END)
-  if (start === -1 && end === -1) return []
-  if (start === -1 || end === -1 || end < start) fail(`${readme} has malformed Herder usage section markers`)
-  if (markdown.indexOf(USAGE_SECTION_START, start + USAGE_SECTION_START.length) !== -1
-    || markdown.indexOf(USAGE_SECTION_END, end + USAGE_SECTION_END.length) !== -1) {
-    fail(`${readme} has duplicate Herder usage section markers`)
-  }
-
-  const section = markdown.slice(start, end + USAGE_SECTION_END.length)
-  const table = findUsageTable(section, readme)
-  const column = Object.fromEntries(table.normalized.map((name, index) => [name, index]))
-  const records = table.rows.map((row) => {
-    const record = {
-      attempt: usageCell(row.cells[column.attempt], "Attempt"),
-      plan: usageCell(row.cells[column.plan], "Plan"),
-      role: usageCell(row.cells[column.role], "Role"),
-      model: usageCell(row.cells[column.model], "Model"),
-      effort: usageCell(row.cells[column.effort], "Effort"),
-      outcome: usageCell(row.cells[column.outcome], "Outcome"),
-      inputTokens: optionalCount(row.cells[column["input tokens"]], "Input tokens"),
-      cachedInputTokens: optionalCount(row.cells[column["cached input"]], "Cached input tokens"),
-      outputTokens: optionalCount(row.cells[column["output tokens"]], "Output tokens"),
-      reasoningTokens: optionalCount(row.cells[column["reasoning tokens"]], "Reasoning tokens"),
-      source: usageCell(row.cells[column.source], "Source"),
-    }
-    if (record.source.toLowerCase() === "unknown"
-      && [record.inputTokens, record.cachedInputTokens, record.outputTokens, record.reasoningTokens].some((value) => value !== null)) {
-      fail(`Usage attempt ${record.attempt} has numeric usage but an unknown source`)
-    }
-    return record
-  })
-  const attempts = new Set()
-  for (const record of records) {
-    if (attempts.has(record.attempt)) fail(`Usage attempt ${record.attempt} is recorded more than once`)
-    attempts.add(record.attempt)
-  }
-  return records
-}
-
-function summarizeRecords(records, keyFor) {
-  const groups = new Map()
-  for (const record of records) {
-    const key = keyFor(record)
-    const group = groups.get(key) ?? []
-    group.push(record)
-    groups.set(key, group)
-  }
-  return [...groups.entries()]
-    .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
-    .map(([key, entries]) => {
-      const tokenEntries = entries.filter((entry) => entry.inputTokens !== null && entry.outputTokens !== null)
-      const knownTokens = tokenEntries.reduce((sum, entry) => sum + entry.inputTokens + entry.outputTokens, 0)
-      return {
-        key,
-        attempts: entries.length,
-        tokenAttempts: tokenEntries.length,
-        knownTokens,
-      }
-    })
-}
-
-function usageReport(records) {
-  return {
-    attempts: records.length,
-    byPlan: summarizeRecords(records, (record) => record.plan),
-    byRole: summarizeRecords(records, (record) => record.role),
-    byModel: summarizeRecords(records, (record) => `${record.model} / ${record.effort}`),
-    records,
-  }
-}
-
-function renderSummary(title, dimension, rows) {
-  const body = rows.length > 0
-    ? rows.map((row) => `| ${row.key} | ${row.attempts} | ${row.tokenAttempts}/${row.attempts} | ${row.knownTokens} |`).join("\n")
-    : "| — | 0 | 0/0 | 0 |"
-  return `### ${title}\n\n| ${dimension} | Attempts | Reported-token coverage | Reported input + output tokens |\n|---|---:|---:|---:|\n${body}`
-}
-
-function renderUsageSection(records) {
-  const report = usageReport(records)
-  const ledger = records.length > 0
-    ? records.map((record) => `| ${record.attempt} | ${record.plan} | ${record.role} | ${record.model} | ${record.effort} | ${record.outcome} | ${record.inputTokens ?? "unknown"} | ${record.cachedInputTokens ?? "unknown"} | ${record.outputTokens ?? "unknown"} | ${record.reasoningTokens ?? "unknown"} | ${record.source} |`).join("\n")
-    : ""
-  return `${USAGE_SECTION_START}
-## Execution usage
-
-Herder records one row per agent attempt. Token values are copied only from host telemetry; unavailable values remain \`unknown\` and are never estimated. Token subtotals add input and output tokens only; cached-input and reasoning values are details and are not added again. Coverage excludes unobservable coordinator, platform, and retry overhead.
-
-${renderSummary("By plan", "Plan", report.byPlan)}
-
-${renderSummary("By role", "Role", report.byRole)}
-
-${renderSummary("By model and effort", "Model / effort", report.byModel)}
-
-### Attempt ledger
-
-| Attempt | Plan | Role | Model | Effort | Outcome | Input tokens | Cached input | Output tokens | Reasoning tokens | Source |
-|---|---|---|---|---|---|---:|---:|---:|---:|---|
-${ledger}
-${USAGE_SECTION_END}`
-}
-
-function replaceUsageSection(markdown, records) {
-  const rendered = renderUsageSection(records)
-  const start = markdown.indexOf(USAGE_SECTION_START)
-  if (start === -1) return `${markdown.replace(/\s*$/, "")}\n\n${rendered}\n`
-  const end = markdown.indexOf(USAGE_SECTION_END, start)
-  if (end === -1) fail(`Cannot replace malformed Herder usage section`)
-  return `${markdown.slice(0, start)}${rendered}${markdown.slice(end + USAGE_SECTION_END.length)}`
 }
 
 function detectCycle(plansById) {
@@ -710,8 +554,6 @@ Add one line for each non-obvious dependency.
 ## Considered and rejected
 
 Record rejected requests, alternatives, or findings here so later planning does not repeat them.
-
-${renderUsageSection([])}
 `
 }
 
@@ -724,7 +566,8 @@ export function initPlanDir(inputDir = DEFAULT_PLAN_DIR, { track = false } = {})
   if (createdReadme) fs.writeFileSync(readme, initialReadme())
   const ignoreChanged = track ? removeLocalIgnore(context) : addLocalIgnore(context)
   const runtimeIgnoreChanged = track ? ensureRuntimeIgnore(planDir) : false
-  return { planDir, readme, createdReadme, tracking: track ? "tracked" : "local", ignoreChanged, runtimeIgnoreChanged }
+  const execution = initializeExecutionStore(planDir, readme)
+  return { planDir, readme, createdReadme, tracking: track ? "tracked" : "local", ignoreChanged, runtimeIgnoreChanged, execution }
 }
 
 export function setTracking(inputDir = DEFAULT_PLAN_DIR, track) {
@@ -830,69 +673,82 @@ export function transitionStatus(inputDir = DEFAULT_PLAN_DIR, inputId, requested
   if (current.status !== nextStatus && !TRANSITIONS.get(current.status).has(nextStatus)) {
     fail(`Invalid plan transition for ${id}: ${current.status} -> ${nextStatus}`)
   }
+  const formattedStatus = formatStatus(nextStatus, String(detail).trim())
 
+  migrateLegacyUsage(graph.planDir, graph.readme)
   const markdown = fs.readFileSync(graph.readme, "utf8")
   const table = findIndexTable(markdown, graph.readme)
   const column = Object.fromEntries(table.normalized.map((name, index) => [name, index]))
   const row = table.rows.find((candidate) => canonicalId(candidate.cells[column.plan], "Plan column") === id)
-  row.cells[column.status] = formatStatus(nextStatus, String(detail).trim())
+  row.cells[column.status] = formattedStatus
   table.lines[row.lineIndex] = `| ${row.cells.join(" | ")} |`
   const nextMarkdown = table.lines.join("\n")
   const temporary = `${graph.readme}.herder-tmp-${process.pid}`
   fs.writeFileSync(temporary, nextMarkdown)
   fs.renameSync(temporary, graph.readme)
   buildGraph(graph.planDir)
-  return { planDir: graph.planDir, id, from: current.status, to: nextStatus, detail: String(detail).trim() }
+  return {
+    planDir: graph.planDir,
+    id,
+    from: current.status,
+    to: nextStatus,
+    detail: String(detail).trim(),
+    ...(nextStatus === "DONE" ? { report: getExecutionReport(graph.planDir, id) } : {}),
+  }
 }
 
 export function recordUsage(inputDir = DEFAULT_PLAN_DIR, input = {}) {
   const graph = buildGraph(inputDir)
-  const requestedPlan = usageCell(input.plan, "Plan")
+  const requestedPlan = String(input.plan ?? "").trim()
+  if (!requestedPlan) fail("Plan cannot be empty")
   const plan = requestedPlan.toUpperCase() === "RUN" ? "RUN" : canonicalId(requestedPlan)
   if (plan !== "RUN" && !graph.plans.some((candidate) => candidate.id === plan)) {
     fail(`Plan ${plan} is not indexed in ${graph.readme}`)
   }
-  const record = {
-    attempt: usageCell(input.attempt, "Attempt"),
-    plan,
-    role: usageCell(input.role, "Role"),
-    model: usageCell(input.model, "Model"),
-    effort: usageCell(input.effort, "Effort"),
-    outcome: usageCell(input.outcome, "Outcome"),
-    inputTokens: optionalCount(input.inputTokens, "Input tokens"),
-    cachedInputTokens: optionalCount(input.cachedInputTokens, "Cached input tokens"),
-    outputTokens: optionalCount(input.outputTokens, "Output tokens"),
-    reasoningTokens: optionalCount(input.reasoningTokens, "Reasoning tokens"),
-    source: usageCell(input.source ?? "unknown", "Source"),
-  }
-  if (record.source.toLowerCase() === "unknown"
-    && [record.inputTokens, record.cachedInputTokens, record.outputTokens, record.reasoningTokens].some((value) => value !== null)) {
-    fail(`Usage attempt ${record.attempt} has numeric usage but an unknown source`)
-  }
-
-  const markdown = fs.readFileSync(graph.readme, "utf8")
-  const records = parseUsageRecords(markdown, graph.readme)
-  const existing = records.find((candidate) => candidate.attempt === record.attempt)
-  if (existing) {
-    if (JSON.stringify(existing) !== JSON.stringify(record)) {
-      fail(`Usage attempt ${record.attempt} is already recorded with different values`)
-    }
-    return { planDir: graph.planDir, readme: graph.readme, recorded: false, record, usage: usageReport(records) }
-  }
-
-  records.push(record)
-  const nextMarkdown = replaceUsageSection(markdown, records)
-  const temporary = `${graph.readme}.herder-tmp-${process.pid}`
-  fs.writeFileSync(temporary, nextMarkdown)
-  fs.renameSync(temporary, graph.readme)
+  const stored = recordUsageRecord(graph.planDir, graph.readme, { ...input, plan })
   buildGraph(graph.planDir)
-  return { planDir: graph.planDir, readme: graph.readme, recorded: true, record, usage: usageReport(records) }
+  return {
+    planDir: graph.planDir,
+    readme: graph.readme,
+    database: stored.migration.database,
+    recorded: stored.recorded,
+    record: stored.record,
+    migration: stored.migration,
+    usage: usageReport(stored.records),
+  }
 }
 
 export function getUsageReport(inputDir = DEFAULT_PLAN_DIR) {
   const graph = buildGraph(inputDir)
-  const records = parseUsageRecords(fs.readFileSync(graph.readme, "utf8"), graph.readme)
-  return { planDir: graph.planDir, readme: graph.readme, ...usageReport(records) }
+  const state = readUsageState(graph.planDir, graph.readme)
+  return { planDir: graph.planDir, readme: graph.readme, ...state, ...usageReport(state.records) }
+}
+
+export function migrateUsage(inputDir = DEFAULT_PLAN_DIR) {
+  const graph = buildGraph(inputDir)
+  const migration = migrateLegacyUsage(graph.planDir, graph.readme)
+  buildGraph(graph.planDir)
+  return { planDir: graph.planDir, readme: graph.readme, ...migration }
+}
+
+export function getExecutionReport(inputDir = DEFAULT_PLAN_DIR, inputPlan = "RUN") {
+  const graph = buildGraph(inputDir)
+  const requested = String(inputPlan ?? "RUN").trim()
+  const plan = requested.toUpperCase() === "RUN" ? "RUN" : canonicalId(requested)
+  const planRecord = plan === "RUN" ? null : graph.plans.find((candidate) => candidate.id === plan)
+  if (plan !== "RUN" && !planRecord) fail(`Plan ${plan} is not indexed in ${graph.readme}`)
+  const state = readUsageState(graph.planDir, graph.readme)
+  return {
+    planDir: graph.planDir,
+    readme: graph.readme,
+    database: state.database,
+    storage: state.storage,
+    schemaVersion: state.schemaVersion,
+    lifecycle: plan === "RUN"
+      ? { complete: graph.complete, counts: graph.counts }
+      : { title: planRecord.title, status: planRecord.status, statusDetail: planRecord.statusDetail },
+    ...executionReport(state.records, plan),
+  }
 }
 
 function usage() {
@@ -905,8 +761,10 @@ function usage() {
     "  herder-plans ready [plan-dir] [--pretty]",
     "  herder-plans snapshot <plan-id> [plan-dir] [--pretty]",
     "  herder-plans transition <plan-id> <status> [plan-dir] [--detail <text>] [--pretty]",
-    "  herder-plans record-usage <plan-id|RUN> <role> [plan-dir] --attempt <id> --model <model> --effort <effort> --outcome <outcome> [--input-tokens <n|unknown>] [--cached-input-tokens <n|unknown>] [--output-tokens <n|unknown>] [--reasoning-tokens <n|unknown>] [--source <host-source|unknown>] [--pretty]",
+    "  herder-plans record-usage <plan-id|RUN> <role> [plan-dir] --attempt <id> --model <model> --effort <effort> --outcome <outcome> [--input-tokens <n|unknown>] [--cached-input-tokens <n|unknown>] [--output-tokens <n|unknown>] [--reasoning-tokens <n|unknown>] [--source <host-source|unknown>] [--round <1..6>] [--generation <id>] [--runtime <native|orca>] [--harness <name>] [--service-tier <tier>] [--started-at <iso>] [--finished-at <iso>] [--duration-ms <n>] [--pretty]",
     "  herder-plans usage [plan-dir] [--pretty]",
+    "  herder-plans report <plan-id|RUN> [plan-dir] [--pretty]",
+    "  herder-plans migrate-usage [plan-dir] [--pretty]",
     "  herder-plans track [plan-dir] [--pretty]",
     "  herder-plans untrack [plan-dir] [--pretty]",
   ].join("\n")
@@ -940,6 +798,14 @@ function main(argv) {
     outputTokens: takeFlag(args, "--output-tokens"),
     reasoningTokens: takeFlag(args, "--reasoning-tokens"),
     source: takeFlag(args, "--source"),
+    round: takeFlag(args, "--round"),
+    generation: takeFlag(args, "--generation"),
+    runtime: takeFlag(args, "--runtime"),
+    harness: takeFlag(args, "--harness"),
+    serviceTier: takeFlag(args, "--service-tier"),
+    startedAt: takeFlag(args, "--started-at"),
+    finishedAt: takeFlag(args, "--finished-at"),
+    durationMs: takeFlag(args, "--duration-ms"),
   }
   const hasUsageOptions = Object.values(usageOptions).some((value) => value !== null)
   const unknown = args.filter((argument) => argument.startsWith("--"))
@@ -984,6 +850,12 @@ function main(argv) {
   } else if (command === "usage") {
     if (args.length > 1 || detail || track || hasUsageOptions) fail(usage())
     result = getUsageReport(args[0] ?? DEFAULT_PLAN_DIR)
+  } else if (command === "report") {
+    if (args.length < 1 || args.length > 2 || detail || track || hasUsageOptions) fail(usage())
+    result = getExecutionReport(args[1] ?? DEFAULT_PLAN_DIR, args[0])
+  } else if (command === "migrate-usage") {
+    if (args.length > 1 || detail || track || hasUsageOptions) fail(usage())
+    result = migrateUsage(args[0] ?? DEFAULT_PLAN_DIR)
   } else if (["track", "untrack"].includes(command)) {
     if (args.length > 1 || detail || track || hasUsageOptions) fail(usage())
     result = setTracking(args[0] ?? DEFAULT_PLAN_DIR, command === "track")

@@ -1,6 +1,6 @@
 # Herder
 
-Herder is a task orchestrator engine for Claude Code and Codex. It shapes objectives into focused semantically bounded plan graphs, executes independent six-round implementation/review loops, and uses an independent Judge to filter unresolved findings from round three onward. One persistent Accountant owns scheduling, lifecycle accounting, gates, Git transactions, and integration while the root only dispatches and waits for workers. Its optional Orca runtime can route plan workers across different CLI harnesses while preserving one plan, review, and integration protocol.
+Herder is a task orchestrator engine for Claude Code and Codex. It shapes objectives into focused semantically bounded plan graphs, executes independent six-round implementation/review loops, and uses an independent Judge to filter unresolved findings from round three onward. One persistent Accountant owns scheduling, SQLite attempt accounting and rich run reports, lifecycle transitions, gates, Git transactions, and integration while the root only dispatches and waits for workers. Its optional Orca runtime can route plan workers across different CLI harnesses while preserving one plan, review, and integration protocol.
 
 ## Claude Code
 

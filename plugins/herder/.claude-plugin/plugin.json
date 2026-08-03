@@ -1,6 +1,6 @@
 {
   "name": "herder",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Shape focused plans and execute them through a persistent Accountant, bounded review, independent judging, and optional Orca worker routing.",
   "author": {
     "name": "minhuw",

@@ -102,7 +102,7 @@ Take a before snapshot of plan contents and source Git status, then repair `AUTO
 Hard repair boundaries:
 
 - Never modify source code, project documentation, Git commits/index, or files outside the selected plan directory.
-- Never alter the manager-generated `## Execution usage` block, marker comments, or attempt rows.
+- Never alter `.herder/execution.sqlite3` or migrate, remove, or rewrite a legacy generated `## Execution usage` block.
 - Never change lifecycle status as a side effect of validation.
 - Never semantically rewrite `IN PROGRESS`, `DONE`, or `REJECTED` plans. Report them as `ACTIVE` or `HISTORICAL`; only mechanically unambiguous index repairs that preserve recorded meaning are allowed.
 - Never invent product intent, resolve a genuine trade-off, expand scope, silently split/merge plans, or choose a dependency order unsupported by evidence.
@@ -112,4 +112,4 @@ Leave `NEEDS_DECISION`, `ACTIVE`, and `HISTORICAL` issues unresolved. Route miss
 
 ## Finish
 
-Report manager status, issue counts by severity and repairability, Fire-readiness, files changed, repairs applied, residual issues, and whether source status and usage data were preserved. In `--fix` mode include before/after issue counts and the final manager validation result. Never start Fire automatically.
+Report manager status, issue counts by severity and repairability, Fire-readiness, files changed, repairs applied, residual issues, and whether source status and execution-accounting data were preserved. In `--fix` mode include before/after issue counts and the final manager validation result. Never start Fire automatically.

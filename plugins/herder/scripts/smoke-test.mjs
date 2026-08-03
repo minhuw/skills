@@ -313,10 +313,6 @@ function writeGrillPlan(project) {
   const plannedAt = run("git", ["rev-parse", "--short", "HEAD"], { cwd: project }).stdout.trim()
   const plannedDate = new Date().toISOString().slice(0, 10)
   const readme = path.join(planDir, "README.md")
-  const currentReadme = fs.readFileSync(readme, "utf8")
-  const usageStart = currentReadme.indexOf("<!-- herder-usage:start -->")
-  if (usageStart === -1) fail("Initialized Grill fixture has no usage ledger")
-  const usageSection = currentReadme.slice(usageStart).trim()
   fs.writeFileSync(readme, `# Herder Plans
 
 ## Execution order & status
@@ -332,8 +328,6 @@ None.
 ## Considered and rejected
 
 None.
-
-${usageSection}
 `)
   const plan = path.join(planDir, "001-add-version-flag.md")
   fs.writeFileSync(plan, `# Plan 001: Add a --version flag
@@ -718,7 +712,7 @@ function main() {
     assert.match(validateText, /herder-plans\.mjs/)
     assert.match(validateText, /strictly read-only/)
     assert.match(validateText, /Producer self-review/)
-    assert.match(validateText, /Never alter the manager-generated `## Execution usage` block/)
+    assert.match(validateText, /Never alter `\.herder\/execution\.sqlite3`/)
     assert.match(validateText, /Never change lifecycle status/)
     const evidenceReader = path.join(installedPath, "skills", "fire", "scripts", "read-codex-agent-evidence.mjs")
     assert.equal(fs.existsSync(evidenceReader), true, "missing installed Codex Multi-Agent V2 evidence reader")
@@ -777,6 +771,7 @@ function main() {
     assert.equal(emptyGraph.counts.total, 0)
     const emptyShape = parseJson(run("node", [manager, "shape", "herder-plans", "--pretty"], { cwd: project }).stdout, "empty shape")
     assert.equal(emptyShape.shapeReady, true)
+    const readmeBeforeUsage = fs.readFileSync(path.join(project, "herder-plans", "README.md"), "utf8")
     const recordedUsage = parseJson(run("node", [
       manager,
       "record-usage", "RUN", "plan-reviewer", "herder-plans",
@@ -785,6 +780,14 @@ function main() {
       "--effort", "xhigh",
       "--outcome", "AVAILABLE",
       "--source", "unknown",
+      "--round", "1",
+      "--generation", "smoke-generation-1",
+      "--runtime", "native",
+      "--harness", "codex",
+      "--service-tier", "standard",
+      "--started-at", "2026-08-03T00:00:00Z",
+      "--finished-at", "2026-08-03T00:00:01Z",
+      "--duration-ms", "1000",
       "--pretty",
     ], { cwd: project }).stdout, "usage recording")
     assert.equal(recordedUsage.recorded, true)
@@ -792,6 +795,13 @@ function main() {
     assert.equal(usage.attempts, 1)
     assert.equal(usage.byRole[0].key, "plan-reviewer")
     assert.equal(usage.byRole[0].tokenAttempts, 0)
+    assert.equal(usage.storage, "sqlite")
+    assert.equal(fs.readFileSync(path.join(project, "herder-plans", "README.md"), "utf8"), readmeBeforeUsage)
+    assert.equal(fs.existsSync(path.join(project, "herder-plans", ".herder", "execution.sqlite3")), true)
+    const executionReport = parseJson(run("node", [manager, "report", "RUN", "herder-plans", "--pretty"], { cwd: project }).stdout, "execution report")
+    assert.equal(executionReport.attempts, 1)
+    assert.deepEqual(executionReport.rounds, [1])
+    assert.equal(executionReport.timing.attemptDurationMs, 1000)
 
     run("npm", ["test"], { cwd: project })
 
@@ -1002,7 +1012,7 @@ function main() {
         const brokenValidation = run("node", [manager, "validate", "herder-plans", "--pretty"], { cwd: project, allowFailure: true })
         assert.notEqual(brokenValidation.status, 0, "Corrupted Validate fixture unexpectedly passed manager validation")
 
-        const fixMessage = runCodex("02-validate-fix", `Use $herder:validate herder-plans --fix. Repair every safe issue, preserve lifecycle status and the execution-usage ledger, do not touch source files, rerun validation, and report before/after counts plus Fire-readiness.`, context).message
+        const fixMessage = runCodex("02-validate-fix", `Use $herder:validate herder-plans --fix. Repair every safe issue, preserve lifecycle status and execution-accounting data, do not touch source files, rerun validation, and report before/after counts plus Fire-readiness.`, context).message
         assert.match(fixMessage, /repair|fixed|Fire.ready|valid/i)
         const repairedPlan = fs.readFileSync(plan, "utf8")
         assert.notEqual(repairedPlan, brokenPlan, "Validate --fix did not repair the malformed plan")
@@ -1013,7 +1023,7 @@ function main() {
         assert.deepEqual(repairedGraph.ready, ["001"])
         assert.equal(repairedGraph.shapeReady, true, "Validate repair lost the bounded plan shape")
         assert.equal(parseJson(run("node", [manager, "usage", "herder-plans", "--pretty"], { cwd: project }).stdout, "Validate usage preservation").attempts, 1)
-        assert.equal(fs.readFileSync(readme, "utf8"), beforeReadme, "Validate --fix changed the usage-bearing index")
+        assert.equal(fs.readFileSync(readme, "utf8"), beforeReadme, "Validate --fix changed the plan index")
         assert.equal(run("git", ["status", "--short"], { cwd: project }).stdout, beforeSourceStatus, "Validate --fix changed source files")
       }
     }
