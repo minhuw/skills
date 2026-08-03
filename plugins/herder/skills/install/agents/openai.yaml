@@ -1,4 +1,4 @@
 interface:
   display_name: "Herder Install"
-  short_description: "Install four Plan Herder agent roles"
-  default_prompt: "Use $herder:install to install or verify the Implementer, Reviewer, Judge, and Saver roles for this project."
+  short_description: "Install five Plan Herder agent roles"
+  default_prompt: "Use $herder:install to install or verify the Accountant, Implementer, Reviewer, Judge, and Saver roles for this project."

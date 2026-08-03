@@ -1,7 +1,7 @@
 {
   "name": "herder",
-  "version": "0.10.6+codex.20260803005434",
-  "description": "Shape focused plans and execute them with bounded review, independent judging, recovery, usage accounting, and optional Orca cross-harness routing.",
+  "version": "0.11.0+codex.20260803020732",
+  "description": "Shape focused plans and execute them through a persistent Accountant, bounded review, independent judging, and optional Orca worker routing.",
   "author": {
     "name": "minhuw",
     "url": "https://github.com/minhuw"
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "Herder",
     "shortDescription": "Clarify, create, and execute plans with specialized agents.",
-    "longDescription": "Herder shapes requested changes and verified findings into focused dependency-aware plans, compiles shared context into immutable snapshots, validates file budgets and write scopes, executes bounded implementation-review rounds, independently judges convergence, rescues authorized failures, integrates verified work transactionally, records per-attempt token usage with honest coverage, and can route roles across CLI harnesses through Orca.",
+    "longDescription": "Herder shapes requested changes and verified findings into focused dependency-aware plans, compiles shared context into immutable snapshots, runs parallel per-plan implementation-review loops through a persistent Accountant control plane, escalates unresolved findings to an independent Judge, integrates verified work transactionally, records worker usage with honest coverage, and can route plan workers across CLI harnesses through Orca.",
     "developerName": "minhuw",
     "category": "Developer Tools",
     "capabilities": [

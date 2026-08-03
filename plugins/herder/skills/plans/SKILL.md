@@ -63,7 +63,7 @@ A worker may change an undeclared companion path only when it directly supports 
 
 Use optional `herder-plans/CONTEXT.md` only for verified context genuinely shared by multiple plans. Fire schedules only through `ready`, obtains a complete compiled snapshot through `snapshot`, and changes status only through `transition`. `snapshot.planText` is either the local plan or deterministic shared-context-plus-local-plan composition and includes input/content hashes. Because the backlog may be Git-ignored, Fire must inline `planText` rather than expect any plan file in worktrees.
 
-Only the root Fire coordinator changes status or records usage. Workers report outcomes and usage envelopes; they never edit the index. Status details are valid only for `BLOCKED` and `REJECTED`.
+Only the persistent Fire Accountant changes status or records usage. Workers report outcomes and usage envelopes; the root only transports those results and neither edits the index. Status details are valid only for `BLOCKED` and `REJECTED`.
 
 ## Usage
 

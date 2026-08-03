@@ -164,7 +164,7 @@ sandbox_mode = "workspace-write"
 [features.multi_agent_v2]
 enabled = true
 hide_spawn_agent_metadata = false
-max_concurrent_threads_per_session = 4
+max_concurrent_threads_per_session = 6
 tool_namespace = "herder_agents"
 
 [agents]
@@ -435,7 +435,7 @@ function writeValidatePlan(project) {
   const plannedDate = new Date().toISOString().slice(0, 10)
   fs.writeFileSync(plan, `# Plan 001: Add a --version flag
 
-> **Executor instructions**: Follow this plan step by step. Run every verification command and confirm its expected result before continuing. Stop and report if a STOP condition occurs; do not improvise. Do not edit \`herder-plans/README.md\`; the root coordinator owns status transitions.
+> **Executor instructions**: Follow this plan step by step. Run every verification command and confirm its expected result before continuing. Stop and report if a STOP condition occurs; do not improvise. Do not edit \`herder-plans/README.md\`; the persistent Accountant owns status transitions.
 >
 > **Drift check (run first)**: \`git diff --stat ${plannedAt}..HEAD -- package.json src/cli.mjs test/cli.test.mjs\`
 > If an in-scope file changed, compare the Current state excerpts with the live file. Stop on a mismatch.
@@ -626,6 +626,7 @@ function main() {
       assert.equal(fs.existsSync(path.join(installedPath, "skills", skill, "SKILL.md")), true, `missing installed skill ${skill}`)
     }
     const expectedNicknames = {
+      plan_accountant: ["Ledger", "Tally", "Abacus", "Quill", "Keeper", "Scribe", "Balance", "Audit", "Count", "Record"],
       plan_implementer: ["Mocha", "Latte", "Cortado", "Piccolo", "Doppio", "Affogato", "Espresso", "Macchiato", "Cappuccino", "Ristretto"],
       plan_reviewer: ["Kiwi", "Mango", "Peach", "Fig", "Lychee", "Yuzu", "Guava", "Cherry", "Plum", "Papaya"],
       plan_judge: ["Sage", "Atlas", "Solon", "Themis", "Verity", "Justus", "Minerva", "Cato", "Portia", "Astraea"],
@@ -669,9 +670,12 @@ function main() {
     assert.match(fireText, /references\/orca-runtime\.md/)
     assert.match(fireText, /--include-failed/)
     assert.match(fireText, /--finalize/)
-    assert.match(fireText, /Only the root coordinator may invoke the cleanup runner/)
+    assert.match(fireText, /Only the Accountant may invoke control-plane helper modes/)
+    assert.match(fireText, /root coordinator owns only host-agent dispatch, waits, and user interaction/)
+    assert.match(fireText, /persistent Accountant/)
     assert.match(fireText, /Keep integration history linear/)
-    assert.match(fireText, /Default parallel limit: `5`/)
+    assert.match(fireText, /Default plan-worker parallel limit: `5`/)
+    assert.match(fireText, /Reserve one additional host child slot for the persistent Accountant/)
     assert.match(fireText, /global role-agnostic pool for Implementer, Reviewer, and Judge attempts/)
     assert.match(fireText, /There is no global review lane/)
     assert.match(fireText, /one integration lock/)
@@ -707,6 +711,9 @@ function main() {
     assert.match(fireProtocolText, /number of changed or undeclared paths.*never gate the plan/)
     assert.doesNotMatch(fireProtocolText, /files<=|N\+3|hard file|8\/3\/11/)
     assert.match(fireProtocolText, /matching `worker_done` task\/dispatch\/pane provenance/)
+    assert.match(fireProtocolText, /Accountant is the exclusive control-plane owner/)
+    assert.match(fireProtocolText, /Default five-worker execution therefore requires child capacity of at least six/)
+    assert.match(fireProtocolText, /Process `TERMINALS` as a stable batch sorted by plan, round, and role/)
     assert.match(validateText, /herder:validate \[<plan-dir>\] \[--fix\]/)
     assert.match(validateText, /herder-plans\.mjs/)
     assert.match(validateText, /strictly read-only/)
@@ -754,7 +761,7 @@ function main() {
       "--pretty",
     ], { cwd: project }).stdout, "installed Configure validation")
     assert.equal(configuredRouting.ok, true)
-    assert.equal(configuredRouting.uniqueRoutes, 4)
+    assert.equal(configuredRouting.uniqueRoutes, 5)
     const checkoutGuard = path.join(installedPath, "skills", "fire", "scripts", "checkout-state.mjs")
     assert.equal(fs.existsSync(checkoutGuard), true, "missing installed Fire checkout-state guard")
     const cleanupRunner = path.join(installedPath, "skills", "fire", "scripts", "cleanup-run.mjs")
@@ -799,9 +806,14 @@ function main() {
 
       const installMessage = runCodex("00-install", `Use $herder:install --host codex --scope user. Install the native Herder profiles into this isolated Codex home, verify Multi-Agent V2, and do not change repository source.`, context).message
       assert.match(installMessage, /multi.agent.v2|multi_agent_v2|enabled/i)
-      for (const profile of ["plan_implementer", "plan_reviewer", "plan_judge", "plan_saver"]) {
+      for (const profile of ["plan_accountant", "plan_implementer", "plan_reviewer", "plan_judge", "plan_saver"]) {
         assert.equal(fs.existsSync(path.join(codexHome, "agents", `${profile}.toml`)), true, `missing installed profile ${profile}`)
       }
+      const installedAccountant = fs.readFileSync(path.join(codexHome, "agents", "plan_accountant.toml"), "utf8")
+      assert.match(installedAccountant, /^model = "gpt-5\.6-luna"$/m)
+      assert.match(installedAccountant, /^model_reasoning_effort = "max"$/m)
+      assert.match(installedAccountant, /^service_tier = "fast"$/m)
+      assert.match(installedAccountant, /root exclusively owns host worker handles/)
       const installedImplementer = fs.readFileSync(path.join(codexHome, "agents", "plan_implementer.toml"), "utf8")
       assert.match(installedImplementer, /^service_tier = "fast"$/m)
       const installedReviewer = fs.readFileSync(path.join(codexHome, "agents", "plan_reviewer.toml"), "utf8")
@@ -872,15 +884,20 @@ function main() {
         assert.equal(fireAttempts.some((record) => record.model === "gpt-5.6-sol" && record.effort === "xhigh"), true)
 
         const agentEvidence = nativeAgentEvidence(codexHome, evidenceReader)
-        assert.equal(agentEvidence.length >= 3, true, "expected native implementer and reviewer sessions")
+        assert.equal(agentEvidence.length >= 4, true, "expected persistent accountant, implementer, and reviewer sessions")
         assert.equal(agentEvidence.every((item) => item.multiAgentVersion === "v2"), true)
-        assert.equal(agentEvidence.every((item) => item.userMessageCount === 0 && item.taskMessageCount === 1), true, "child context was not isolated")
+        assert.equal(agentEvidence.every((item) => item.userMessageCount === 0), true, "child context was not isolated")
         assert.equal(agentEvidence.every((item) => item.cwd === project), true, "child session did not inherit the intended repository context")
         assert.equal(agentEvidence.every((item) => item.usage && Number.isSafeInteger(item.usage.inputTokens)), true)
+        const accountants = agentEvidence.filter((item) => item.agentRole === "plan_accountant")
         const implementers = agentEvidence.filter((item) => item.agentRole === "plan_implementer")
         const reviewers = agentEvidence.filter((item) => item.agentRole === "plan_reviewer")
         const judges = agentEvidence.filter((item) => item.agentRole === "plan_judge")
         const savers = agentEvidence.filter((item) => item.agentRole === "plan_saver")
+        assert.equal(accountants.length, 1, "Fire must use exactly one persistent Accountant thread")
+        assert.equal(accountants[0].taskMessageCount >= 2, true, "Accountant must receive repeated task envelopes on one persistent thread")
+        assert.equal(accountants[0].model === "gpt-5.6-luna" && accountants[0].effort === "max" && accountants[0].sandbox === "workspace-write", true)
+        assert.equal([...implementers, ...reviewers, ...judges, ...savers].every((item) => item.taskMessageCount === 1), true, "plan workers must receive one isolated task")
         assert.equal(implementers.length >= 1, true)
         assert.equal(reviewers.length >= 2, true)
         assert.equal(judges.length, 0, "an approving review should skip Judge")
@@ -890,20 +907,23 @@ function main() {
         fs.writeFileSync(path.join(reports, "native-agent-evidence.json"), `${JSON.stringify(agentEvidence, null, 2)}\n`)
 
         const spawnEvidence = nativeSpawnEvidence(codexHome)
-        assert.equal(spawnEvidence.length >= 3, true)
+        assert.equal(spawnEvidence.length >= 4, true)
         assert.equal(spawnEvidence.every((item) => item.namespace === "herder_agents"), true)
         assert.equal(spawnEvidence.every((item) => item.encryptedMessagePresent), true)
         assert.equal(spawnEvidence.every((item) => item.arguments.fork_turns === "none"), true)
-        assert.equal(spawnEvidence.every((item) => ["plan_implementer", "plan_reviewer", "plan_judge", "plan_saver"].includes(item.arguments.agent_type)), true)
+        assert.equal(spawnEvidence.every((item) => ["plan_accountant", "plan_implementer", "plan_reviewer", "plan_judge", "plan_saver"].includes(item.arguments.agent_type)), true)
+        assert.equal(spawnEvidence.filter((item) => item.arguments.agent_type === "plan_accountant").length, 1)
         assert.equal(spawnEvidence.every((item) => !("model" in item.arguments) && !("reasoning_effort" in item.arguments) && !("service_tier" in item.arguments)), true)
         assert.equal(spawnEvidence.every((item) => item.coordinatorModel === "gpt-5.6-sol" && item.coordinatorEffort === "max" && item.multiAgentVersion === "v2"), true)
         fs.writeFileSync(path.join(reports, "native-spawn-evidence.json"), `${JSON.stringify(spawnEvidence, null, 2)}\n`)
 
         const fireTranscript = fs.readFileSync(path.join(transcripts, "02-fire-run.jsonl"), "utf8")
         assert.doesNotMatch(fireTranscript, /run-codex-worker\.mjs/)
-        assert.match(fireTranscript, /assignment-bundle\.mjs/, "Fire did not materialize and verify worktree-local assignment context")
-        assert.match(fireTranscript, /run-gate\.mjs/, "Fire did not isolate coordinator gate output")
-        assert.match(fireTranscript, /namespace-run\.mjs/, "Fire did not run deterministic namespace preflight")
+        assert.match(fireTranscript, /plan_accountant/, "Fire did not spawn the persistent Accountant")
+        const accountantTranscript = fs.readFileSync(accountants[0].transcript, "utf8")
+        assert.match(accountantTranscript, /assignment-bundle\.mjs/, "Accountant did not materialize and verify worktree-local assignment context")
+        assert.match(accountantTranscript, /run-gate\.mjs/, "Accountant did not isolate gate output")
+        assert.match(accountantTranscript, /namespace-run\.mjs/, "Accountant did not run deterministic namespace preflight")
         assert.match(fireTranscript, /DISCOVERED_PATHS:/, "Fire did not collect implementation-discovered path evidence")
 
         const integrationBranches = run("git", ["branch", "--list", "herder/herder-plans/integration", "--format=%(refname:short)"], { cwd: project }).stdout.trim().split(/\r?\n/).filter(Boolean)

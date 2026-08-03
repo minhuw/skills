@@ -1,10 +1,11 @@
 # Plan Herder Orchestration Protocol
 
-Use this protocol for every `fire` and `resume` run. The coordinator owns scheduling, gates, lifecycle state, and integration. Each plan owns one stable branch/worktree and advances independently through a bounded Implementer → Reviewer loop. Judge is an escalation filter beginning at unresolved round 3. Only final integration is serialized.
+Use this protocol for every `fire` and `resume` run. The root coordinator owns only host-agent dispatch, waits, and user interaction. One persistent Accountant owns scheduling decisions, gates, lifecycle and usage state, repository proofs, Git transactions, and integration. Each plan owns one stable branch/worktree and advances independently through a bounded Implementer → Reviewer loop. Judge is an escalation filter beginning at unresolved round 3. Only final integration is serialized.
 
 ## Contents
 
 1. Establish the plan set
+1A. Persistent Accountant contract
 2. Preflight without mutation
 3. Branch, worktree, and lease layout
 4. Independent plan scheduling
@@ -31,25 +32,67 @@ Resolve:
 - `base_commit`: current user-checkout `HEAD` for fresh Fire, or `base_ref` for resume.
 - `worktree_root`: outside the user's checkout, with integration at `<worktree_root>/<plan_name>/integration` and plans at `<worktree_root>/<plan_name>/<id>`.
 - `gate_log_root`: `<worktree_root>/<plan_name>/logs`, outside every Git worktree.
-- `parallel_limit`: explicit positive `--max-parallel`, otherwise `5`, capped by host-available worker capacity. It is one global worker limit across Implementer, Reviewer, and Judge.
-- `scheduler_state`: for each plan, its round 1–6, review pass, active role if any, queued next action, approved base/HEAD/tree, and integration-ready state; plus the optional integration-lock owner. Reconstruct this state from durable evidence on resume rather than writing a second state file.
+- `requested_worker_limit`: explicit positive `--max-parallel`, otherwise `5`.
+- `control_slots`: exactly `1`, reserved for the persistent Accountant and excluded from the plan-worker pool.
+- `host_child_capacity`: the host-confirmed concurrent child-thread capacity, excluding the root. Fire/resume requires at least `2`; if capacity cannot be confirmed, stop before mutation rather than guess.
+- `parallel_limit`: `min(requested_worker_limit, host_child_capacity - control_slots)`. It is one global plan-worker limit across Implementer, Reviewer, and Judge. Default five-worker execution therefore requires child capacity of at least six.
+- `accountant_thread`: the one native `plan_accountant` / `herder:plan-accountant` child addressable across the run. It never counts in `parallel_limit`.
+- `scheduler_state`: Accountant-owned state for each plan: round 1–6, review pass, active role if any, queued next action, approved base/HEAD/tree, and integration-ready state; plus the optional integration-lock owner. Reconstruct this state from durable evidence on resume rather than writing a second state file.
 - `review_state`: per-generation round count, exact review surfaces, repair deltas, finding ledger, Judge outcomes from round 3 onward, and leak records. Use a separate ledger for final cross-plan audit.
 - `checkout_state_token`: the checkout guard token excluding only `plan_dir`.
 - `assignment_state(<id|RUN>)`: worktree-local assignment path, bundle SHA-256, compiled snapshot SHA-256, generation base, and branch.
 - `execution_runtime`: explicit `native` or `orca`, never inferred.
 
-An **agent attempt** is one worker dispatch and always receives a unique usage row. A **substantive round** is an Implementer attempt that returns a result or may have mutated its worktree, followed by coordinator gates and Reviewer when the branch becomes reviewable. A proven clean host interruption consumes no round. Restacking an unchanged patch consumes no round.
+An **agent attempt** is one worker dispatch and always receives a unique usage row. A **substantive round** is an Implementer attempt that returns a result or may have mutated its worktree, followed by Accountant-run gates and Reviewer when the branch becomes reviewable. A proven clean host interruption consumes no round. Restacking an unchanged patch consumes no round.
+
+## 1A. Persistent Accountant Contract
+
+Before any helper, repository Git command, or coordination write, the root spawns exactly one Accountant. On Codex use `agent_type: plan_accountant` with `fork_turns: "none"`; the installed profile pins Luna/max/Fast. On Claude use `herder:plan-accountant`; the bundled profile pins Opus/medium and requires an addressable resumed-subagent capability. The Accountant is a native controller child even when plan workers use Orca.
+
+The Accountant is the exclusive control-plane owner. It alone runs every control-plane helper mode and repository Git command, evaluates worker envelopes, records usage, writes lifecycle or leak state, creates or removes refs/branches/worktrees/locks, runs gates, restacks, integrates, audits, and cleans. The root never duplicates or independently repairs those operations. The root may execute only exact host dispatch/wait/steer transport actions returned by the Accountant, including Orca dispatch/wait commands. The Accountant never spawns, waits for, steers, interrupts, lists, or messages agents and never asks the user a question directly.
+
+The root sends one event at a time to the same Accountant thread:
+
+```text
+EVENT_KIND: BOOTSTRAP | RESUME | TERMINALS | DISPATCH_RESULTS | STATUS | CLEANUP | USER_INPUT
+EVENT_ID: <run-unique monotonic ID>
+REQUESTED_WORKER_LIMIT: <positive integer>
+HOST_CHILD_CAPACITY: <confirmed integer>
+ACTIVE_WORKERS: <exact host handles, roles, plans, attempts, or none>
+PAYLOAD: <exact invocation, terminal envelopes/evidence, dispatch results, or user answer>
+```
+
+On `BOOTSTRAP`, the Accountant resolves the repository and installed helper paths, reads this complete protocol, records its SHA-256 in the response, and performs preflight. Every later event echoes that protocol hash; a mismatch stops without mutation. On `RESUME`, a replacement Accountant reconstructs from durable Plans state, refs, branches, worktrees, locks, assignments, gates, and supplied host inventory. Conversation history is never authority.
+
+Process `TERMINALS` as a stable batch sorted by plan, round, and role. The Accountant applies all now-eligible control work and returns enough ordered `DISPATCH` actions to fill every available plan-worker slot. Each action contains a unique action ID, exact role, plan, attempt ID, task name, and complete immutable worker message. The root executes actions exactly, never invents one, and returns one `DISPATCH_RESULTS` batch with the real host handle or exact failure for every action. Capacity failure consumes no attempt or round; the Accountant releases an unused lease and recalculates capacity.
+
+The Accountant response envelope is:
+
+```text
+ACCOUNTANT_STATUS: READY | ACTIONS | WAIT | NEEDS_INPUT | BLOCKED | COMPLETE
+EVENT_ID: <echo>
+APPLIED: yes | already | no
+WORKER_POOL: requested=<n>; effective=<n>; active=<n>; available=<n>; control_reserved=1
+ACTIONS: <ordered complete action blocks, or none>
+STATE: <compact durable-state summary>
+EVIDENCE: <protocol hash plus compact hashes/SHAs/proofs>
+QUESTION: <one focused question only for NEEDS_INPUT, otherwise none>
+```
+
+The root validates only this envelope and host-handle accounting. For `ACTIONS`, it dispatches up to `available`; for `WAIT`, it performs the host's event-driven long wait; for `NEEDS_INPUT`, it asks the user and returns `USER_INPUT`; for terminal states, it relays the Accountant's compact report. Accountant turns are control-plane overhead like the root session and do not recursively create worker usage rows.
+
+Event replay is idempotent. The Accountant reconciles every event and action against existing usage attempt IDs, lifecycle state, exact refs, locks, worktrees, assignments, and completion proofs before writing. Reusing an event ID with different payload is a hard stop. Never add an event journal or second scheduler state file.
 
 ## 2. Preflight Without Mutation
 
-Complete every check before creating refs, branches, or worktrees:
+The Accountant completes every check before creating refs, branches, or worktrees:
 
 1. Confirm repository and worktree inventory are readable.
 2. Run `node <checkout_guard> --repo <repo_root> --exclude <plan_dir> --pretty`; require `ok: true` and retain its `stateToken` without exposing file contents.
 3. Run Plans `validate` and `shape`. Reject graph, semantic-scope, or overlap errors. Ignore legacy review-budget metadata and every file-count or LOC STOP rule.
 4. Run `node <namespace_runner> ... --mode <fire|resume> --pretty`. A namespace conflict is a deliberate stop; never invent a timestamp, adopt unknown state, or overwrite evidence.
-5. Resolve Implementer, Reviewer, and Judge profiles and their configured routing. A packaged Saver profile is not part of fresh scheduling and is probed only when resuming a persisted legacy Saver state.
-6. For native Codex require Multi-Agent V2 `herder_agents` spawning with `agent_type` and `fork_turns`; never fall back to `codex exec` or a generic worker. For Orca, validate the explicit runtime profile and every required route.
+5. Require the root to prove the Accountant thread and reserved control slot are addressable, then resolve Implementer, Reviewer, and Judge profiles and their configured routing. A packaged Saver profile is not part of fresh scheduling and is probed only when resuming a persisted legacy Saver state.
+6. For native Codex require Multi-Agent V2 `herder_agents` spawning with custom `agent_type`, `fork_turns`, follow-up, and long waits; never fall back to `codex exec` or a generic worker. For Claude require resumable `SendMessage` before mutation. For Orca, validate the explicit plan-worker runtime profile and every required route.
 7. Determine required verification commands from repository instructions, CI, and plan command tables. Do not guess when the plan specifies them.
 8. Confirm intended worktree paths are unused and Git metadata is writable.
 
@@ -92,11 +135,11 @@ Lock a plan worktree while a worker can access it:
 git worktree lock --reason plan-herder:<plan-name>:<plan-id>:<role>:<attempt-id>:<task-name>
 ```
 
-One plan may have at most one active owner. A lock is a cleanup lease, not lifecycle state. The coordinator alone unlocks after the worker is terminal.
+One plan may have at most one active owner. A lock is a cleanup lease, not lifecycle state. The Accountant alone acquires and releases it around a root-dispatched worker.
 
-For native Codex, dispatch the exact `plan_implementer`, `plan_reviewer`, or `plan_judge` profile with `fork_turns: "none"`; omit model, effort, and service-tier overrides. For Orca use one tracked task and adapter-delivered lifecycle prompt per attempt; matching `worker_done` task/dispatch/pane provenance replaces native terminal evidence.
+For native Codex, the Accountant returns a complete action for the exact `plan_implementer`, `plan_reviewer`, or `plan_judge` profile with `fork_turns: "none"`; the root dispatches it without model, effort, or service-tier overrides. For Orca the Accountant prepares one tracked task and adapter-delivered lifecycle prompt per attempt, and the root delivers it; matching `worker_done` task/dispatch/pane provenance replaces native terminal evidence.
 
-Immediately before and after every worker attempt, run:
+The Accountant runs immediately before authorizing and after receiving every worker attempt:
 
 ```text
 node <checkout_guard> --repo <repo_root> --exclude <plan_dir> --expect <checkout_state_token> --pretty
@@ -106,27 +149,27 @@ A mismatch stops dispatch, integration, and cleanup without rewriting user state
 
 ## 4. Independent Plan Scheduling
 
-Use one event-driven global worker pool. Its occupied capacity is exactly the number of active Implementer, Reviewer, and Judge agents. Coordinator gates, restacks, and the integration lock consume no worker slot. Never exceed `parallel_limit`, and never give one plan more than one active role.
+Use one event-driven global plan-worker pool. Its occupied capacity is exactly the number of active Implementer, Reviewer, and Judge agents. The Accountant occupies the separate reserved control slot; its gates, restacks, and integration lock consume no plan-worker slot. Never exceed `parallel_limit`, never consume the control slot with a plan worker, and never give one plan more than one active role.
 
 There is no global review lane. Any combination of roles on different plans may overlap: an Implementer on A, Reviewer on B, and Judge on C can all run concurrently. The only cross-plan mutex is the integration lock in Section 6.
 
 At every scheduling pass:
 
-1. Drain every terminal worker event, verify bundle/checkout/Git evidence, record usage, and enqueue that plan's deterministic next action.
-2. Advance every coordinator-only gate or state transition that can run without a worker.
-3. Queue approved plans for the integration lock in dependency/plan order, but do not wait for that queue before dispatching unrelated workers.
-4. Run `node <plan_manager> ready <plan_dir> --pretty`. Select `TODO` plans whose dependencies are `DONE`, whose completion refs are reachable from integration, and whose branches do not exist.
-5. Create their stable branch/worktree, materialize the assignment, batch-transition them to `IN PROGRESS`, and enqueue round-1 Implementers.
-6. Fill every available worker slot from eligible Implementer, Reviewer, and Judge actions in stable dependency/plan/round order.
-7. Wait only when no terminal event, coordinator action, integration action, or eligible dispatch can make progress.
+1. The root drains every currently terminal worker into one `TERMINALS` event and includes the exact remaining active-worker inventory and available capacity.
+2. The Accountant verifies bundle/checkout/Git evidence, records worker usage, advances every eligible gate and lifecycle transition, and enqueues deterministic next actions.
+3. The Accountant advances the integration queue in dependency/plan order without withholding unrelated dispatch actions.
+4. The Accountant runs `node <plan_manager> ready <plan_dir> --pretty`, selects eligible `TODO` plans, creates their stable branches/worktrees, materializes assignments, and batch-transitions them to `IN PROGRESS`.
+5. The Accountant returns ordered actions for every available worker slot across eligible Implementer, Reviewer, and Judge work.
+6. The root dispatches the complete action batch immediately and returns exact `DISPATCH_RESULTS`; the Accountant reconciles leases and returns replacement actions for any still-available slot.
+7. The root waits only when the Accountant reports `WAIT` and no terminal event, integration action, or eligible dispatch can make progress.
 
 Do not use README `IN PROGRESS` count as an active-worker count; it means the plan lifecycle has started. Do not wait for an implementation wave to drain. A completed implementation should reach gates and Reviewer as soon as its own plan is unowned and a worker slot is available.
 
-After native dispatch, use `wait_agent` with `timeout_ms: 1800000`; Orca uses its equivalent tracked long wait. The timeout caps idle wakeups, not result-delivery latency. A timeout is not a failure. If no local work becomes ready, do not reread transcripts, request status, or call `list_agents`; wait again.
+After native dispatch, the root uses `wait_agent` with `timeout_ms: 1800000`; Orca uses its equivalent tracked long wait. The timeout caps idle wakeups, not result-delivery latency. A timeout is not a failure. If no worker becomes terminal, do not wake the Accountant; do not reread transcripts, request status, or call `list_agents`; wait again.
 
 ## 5. Six-Round Plan Loop
 
-Each fresh generation has exactly six possible substantive rounds. Call the deterministic helper after every Reviewer or Judge result:
+Each fresh generation has exactly six possible substantive rounds. The Accountant calls the deterministic helper after every Reviewer or Judge result:
 
 ```text
 node <round_policy> review --round <1..6> --verdict <APPROVE|REVISE|BLOCK> --scope <PASS|FAIL> --open-blockers <n> --pretty
@@ -148,7 +191,7 @@ The helper's action is authoritative for scheduling:
 
 This means rounds 1–2 are the simple Implementer → Reviewer repair loop. An unresolved third review triggers Judge before round 4. Every nonapproving review in rounds 4–6 is filtered by Judge. Approval always bypasses Judge.
 
-An Implementer result that may have mutated consumes its current round even if it fails before a reviewable frozen branch exists. If rounds remain, dispatch a guided-repair Implementer with exact coordinator-proven operational evidence. Do not dispatch Judge without Reviewer findings merely to classify an implementation or gate failure. A non-reviewable round 6 becomes `BLOCKED` with exact evidence. A proven clean host interruption is free.
+An Implementer result that may have mutated consumes its current round even if it fails before a reviewable frozen branch exists. If rounds remain, dispatch a guided-repair Implementer with exact Accountant-proven operational evidence. Do not dispatch Judge without Reviewer findings merely to classify an implementation or gate failure. A non-reviewable round 6 becomes `BLOCKED` with exact evidence. A proven clean host interruption is free.
 
 ### Implementation and gates
 
@@ -168,7 +211,7 @@ NOTES: <material facts only>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-Run coordinator gates through:
+The Accountant runs control-plane gates through:
 
 ```text
 node <gate_runner> --cwd <absolute-worktree> --log-dir <gate_log_root>/<plan-or-RUN>/<phase> --label <stable-label> -- <command> <arguments...>
@@ -184,7 +227,7 @@ The first evidence-complete review is `DISCOVERY` against the complete plan diff
 
 Relationships are `PLAN_REQUIREMENT`, `PATCH_REGRESSION`, `FOLLOWUP`, or `INVALID`. Only evidence-complete P0/P1 `PLAN_REQUIREMENT` and `PATCH_REGRESSION` findings may block. P2/P3, `FOLLOWUP`, and `INVALID` findings are advisory and never block integration. A blocker must identify exact changed location, trigger, reproducible evidence/failing check, introducing hunk, and original-task or patch-delta relationship.
 
-Assign each `NEW` finding the next stable ID (`F001`, ...), deduplicate by root cause, and preserve the monotonic ledger across restacks and resume. In rounds 1–2, qualifying Reviewer blockers become direct repair contracts; other findings remain advisory. From round 3 onward Judge may classify valid unrelated Reviewer findings as `DEFERRED_OUT_OF_SCOPE` and the coordinator writes a non-executable draft at `<plan_dir>/leak/<source-plan-id>-<finding-id>-<slug>.md`.
+Assign each `NEW` finding the next stable ID (`F001`, ...), deduplicate by root cause, and preserve the monotonic ledger across restacks and resume. In rounds 1–2, qualifying Reviewer blockers become direct repair contracts; other findings remain advisory. From round 3 onward Judge may classify valid unrelated Reviewer findings as `DEFERRED_OUT_OF_SCOPE` and the Accountant writes a non-executable draft at `<plan_dir>/leak/<source-plan-id>-<finding-id>-<slug>.md`.
 
 Reviewer returns:
 
@@ -214,11 +257,11 @@ RATIONALE: <concise original-task closure rationale>
 USAGE: input_tokens=<integer|unknown>; cached_input_tokens=<integer|unknown>; output_tokens=<integer|unknown>; reasoning_tokens=<integer|unknown>; source=<host source|unknown>
 ```
 
-A `REVISE` containing only P2/P3, `FOLLOWUP`, `INVALID`, dismissed, or nonqualifying findings is a malformed verdict: normalize it to approval only after the coordinator proves gates, scope, and discovered-path acceptance. Judge `DONE` performs the same normalization in escalated rounds.
+A `REVISE` containing only P2/P3, `FOLLOWUP`, `INVALID`, dismissed, or nonqualifying findings is a malformed verdict: the Accountant normalizes it to approval only after proving gates, scope, and discovered-path acceptance. Judge `DONE` performs the same normalization in escalated rounds.
 
 ## 6. Integration Lock
 
-Reviewer approval or Judge `DONE` marks the exact base/HEAD/tree/status `READY_TO_INTEGRATE`. Multiple plans may wait and every other plan pipeline keeps running. The integration lock is a coordinator mutex, not a worker and not a pool reservation.
+Reviewer approval or Judge `DONE` marks the exact base/HEAD/tree/status `READY_TO_INTEGRATE`. Multiple plans may wait and every other plan pipeline keeps running. The integration lock is an Accountant mutex, not a plan worker and not a pool reservation.
 
 Under the lock only:
 
@@ -235,7 +278,7 @@ Do not add Herder metadata to commit subjects or bodies. Integration history rem
 
 ## 7. Usage and Interruption Accounting
 
-The root coordinator alone calls `record-usage` after every terminal attempt, including attempts without a response. Continue stable per-role ordinals across resume. Copy uniquely attributable host telemetry; otherwise record `unknown`. Never estimate.
+The Accountant alone calls `record-usage` after every terminal worker attempt, including attempts without a response. The root supplies uniquely attributable host telemetry in the `TERMINALS` event; otherwise the Accountant records `unknown`. Continue stable per-role ordinals across resume and never estimate. Accountant turns are control-plane overhead and do not recursively create usage rows.
 
 Native Codex evidence must show matching role, Multi-Agent V2, terminal response classification, and host-reported usage when available. Never parse tool-call text to infer filesystem containment. Both runtimes require checkout-guard and exact before/after Git proofs; Orca additionally requires exact worktree/task/dispatch/pane provenance.
 
@@ -245,7 +288,7 @@ For transient capacity, do not increment any round, retry, interruption, or clar
 
 ## 8. Resume and Legacy Compatibility
 
-Resume reconstructs scheduler state from Plans lifecycle/usage, refs, branches, worktree leases, assignment hashes, round and review envelopes, exact reviewed surfaces, gates, findings, and child evidence. Conversation history is never required. Count every proven-live Implementer, Reviewer, or Judge against `parallel_limit`; no durable review-lane reservation exists. If role ownership is ambiguous, preserve that plan rather than dispatch competition.
+On resume, the Accountant reconstructs scheduler state from Plans lifecycle/usage, refs, branches, worktree leases, assignment hashes, round and review envelopes, exact reviewed surfaces, gates, findings, and child evidence. Conversation history is never required. The root supplies the exact live host inventory. Count every proven-live Implementer, Reviewer, or Judge against `parallel_limit`; reserve the separate Accountant control slot and keep no durable review-lane reservation. If role ownership is ambiguous, preserve that plan rather than dispatch competition.
 
 Classify retained branches:
 
@@ -267,7 +310,7 @@ The plan set succeeds when every plan is `DONE` or `REJECTED`, every dependency 
 
 Reviewer approval completes the final audit without Judge. A final-audit nonapproval is reported with evidence and does not mutate integration or start a hidden seventh per-plan round; route it through a user-visible validated repair plan. P2/P3 findings remain advisory.
 
-After success, verify the checkout token and invoke fail-closed `--finalize`. Never merge, push, publish, or deploy. Report integration branch/worktree, final SHA, outcomes, gates, audit, usage coverage, advisory/deferred findings, and preserved state.
+After success, the Accountant verifies the checkout token and invokes fail-closed `--finalize`. It returns integration branch/worktree, final SHA, outcomes, gates, audit, usage coverage, advisory/deferred findings, and preserved state for the root to report. Never merge, push, publish, or deploy.
 
 When the intended target still equals `base_ref`, report:
 
@@ -279,7 +322,7 @@ If it moved, require a fresh replay/review cycle; never recommend non-fast-forwa
 
 ## 10. Cleanup
 
-Cleanup is coordinator-only:
+Cleanup is Accountant-only. The root sends one `CLEANUP` event and spawns no plan worker:
 
 ```text
 node <cleanup_runner> --repo <repo_root> --plan-dir <plan_dir> [--plan-name <name>] [--plan <id>] [--dry-run] [--include-failed] [--finalize] [--handoff-target <branch>] --runtime native|orca --pretty

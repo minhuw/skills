@@ -68,12 +68,13 @@ else process.exit(2)
   const validated = JSON.parse(run(["validate", "--answers", orcaAnswersPath], env))
   assert.equal(validated.ok, true)
   assert.equal(validated.backend, "orca")
-  assert.equal(validated.uniqueRoutes, 4)
+  assert.equal(validated.uniqueRoutes, 5)
 
   const availability = JSON.parse(run(["probe", "--answers", orcaAnswersPath], env))
   assert.equal(availability.ok, true)
-  assert.equal(availability.results.length, 4)
+  assert.equal(availability.results.length, 5)
   assert.equal(availability.results.every((result) => /^[a-f0-9]{64}$/.test(result.outputSha256)), true)
+  assert.equal(availability.results.some((result) => result.roles.includes("plan-accountant") && result.model === "gpt-5.6-luna" && result.effort === "max"), true)
 
   const live = JSON.parse(run(["probe", "--answers", orcaAnswersPath, "--live"], env))
   assert.equal(live.ok, true)
@@ -179,14 +180,15 @@ else process.exit(2)
   await writeFile(nativeAnswersPath, JSON.stringify(nativeAnswers))
   const nativeValidated = JSON.parse(run(["validate", "--answers", nativeAnswersPath], env))
   assert.equal(nativeValidated.backend, "native-codex")
-  assert.equal(nativeValidated.uniqueRoutes, 2)
+  assert.equal(nativeValidated.uniqueRoutes, 3)
   assert.equal(JSON.parse(run(["probe", "--answers", nativeAnswersPath, "--live"], env)).ok, true)
 
   const agentDir = path.join(root, "project", ".codex", "agents")
   const nativeGenerated = JSON.parse(run(["generate", "--answers", nativeAnswersPath, "--output", agentDir], env))
-  assert.equal(nativeGenerated.files.length, 4)
+  assert.equal(nativeGenerated.files.length, 5)
   assert.equal(nativeGenerated.newSessionRequired, true)
   const implementer = await readFile(path.join(agentDir, "plan_implementer.toml"), "utf8")
+  const accountant = await readFile(path.join(agentDir, "plan_accountant.toml"), "utf8")
   const reviewer = await readFile(path.join(agentDir, "plan_reviewer.toml"), "utf8")
   const judge = await readFile(path.join(agentDir, "plan_judge.toml"), "utf8")
   assert.match(implementer, /^model = "gpt-5\.6-sol"$/m)
@@ -195,6 +197,9 @@ else process.exit(2)
   assert.match(reviewer, /^model = "gpt-5\.6-luna"$/m)
   assert.match(reviewer, /^service_tier = "fast"$/m)
   assert.match(judge, /^service_tier = "fast"$/m)
+  assert.match(accountant, /^model = "gpt-5\.6-luna"$/m)
+  assert.match(accountant, /^model_reasoning_effort = "max"$/m)
+  assert.match(accountant, /^service_tier = "fast"$/m)
 
   await writeFile(path.join(agentDir, "plan_saver.toml"), "custom\n")
   const nativeConflict = spawnSync(process.execPath, [
@@ -213,6 +218,7 @@ else process.exit(2)
   assert.equal(nativeForced.backups.length, 1)
   assert.equal(await readFile(nativeForced.backups[0], "utf8"), "custom\n")
   assert.deepEqual((await readdir(agentDir)).sort(), [
+    "plan_accountant.toml",
     "plan_implementer.toml",
     "plan_judge.toml",
     "plan_reviewer.toml",

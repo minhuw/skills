@@ -36,6 +36,8 @@ const AGENT_FILES = {
   "plan-judge": "plan_judge.toml",
   "plan-saver": "plan_saver.toml",
 }
+const ACCOUNTANT_FILE = "plan_accountant.toml"
+const ACCOUNTANT_MAPPING = { harness: "codex", model: "gpt-5.6-luna", effort: "max" }
 const EFFORTS = {
   codex: new Set(["low", "medium", "high", "xhigh", "max"]),
   "grok-build": new Set(["low", "medium", "high"]),
@@ -289,6 +291,7 @@ function setNativeServiceTier(text, model, label) {
 
 function buildNativeProfiles(answers) {
   const files = {}
+  files[ACCOUNTANT_FILE] = readFileSync(path.join(PLUGIN_ROOT, "agent-profiles/codex", ACCOUNTANT_FILE), "utf8")
   for (const role of CHILD_ROLES) {
     const filename = AGENT_FILES[role]
     const source = path.join(PLUGIN_ROOT, "agent-profiles/codex", filename)
@@ -324,6 +327,9 @@ function uniqueRoutes(answers) {
     if (!routes.has(key)) routes.set(key, { ...mapping, roles: [] })
     routes.get(key).roles.push(role)
   }
+  const accountantKey = routeIdentity(ACCOUNTANT_MAPPING)
+  if (!routes.has(accountantKey)) routes.set(accountantKey, { ...ACCOUNTANT_MAPPING, roles: [] })
+  routes.get(accountantKey).roles.push("plan-accountant")
   return [...routes.values()]
 }
 

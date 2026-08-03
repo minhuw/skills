@@ -22,7 +22,7 @@ Ask one focused question at a time:
    - Native Codex default: project scope at `<repo>/.codex/agents/`.
    - Orca default: `<repo>/.herder/orca-runtime.json`.
    - Offer user scope for native Codex only when explicitly requested.
-3. Walk through `controller`, `plan-implementer`, `plan-reviewer`, `plan-judge`, and `plan-saver` in that order. Show the current or bundled value, then ask for:
+3. Keep the persistent `plan-accountant` fixed at bundled Luna/max/Fast; it is not an Orca-routed or user-configurable role. Walk through `controller`, `plan-implementer`, `plan-reviewer`, `plan-judge`, and `plan-saver` in that order. Show the current or bundled value, then ask for:
    - harness when the backend permits a choice;
    - exact model;
    - effort.
@@ -30,7 +30,7 @@ Ask one focused question at a time:
 4. For Pi, require the model as `provider/model`. Do not infer a provider from a bare model.
 5. Present one compact mapping table and the destination. Explain that live validation makes one minimal call per unique harness/provider/model/effort route and may consume tokens. Ask for confirmation before probing or writing.
 
-For Orca, keep `controller` on Codex because Fire's controller must load the Herder skill and own scheduling. Permit only `codex`, `grok-build`, and `pi`. Do not offer Amp or an arbitrary executable.
+For Orca, keep `controller` on Codex because Fire's root must load the Herder skill, host the native Accountant, and execute its exact worker-transport actions. Permit only `codex`, `grok-build`, and `pi`. Do not offer Amp or an arbitrary executable.
 
 ## Validate Before Writing
 
@@ -53,7 +53,7 @@ node <skill-dir>/scripts/configure-herder.mjs probe \
   --answers <temporary-answers.json> --live --pretty
 ```
 
-Availability probing checks executables and model catalogs without exposing their output. Live probing sends only `Return exactly HERDER_CONFIG_OK.` with read-only/no-tool permissions and returns status plus output hashes. Never substitute a route when either probe fails.
+Availability probing checks executables and model catalogs without exposing their output. The probe set always includes the fixed native Luna/max/Fast Accountant route, including when plan workers are Orca-routed. Live probing sends only `Return exactly HERDER_CONFIG_OK.` with read-only/no-tool permissions and returns status plus output hashes. Never substitute a route when either probe fails.
 
 On failure, write nothing. Identify the exact failed harness/provider/model/effort and ask the user to configure that agent outside the conversation:
 
@@ -79,7 +79,7 @@ If the destination differs, stop and show the conflict. Ask before rerunning wit
 
 Delete the temporary answers file after success or failure.
 
-For native Codex, report the generated controller launch command and require a new Codex session so the configured custom-agent types enter the tool schema. Fire continues to use the stable `plan_implementer`, `plan_reviewer`, `plan_judge`, and `plan_saver` types.
+For native Codex, report the generated controller launch command and require a new Codex session so the configured custom-agent types enter the tool schema. Fire continues to use fixed `plan_accountant` plus stable `plan_implementer`, `plan_reviewer`, `plan_judge`, and `plan_saver` types. The generated Accountant profile remains bundled Luna/max/Fast regardless of worker-route customization.
 
 For Orca, validate the written profile once more:
 

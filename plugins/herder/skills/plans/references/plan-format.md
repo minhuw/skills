@@ -98,7 +98,7 @@ DONE → BLOCKED
 REJECTED → TODO
 ```
 
-Only the root coordinator writes status during Fire. Dependencies require both `DONE` and a plan-set-scoped private completion ref naming a reachable commit. `ready` returns dependency-satisfied `TODO` plans; `IN PROGRESS` needs resume reconstruction and `BLOCKED` needs Saver recovery.
+Only the persistent Accountant writes status during Fire. Dependencies require both `DONE` and a plan-set-scoped private completion ref naming a reachable commit. `ready` returns dependency-satisfied `TODO` plans; `IN PROGRESS` needs Accountant-led resume reconstruction and `BLOCKED` needs explicit recovery or user direction.
 
 ## 6. Tracking and Worktrees
 
@@ -108,6 +108,6 @@ An ignored backlog is absent from new worktrees. Fire uses manager `snapshot` an
 
 ## 7. Execution Usage
 
-The manager may generate `README.md`'s `## Execution usage` section with summaries and one row per attempt. Only the root Fire coordinator writes it through `record-usage`; workers return usage envelopes.
+The manager may generate `README.md`'s `## Execution usage` section with summaries and one row per attempt. Only the persistent Fire Accountant writes it through `record-usage`; workers return usage envelopes through the root.
 
 Record model, effort, outcome, and an idempotent attempt ID for every implementer, reviewer, judge, saver, and run-wide attempt. Copy only host telemetry; keep unavailable fields `unknown` and never estimate. Input-plus-output subtotals do not add cached-input or reasoning details again, and incomplete coverage must remain visible.

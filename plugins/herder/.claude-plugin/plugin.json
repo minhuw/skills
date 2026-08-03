@@ -1,7 +1,7 @@
 {
   "name": "herder",
-  "version": "0.10.6",
-  "description": "Shape focused plans and execute them with bounded review, independent judging, recovery, usage accounting, and optional Orca cross-harness routing.",
+  "version": "0.11.0",
+  "description": "Shape focused plans and execute them through a persistent Accountant, bounded review, independent judging, and optional Orca worker routing.",
   "author": {
     "name": "minhuw",
     "url": "https://github.com/minhuw"

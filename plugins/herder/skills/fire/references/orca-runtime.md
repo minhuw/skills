@@ -24,6 +24,7 @@ It deliberately exercises:
 | Role | Harness | Provider/model |
 |---|---|---|
 | Controller | Codex | `openai-codex/gpt-5.6-sol` |
+| Accountant (native, not Orca-routed) | Codex | `openai-codex/gpt-5.6-luna`, max, Fast tier |
 | Implementer | Grok Build | `xai/grok-4.5` |
 | Reviewer | Pi | `kimi-coding/k3` |
 | Judge | Pi | `openai/gpt-5.6-sol` |
@@ -35,11 +36,11 @@ The Orca adapter supports only Codex, Grok Build, and Pi harnesses. Reject every
 
 The Kimi route is supplied by Pi's installed provider extension, so the Reviewer command must allow extension discovery. Its exact `--tools read,bash,grep,find,ls` allowlist still excludes Pi's edit/write tools and applies to extension/custom tools as well. Judge uses Pi's built-in OpenAI provider and may keep extension discovery disabled.
 
-The bundled controller command deliberately includes Codex's `--dangerously-bypass-approvals-and-sandbox` mode. The controller must call the Orca CLI, whose saved runtime registry and local bridge live outside the repository sandbox; a sandboxed controller therefore cannot satisfy live preflight. This permissive mode is limited to an Orca-owned controller worktree and does not relax Herder's scope, provenance, review-only, or cleanup checks.
+The bundled controller command deliberately includes Codex's `--dangerously-bypass-approvals-and-sandbox` mode. The root must execute Accountant-authorized Orca dispatch/wait transport commands, whose saved runtime registry and local bridge live outside the repository sandbox; a sandboxed controller therefore cannot satisfy live preflight. The native Accountant inherits the live controller permission override even though its installed profile requests workspace-write. This permissive mode is limited to an Orca-owned controller worktree and does not relax Herder's scope, provenance, review-only, or cleanup checks.
 
 ## Preconditions
 
-The controller must itself be a Codex session in an Orca-managed terminal and worktree. Do not use a relay terminal or an external Codex Desktop/CLI controller for this runtime. From an Orca-managed shell, launch it through the validated profile so the adapter selects and attests the exact configured command:
+The root controller must itself be a Codex session in an Orca-managed terminal and worktree, with Multi-Agent V2 and the installed native `plan_accountant` profile available. Do not use a relay terminal or an external Codex Desktop/CLI controller for this runtime. From an Orca-managed shell, launch it through the validated profile so the adapter selects and attests the exact configured command:
 
 ```text
 node <plugin-root>/skills/fire/scripts/orca-runtime.mjs launch-controller \
@@ -66,7 +67,7 @@ Require:
 - repository registered with Orca;
 - no selected role silently substituted with another harness, provider, model, or effort.
 
-Availability probes are not agent turns and must not modify the repository. Their output is reduced to pass/fail and a SHA-256; never include raw authentication, balance, or account output in coordinator context. A failed probe stops before mutation.
+Availability probes are not agent turns and must not modify the repository. Their output is reduced to pass/fail and a SHA-256; the Accountant returns only that compact evidence to the root. Never include raw authentication, balance, or account output in root context. A failed probe stops before mutation.
 
 ## Worktree authority
 
@@ -104,7 +105,7 @@ If Orca produces any branch other than the exact name or deterministic alias, ch
 
 For a fresh integration worktree, create it at `base_commit`, then use one `git update-ref --stdin` transaction to verify the integration branch still equals `base_commit` and create the previously absent `base_ref` at that SHA. If the transaction loses a race, stop with the Orca worktree intact.
 
-Record the opaque Orca worktree ID, absolute path, exact branch, and initial SHA in the coordinator's private run evidence outside every Git worktree. Do not add another file or parser under `plan_dir`.
+The Accountant records the opaque Orca worktree ID, absolute path, exact branch, and initial SHA in private run evidence outside every Git worktree. Do not add another file or parser under `plan_dir`.
 
 Before removal, require the normal Herder cleanup proofs plus `orca terminal list --worktree <id> --json` showing no live or ambiguous worker. Remove only with `orca worktree rm --worktree <id> --json`, then verify both Git worktree and exact branch removal. Do not use raw `git worktree remove` for an Orca-owned worktree.
 
@@ -112,12 +113,12 @@ Before removal, require the normal Herder cleanup proofs plus `orca terminal lis
 
 One Orca orchestration task represents exactly one Herder role attempt. It is transport/provenance state, not a Herder plan or lifecycle authority.
 
-For each attempt:
+For each attempt, the Accountant performs control-plane steps and returns only the exact dispatch/wait transport actions for the root:
 
 1. Capture the checkout guard and exact plan branch HEAD/tree/status.
 2. Lock the worktree using the normal Herder lease reason, including the attempt ID.
 3. Write the complete self-contained role envelope to a private task file under `gate_log_root`, outside all worktrees.
-4. Dispatch with:
+4. Return this exact dispatch command for the root to execute:
 
    ```text
    node <plugin-root>/skills/fire/scripts/orca-runtime.mjs dispatch \
@@ -130,8 +131,8 @@ For each attempt:
      --pretty
    ```
 
-5. Persist its compact result: profile hash, role routing, attempt ID, worktree selector, controller/worker terminal handles, readiness mode and evidence hash, Orca task ID, dispatch ID, task hash, delivery hash, delivery mode `tracked-terminal-send`, and launcher hash.
-6. Wait from the controller terminal:
+5. Receive the root's exact dispatch result and persist its compact evidence: profile hash, role routing, attempt ID, worktree selector, controller/worker terminal handles, readiness mode and evidence hash, Orca task ID, dispatch ID, task hash, delivery hash, delivery mode `tracked-terminal-send`, and launcher hash.
+6. Return this exact wait command for the root controller terminal:
 
    ```text
    orca orchestration check \
@@ -144,7 +145,7 @@ For each attempt:
 
 7. A timeout is only a heartbeat. Wait again unless other work is ready.
 8. Accept completion only when `worker_done` comes from the assigned pane and contains the active task ID and dispatch ID. Confirm it with `orca orchestration dispatch-show --task <task-id> --from <controller-handle> --json`.
-9. Re-run checkout guard and exact Git state proofs before interpreting the role envelope.
+9. Send the terminal envelope and provenance to the Accountant; it re-runs checkout guard and exact Git state proofs before interpretation.
 10. Close the terminal only after terminal evidence and usage are captured and no retry can reuse it. Every replacement attempt gets a fresh terminal and task.
 
 `plan-saver` is accepted here only for resuming a durable legacy Saver dispatch. Fresh six-round generations use the other three roles.
@@ -166,7 +167,7 @@ Use the generic role contract from:
 
 Strip only the plugin frontmatter and inline the complete remaining contract before the normal role-specific prompt envelope from `orchestration-protocol.md`. Load `plan-saver.md` only for a durable legacy Saver resume.
 
-The Reviewer and Judge profiles intentionally omit Pi's edit and write tools. Their shell remains available for checks, so coordinator-side before/after Git proofs are still mandatory. Any Reviewer or Judge mutation is a failed attempt regardless of its verdict.
+The Reviewer and Judge profiles intentionally omit Pi's edit and write tools. Their shell remains available for checks, so Accountant-side before/after Git proofs are still mandatory. Any Reviewer or Judge mutation is a failed attempt regardless of its verdict.
 
 ## Evidence and usage
 
@@ -184,7 +185,7 @@ For every attempt, retain:
 - terminal state and timestamps;
 - structured host usage when the harness exposes it.
 
-Do not claim filesystem containment from any harness transcript. Use the exact Orca worktree identity plus coordinator Git and checkout-guard evidence for repository-state protection. Record unavailable token fields as `unknown`; never trust model-written usage numbers over host telemetry and never estimate.
+Do not claim filesystem containment from any harness transcript. The Accountant uses exact Orca worktree identity plus Git and checkout-guard evidence for repository-state protection. Record unavailable token fields as `unknown`; never trust model-written usage numbers over host telemetry and never estimate.
 
 Orca terminal handles are runtime-scoped. After restart, reacquire terminals by recorded Orca worktree ID, correlate task/dispatch provenance, and apply normal resume ambiguity rules. A missing or contradictory task, dispatch, terminal, branch, or worktree mapping preserves state and stops that plan.
 
@@ -198,7 +199,7 @@ Repository failures and evidence-complete review revisions keep their normal Her
 
 The rich live test has two layers:
 
-1. Execute at least two independent focused plans and prove that an Implementer or Reviewer for one overlaps a different plan's Reviewer or Judge. Approving reviews skip Judge, and integration remains linear under the single coordinator lock.
+1. Execute at least two independent focused plans and prove that an Implementer or Reviewer for one overlaps a different plan's Reviewer or Judge. Approving reviews skip Judge, and integration remains linear under the single Accountant lock.
 2. On a disposable non-integrating probe plan, supply an evidence-complete round-3 nonapproval to Pi/GPT Judge, apply the authorized round-4 repair through Grok Implementer, and run targeted verification. Prove the deterministic round policy blocks any attempted seventh round and never dispatches Saver for the fresh generation.
 
-The drill must be labeled test-only and must not manufacture a failure in an otherwise approving production plan. Success requires the controller plus all three fresh-run roles across the configured harnesses, exact task/dispatch provenance, correct worktree isolation, zero Reviewer/Judge mutation, expected Implementer mutation, preserved source checkout, no fresh Saver dispatch, and no model or harness substitution.
+The drill must be labeled test-only and must not manufacture a failure in an otherwise approving production plan. Success requires the root controller, native persistent Accountant, and all three fresh-run roles across the configured harnesses, exact task/dispatch provenance, correct worktree isolation, zero Reviewer/Judge mutation, expected Implementer mutation, preserved source checkout, no fresh Saver dispatch, and no model or harness substitution.

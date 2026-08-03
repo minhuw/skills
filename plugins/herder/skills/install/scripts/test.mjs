@@ -36,12 +36,16 @@ process.stdout.write("multi_agent_v2                       under development  tr
 
   const first = run(...common);
   assert.match(first, /Installed: .*plan_implementer\.toml/);
+  assert.match(first, /Installed: .*plan_accountant\.toml/);
   assert.match(first, /multi_agent_v2 is enabled/);
   assert.match(first, /tool_namespace = "herder_agents"/);
+  assert.match(first, /max_concurrent_threads_per_session = 6/);
+  assert.match(first, /Reserve one child thread for plan_accountant/);
   const installed = path.join(projectRoot, ".codex/agents/plan_implementer.toml");
   const source = path.join(pluginRoot, "agent-profiles/codex/plan_implementer.toml");
   assert.deepEqual(await readFile(installed), await readFile(source));
   const expectedNicknames = {
+    plan_accountant: ["Ledger", "Tally", "Abacus", "Quill", "Keeper", "Scribe", "Balance", "Audit", "Count", "Record"],
     plan_implementer: ["Mocha", "Latte", "Cortado", "Piccolo", "Doppio", "Affogato", "Espresso", "Macchiato", "Cappuccino", "Ristretto"],
     plan_reviewer: ["Kiwi", "Mango", "Peach", "Fig", "Lychee", "Yuzu", "Guava", "Cherry", "Plum", "Papaya"],
     plan_judge: ["Sage", "Atlas", "Solon", "Themis", "Verity", "Justus", "Minerva", "Cato", "Portia", "Astraea"],
@@ -55,6 +59,11 @@ process.stdout.write("multi_agent_v2                       under development  tr
     assert.equal((await readFile(installedProfile, "utf8")).includes(declaration), true, `wrong nicknames for ${profile}`);
   }
   assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_implementer.toml"), "utf8"), /^service_tier = "fast"$/m);
+  const accountant = await readFile(path.join(projectRoot, ".codex/agents/plan_accountant.toml"), "utf8");
+  assert.match(accountant, /^model = "gpt-5\.6-luna"$/m);
+  assert.match(accountant, /^model_reasoning_effort = "max"$/m);
+  assert.match(accountant, /^service_tier = "fast"$/m);
+  assert.match(accountant, /root exclusively owns host worker handles/);
   assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_implementer.toml"), "utf8"), /DISCOVERED_PATHS:/);
   assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_reviewer.toml"), "utf8"), /JUSTIFIED\|SCOPE_VIOLATION/);
   assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_judge.toml"), "utf8"), /ACCEPTED\|REJECTED/);
@@ -83,6 +92,7 @@ process.stdout.write("multi_agent_v2                       under development  tr
   assert.equal(stamps.length, 1);
   assert.equal(await readFile(path.join(backupRoot, stamps[0], "plan_implementer.toml"), "utf8"), "customized\n");
   assert.deepEqual((await readdir(path.join(projectRoot, ".codex/agents"))).sort(), [
+    "plan_accountant.toml",
     "plan_implementer.toml",
     "plan_judge.toml",
     "plan_reviewer.toml",
@@ -114,6 +124,7 @@ process.stdout.write("multi_agent_v2                       under development  tr
     "legacy reviewer\n",
   );
   assert.deepEqual((await readdir(path.join(migrationProject, ".codex/agents"))).sort(), [
+    "plan_accountant.toml",
     "plan_implementer.toml",
     "plan_judge.toml",
     "plan_reviewer.toml",
@@ -122,6 +133,7 @@ process.stdout.write("multi_agent_v2                       under development  tr
 
   const claudeProject = path.join(fixtureRoot, "claude-project");
   const claude = run("--host", "claude", "--project-root", claudeProject);
+  assert.match(claude, /Bundled: herder:plan-accountant/);
   assert.match(claude, /Bundled: herder:plan-implementer/);
   await assert.rejects(access(path.join(claudeProject, ".claude/agents")));
 

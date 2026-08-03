@@ -37,9 +37,11 @@ Use schema version 1. The temporary answers file contains no credentials:
 }
 ```
 
-`backend` is `orca` or `native-codex`. Native Codex still includes all five roles; every harness must be `codex`. Its controller mapping becomes a launch command while the four child mappings become project or user agent profiles.
+`backend` is `orca` or `native-codex`. The answers schema still contains the controller and four configurable worker roles; every native harness must be `codex`. Its controller mapping becomes a launch command, the four worker mappings become project or user agent profiles, and generation also copies the fixed bundled `plan_accountant` profile. The Accountant is always Luna/max/Fast and is never an Orca-routed role.
 
 For native Codex profiles and Orca roles backed by Codex, the generator adds `service_tier = "fast"` to child roles whose model ID ends in `-luna`. It removes that setting from non-Luna child profiles and never enables Fast tier for the controller.
+
+Validation and probing add the fixed native `plan-accountant` route (`gpt-5.6-luna`, `max`, Fast tier) to the configurable routes before deduplication. This applies to both backends because Orca routes plan workers only; it does not host the Accountant.
 
 Role names are exact. Unknown or missing roles fail validation.
 

@@ -106,8 +106,8 @@ function parseManifest(bytes) {
 function validateFiles(manifest, host) {
   const entry = manifest.hosts?.[host];
   const expectedMode = host === "codex" ? "copy" : "bundled";
-  if (entry?.mode !== expectedMode || !Array.isArray(entry.files) || entry.files.length !== 4) {
-    throw new Error(`Manifest must define exactly four ${host} profiles in ${expectedMode} mode.`);
+  if (entry?.mode !== expectedMode || !Array.isArray(entry.files) || entry.files.length !== 5) {
+    throw new Error(`Manifest must define exactly five ${host} profiles in ${expectedMode} mode.`);
   }
 
   const expectedPrefix = host === "codex" ? "agent-profiles/codex/" : "agents/";
@@ -308,6 +308,8 @@ function printCodexRequirement(feature) {
   console.log("enabled = true");
   console.log("hide_spawn_agent_metadata = false");
   console.log('tool_namespace = "herder_agents"');
+  console.log("max_concurrent_threads_per_session = 6");
+  console.log("Reserve one child thread for plan_accountant; use at least --max-parallel + 1.");
   console.log("Then start a new Codex session before using $herder:fire.");
 }
 
