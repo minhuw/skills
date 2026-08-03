@@ -1,7 +1,7 @@
 {
   "name": "herder",
-  "version": "0.11.1",
-  "description": "Shape focused plans and execute them through a persistent Accountant, bounded review, independent judging, and optional Orca worker routing.",
+  "version": "0.12.0",
+  "description": "Shape focused plans, execute them through a persistent Accountant, and observe them in a local graph dashboard.",
   "author": {
     "name": "minhuw",
     "url": "https://github.com/minhuw"

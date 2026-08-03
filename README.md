@@ -1,6 +1,6 @@
 # Herder
 
-Herder is a task orchestrator engine for Claude Code and Codex. It shapes objectives into focused semantically bounded plan graphs, executes independent six-round implementation/review loops, and uses an independent Judge to filter unresolved findings from round three onward. One persistent Accountant owns scheduling, SQLite attempt accounting and rich run reports, lifecycle transitions, gates, Git transactions, and integration while the root only dispatches and waits for workers. Its optional Orca runtime can route plan workers across different CLI harnesses while preserving one plan, review, and integration protocol.
+Herder is a task orchestrator engine for Claude Code and Codex. It shapes objectives into focused semantically bounded plan graphs, executes independent six-round implementation/review loops, and uses an independent Judge to filter unresolved findings from round three onward. One persistent Accountant owns scheduling, SQLite attempt accounting and rich run reports, lifecycle transitions, gates, Git transactions, and integration while the root only dispatches and waits for workers. A read-only local dashboard visualizes dependency pipelines and execution evidence, and the optional Orca runtime can route plan workers across different CLI harnesses while preserving one plan, review, and integration protocol.
 
 ## Claude Code
 
@@ -23,6 +23,10 @@ Start a new Codex session and run `$herder:install`. Follow any printed Multi-Ag
 ## Configure role routing
 
 Run `$herder:configure` to choose native Codex or Orca, review each role's harness/model/effort mapping, and validate every unique route before writing configuration. Configure never accepts credentials in chat: unavailable routes stop before writing and direct you to the selected CLI's login or provider setup.
+
+## Observe a run
+
+Run `$herder:dashboard herder-plans` to open a loopback-only live graph of plan dependencies, implementation/review rounds, worker leases, token coverage, completion evidence, and the integration lane. The dashboard follows the restrained monochrome style of [minhu.wang](https://www.minhu.wang/), polls every two seconds, and is read-only by construction: it accepts only GET/HEAD and derives state from README, SQLite, and Git.
 
 ## Cross-harness execution with Orca
 

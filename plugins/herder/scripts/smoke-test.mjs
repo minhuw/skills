@@ -615,7 +615,7 @@ function main() {
     if (options.liveShape) writeShapeFixture(project)
     const { env, installed } = installPlugin(codexHome, project)
     const installedPath = installed.installedPath
-    const expectedSkills = ["configure", "fire", "grill", "improve", "install", "plans", "validate"]
+    const expectedSkills = ["configure", "dashboard", "fire", "grill", "improve", "install", "plans", "validate"]
     for (const skill of expectedSkills) {
       assert.equal(fs.existsSync(path.join(installedPath, "skills", skill, "SKILL.md")), true, `missing installed skill ${skill}`)
     }
@@ -650,6 +650,8 @@ function main() {
     const configureScript = path.join(installedPath, "skills", "configure", "scripts", "configure-herder.mjs")
     const fireProtocolText = fs.readFileSync(path.join(installedPath, "skills", "fire", "references", "orchestration-protocol.md"), "utf8")
     const validateText = fs.readFileSync(path.join(installedPath, "skills", "validate", "SKILL.md"), "utf8")
+    const dashboardText = fs.readFileSync(path.join(installedPath, "skills", "dashboard", "SKILL.md"), "utf8")
+    const dashboardRunner = path.join(installedPath, "skills", "dashboard", "scripts", "herder-dashboard.mjs")
     assert.match(grillText, /herder:grill <change-description>/)
     assert.match(grillText, /Producer self-review/)
     assert.match(grillText, /resume the one-question interview/)
@@ -714,6 +716,11 @@ function main() {
     assert.match(validateText, /Producer self-review/)
     assert.match(validateText, /Never alter `\.herder\/execution\.sqlite3`/)
     assert.match(validateText, /Never change lifecycle status/)
+    assert.match(dashboardText, /Bind only to `127\.0\.0\.1`/)
+    assert.match(dashboardText, /permits only GET and HEAD/)
+    assert.match(dashboardText, /README as plan graph\/lifecycle truth/)
+    assert.equal(fs.existsSync(dashboardRunner), true, "missing installed Dashboard server")
+    assert.equal(fs.existsSync(path.join(installedPath, "skills", "dashboard", "assets", "dashboard.js")), true, "missing installed Dashboard client")
     const evidenceReader = path.join(installedPath, "skills", "fire", "scripts", "read-codex-agent-evidence.mjs")
     assert.equal(fs.existsSync(evidenceReader), true, "missing installed Codex Multi-Agent V2 evidence reader")
     const roundPolicy = path.join(installedPath, "skills", "fire", "scripts", "round-policy.mjs")
@@ -771,6 +778,14 @@ function main() {
     assert.equal(emptyGraph.counts.total, 0)
     const emptyShape = parseJson(run("node", [manager, "shape", "herder-plans", "--pretty"], { cwd: project }).stdout, "empty shape")
     assert.equal(emptyShape.shapeReady, true)
+    const dashboardSnapshot = parseJson(run("node", [
+      dashboardRunner,
+      "--snapshot", "--pretty", "--plan-dir", "herder-plans",
+    ], { cwd: project }).stdout, "dashboard snapshot")
+    assert.equal(dashboardSnapshot.version, 1)
+    assert.equal(dashboardSnapshot.readOnly, true)
+    assert.equal(dashboardSnapshot.planSet.counts.total, 0)
+    assert.equal(dashboardSnapshot.accounting.storage, "sqlite")
     const readmeBeforeUsage = fs.readFileSync(path.join(project, "herder-plans", "README.md"), "utf8")
     const recordedUsage = parseJson(run("node", [
       manager,
