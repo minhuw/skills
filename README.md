@@ -26,7 +26,7 @@ Run `$herder:configure` to choose native Codex or Orca, review each role's harne
 
 ## Observe a run
 
-Run `$herder:dashboard herder-plans` to open a loopback-only live graph of plan dependencies, implementation/review rounds, worker leases, token coverage, completion evidence, and the integration lane. The dashboard follows the restrained monochrome style of [minhu.wang](https://www.minhu.wang/), polls every two seconds, and is read-only by construction: it accepts only GET/HEAD and derives state from README, SQLite, and Git.
+Run `$herder:dashboard herder-plans` to open a loopback-only live graph of plan dependencies, implementation/review rounds, worker leases, token coverage, completion evidence, and the integration lane. The launcher detects Orca and VS Code terminals: Orca opens a workspace-browser tab, while VS Code Remote uses its managed port-forwarding path. The dashboard follows the restrained monochrome style of [minhu.wang](https://www.minhu.wang/), polls every two seconds, and is read-only by construction: it accepts only GET/HEAD and derives state from README, SQLite, and Git.
 
 ## Cross-harness execution with Orca
 

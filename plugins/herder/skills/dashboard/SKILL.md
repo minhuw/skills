@@ -12,7 +12,7 @@ Observe one Herder plan set through a loopback-only web interface. The dashboard
 Codex uses `$herder:dashboard ...`; Claude Code uses `/herder:dashboard ...`.
 
 ```text
-herder:dashboard [<plan-dir>] [--plan-name <name>] [--port <0..65535>]
+herder:dashboard [<plan-dir>] [--plan-name <name>] [--port <0..65535>] [--no-host-integration]
 herder:dashboard snapshot [<plan-dir>] [--plan-name <name>]
 ```
 
@@ -20,6 +20,7 @@ herder:dashboard snapshot [<plan-dir>] [--plan-name <name>]
 - Default plan-set name: the Git-safe basename of the resolved plan directory. Pass `--plan-name` when Fire used another namespace.
 - Default port: `4173`. If occupied, use `--port 0` and report the selected URL printed by the server.
 - `snapshot` prints the exact JSON model once and exits without starting a server.
+- Host integration is automatic. An Orca-managed terminal opens the URL in Orca's workspace browser. A VS Code terminal asks `code --open-url` to open the service; VS Code Remote owns the authenticated port-forwarding tunnel. Use `--no-host-integration` to keep only the printed loopback URL.
 
 ## Launch
 
@@ -29,7 +30,7 @@ Resolve `<skill-dir>` to this `SKILL.md`'s directory. For the web dashboard, sta
 node <skill-dir>/scripts/herder-dashboard.mjs --plan-dir <plan-dir> [--plan-name <name>] [--port <port>]
 ```
 
-Wait for `URL: http://127.0.0.1:<port>/`, report that URL, and open it in the available local browser when browser control exists. Keep the terminal alive while the user observes the run. Stop it with Ctrl+C when requested or when the observing session is over.
+Wait for `URL: http://127.0.0.1:<port>/` and report the effective URL. In Orca and VS Code, the launcher requests the host-native browser/forwarding path itself; do not open a duplicate tab unless that integration reports a failure. Keep the terminal alive while the user observes the run. Stop it with Ctrl+C when requested or when the observing session is over.
 
 For a one-time machine-readable snapshot, run:
 
@@ -41,7 +42,8 @@ Report validation errors exactly. If the plan directory is missing, direct plann
 
 ## Observer contract
 
-- Bind only to `127.0.0.1`. Never proxy, tunnel, publish, or change the host binding.
+- Bind only to `127.0.0.1`. Never create a custom proxy or public tunnel, publish the service, or change the host binding.
+- Host-native access must remain private: VS Code owns its authenticated forwarding tunnel, and Orca uses its workspace browser. Never change forwarded-port visibility or start a public tunnel. Permit only the exact VS Code proxy hostname derived from `VSCODE_PROXY_URI`; retain DNS-rebinding rejection for every other Host value.
 - Keep the dashboard read-only. It permits only GET and HEAD, polls every two seconds, and never invokes Accountant or any worker.
 - Do not add lifecycle controls, scheduling controls, Git actions, SQL writes, another state file, or a second plan parser.
 - Treat README as plan graph/lifecycle truth, SQLite as immutable attempt-accounting truth, and Git refs/worktrees as execution and integration evidence.

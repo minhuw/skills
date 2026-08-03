@@ -6,6 +6,7 @@ import path from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
 import { buildDashboardState } from "./dashboard-state.mjs"
+import { describeDashboardHostAccess, enableDashboardHostAccess } from "./dashboard-host.mjs"
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 const ASSET_DIR = path.resolve(SCRIPT_DIR, "../assets")
@@ -34,12 +35,14 @@ export function parseDashboardArguments(argv) {
     port: DEFAULT_PORT,
     snapshot: false,
     pretty: false,
+    hostIntegration: true,
     help: false,
   }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === "--snapshot") options.snapshot = true
     else if (argument === "--pretty") options.pretty = true
+    else if (argument === "--no-host-integration") options.hostIntegration = false
     else if (["--help", "-h"].includes(argument)) options.help = true
     else if (["--plan-dir", "--plan-name", "--port"].includes(argument)) {
       const value = takeValue(argv, index, argument)
@@ -63,7 +66,7 @@ export function parseDashboardArguments(argv) {
 function usage() {
   return [
     "Usage:",
-    "  herder-dashboard [--plan-dir <path>] [--plan-name <name>] [--port <0..65535>]",
+    "  herder-dashboard [--plan-dir <path>] [--plan-name <name>] [--port <0..65535>] [--no-host-integration]",
     "  herder-dashboard --snapshot [--plan-dir <path>] [--plan-name <name>] [--pretty]",
     "",
     `The server binds only to ${LOOPBACK_HOST}. Use --port 0 to select an available port.`,
@@ -84,8 +87,17 @@ function securityHeaders(contentType, cacheControl = "no-store") {
   }
 }
 
-function acceptsLoopbackHost(value) {
-  return /^127\.0\.0\.1(?::\d{1,5})?$/.test(String(value ?? ""))
+function canonicalHost(value) {
+  try {
+    return new URL(`http://${String(value ?? "")}`).hostname.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+function acceptsLoopbackHost(value, allowedHosts) {
+  const host = canonicalHost(value)
+  return ["127.0.0.1", "localhost", "[::1]"].includes(host) || allowedHosts.has(host)
 }
 
 function send(response, status, body, contentType, method, cacheControl) {
@@ -111,12 +123,13 @@ export async function createDashboardServer(input = {}) {
   const planName = input.planName ?? null
   const port = input.port ?? DEFAULT_PORT
   const stateProvider = input.stateProvider ?? (() => buildDashboardState({ planDir, planName }))
+  const allowedHosts = new Set()
   const assets = readAssets()
   stateProvider()
 
   const server = http.createServer((request, response) => {
     const method = request.method ?? "GET"
-    if (!acceptsLoopbackHost(request.headers.host)) {
+    if (!acceptsLoopbackHost(request.headers.host, allowedHosts)) {
       send(response, 421, JSON.stringify({ error: "invalid-host" }), "application/json; charset=utf-8", method)
       return
     }
@@ -166,11 +179,16 @@ export async function createDashboardServer(input = {}) {
     fail("Dashboard server did not receive a TCP address")
   }
   const url = `http://${LOOPBACK_HOST}:${address.port}/`
+  const allowHost = (value) => {
+    const host = canonicalHost(value)
+    if (host) allowedHosts.add(host)
+  }
   return {
     host: LOOPBACK_HOST,
     port: address.port,
     url,
     server,
+    allowHost,
     close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
   }
 }
@@ -187,19 +205,26 @@ async function main(argv) {
     return
   }
   const dashboard = await createDashboardServer(options)
-  process.stdout.write([
-    "Herder Dashboard — read-only local observer",
-    `URL: ${dashboard.url}`,
-    `Plan directory: ${path.resolve(options.planDir)}`,
-    "Press Ctrl+C to stop.",
-    "",
-  ].join("\n"))
   const stop = async () => {
     await dashboard.close()
     process.exitCode = 0
   }
   process.once("SIGINT", stop)
   process.once("SIGTERM", stop)
+  process.stdout.write([
+    "Herder Dashboard — read-only local observer",
+    `URL: ${dashboard.url}`,
+    `Plan directory: ${path.resolve(options.planDir)}`,
+    "Press Ctrl+C to stop.",
+  ].join("\n"))
+  if (options.hostIntegration) {
+    const access = await enableDashboardHostAccess({
+      url: dashboard.url,
+      allowHost: dashboard.allowHost,
+    })
+    for (const line of describeDashboardHostAccess(access)) process.stdout.write(`\n${line}`)
+  }
+  process.stdout.write("\n")
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)

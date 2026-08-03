@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process"
 import { recordUsage } from "../../plans/scripts/herder-plans.mjs"
 import { executionDatabasePath } from "../../plans/scripts/execution-store.mjs"
 import { buildDashboardState, buildForecast, derivePlanPhase, parseLease, parseWorktreeList } from "./dashboard-state.mjs"
+import { detectDashboardEnvironment, enableDashboardHostAccess, resolveOrcaCommand, resolveVSCodeProxyUrl, runHostCommand } from "./dashboard-host.mjs"
 import { createDashboardServer, parseDashboardArguments } from "./herder-dashboard.mjs"
 
 function git(root, ...args) {
@@ -267,9 +268,61 @@ async function runTests() {
       port: 0,
       snapshot: false,
       pretty: true,
+      hostIntegration: true,
       help: false,
     })
+    assert.equal(parseDashboardArguments(["--no-host-integration"]).hostIntegration, false)
     assert.throws(() => parseDashboardArguments(["--port", "70000"]), /0 through 65535/)
+    assert.deepEqual(detectDashboardEnvironment({ TERM_PROGRAM: "Orca", VSCODE_REMOTE_NAME: "ssh-remote" }), {
+      kind: "orca",
+      remote: false,
+    })
+    assert.deepEqual(detectDashboardEnvironment({ TERM_PROGRAM: "vscode", VSCODE_REMOTE_NAME: "ssh-remote" }), {
+      kind: "vscode",
+      remote: true,
+    })
+    assert.deepEqual(detectDashboardEnvironment({}), { kind: "terminal", remote: false })
+    assert.equal(resolveVSCodeProxyUrl("http://127.0.0.1:4321/", {
+      VSCODE_PROXY_URI: "https://{{port}}-workspace.example.invalid/",
+    }), "https://4321-workspace.example.invalid/")
+    assert.equal(resolveVSCodeProxyUrl("http://127.0.0.1:4321/", { VSCODE_PROXY_URI: "invalid" }), null)
+    assert.equal(resolveOrcaCommand({ ORCA_CLI_COMMAND: "/opt/orca-cli" }, "linux"), "/opt/orca-cli")
+    const hostCalls = []
+    const allowedHosts = []
+    const fakeRunCommand = async (command, args) => {
+      hostCalls.push({ command, args })
+      return { ok: true, code: 0, stdout: "", stderr: "", error: null }
+    }
+    const vscodeAccess = await enableDashboardHostAccess({
+      url: "http://127.0.0.1:4321/",
+      env: {
+        TERM_PROGRAM: "vscode",
+        VSCODE_REMOTE_NAME: "ssh-remote",
+        VSCODE_PROXY_URI: "https://{{port}}-workspace.example.invalid/",
+      },
+      allowHost: (host) => allowedHosts.push(host),
+      runCommand: fakeRunCommand,
+    })
+    assert.equal(vscodeAccess.forwardedUrl, "https://4321-workspace.example.invalid/")
+    assert.deepEqual(allowedHosts, ["4321-workspace.example.invalid"])
+    assert.deepEqual(hostCalls.pop(), {
+      command: "code",
+      args: ["--open-url", "https://4321-workspace.example.invalid/"],
+    })
+    const orcaAccess = await enableDashboardHostAccess({
+      url: "http://127.0.0.1:4321/",
+      env: { TERM_PROGRAM: "Orca", ORCA_CLI_COMMAND: "/opt/orca-cli" },
+      platform: "linux",
+      runCommand: fakeRunCommand,
+    })
+    assert.equal(orcaAccess.opened, true)
+    assert.deepEqual(hostCalls.pop(), {
+      command: "/opt/orca-cli",
+      args: ["tab", "create", "--url", "http://127.0.0.1:4321/", "--json"],
+    })
+    const timedOutCommand = await runHostCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { timeoutMs: 50 })
+    assert.equal(timedOutCommand.ok, false)
+    assert.equal(timedOutCommand.error, "host command timed out")
     assert.deepEqual(parseLease("plan-herder:demo:002:plan-reviewer:attempt-2:review", "demo", "002"), {
       role: "plan-reviewer",
       attempt: "attempt-2",
@@ -392,6 +445,9 @@ async function runTests() {
       const post = await fetch(new URL("api/state", dashboard.url), { method: "POST" })
       assert.equal(post.status, 405)
       assert.equal(post.headers.get("allow"), "GET, HEAD")
+      assert.equal((await requestWithHost(dashboard.url, `localhost:${dashboard.port}`)).status, 200)
+      dashboard.allowHost("forwarded.example.invalid")
+      assert.equal((await requestWithHost(dashboard.url, "forwarded.example.invalid")).status, 200)
       const rebound = await requestWithHost(dashboard.url, "dashboard.example.invalid")
       assert.equal(rebound.status, 421)
       assert.deepEqual(JSON.parse(rebound.body), { error: "invalid-host" })

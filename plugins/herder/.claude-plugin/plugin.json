@@ -1,6 +1,6 @@
 {
   "name": "herder",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "Shape focused plans, execute them through a persistent Accountant, and observe them in a local graph dashboard.",
   "author": {
     "name": "minhuw",
