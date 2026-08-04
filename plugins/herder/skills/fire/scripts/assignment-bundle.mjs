@@ -22,6 +22,10 @@ function isSha256(value) {
   return /^[0-9a-f]{64}$/.test(String(value))
 }
 
+function isObjectId(value) {
+  return /^[0-9a-f]{40,64}$/.test(String(value))
+}
+
 function isInside(parent, candidate) {
   const relative = path.relative(parent, candidate)
   return relative !== ""
@@ -43,6 +47,15 @@ function gitValue(cwd, ...args) {
   return git(cwd, args).stdout.trim()
 }
 
+function gitBuffer(cwd, args) {
+  const result = spawnSync("git", ["-C", cwd, ...args])
+  if (result.error) throw new Error(`Cannot run git: ${result.error.message}`)
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(" ")} failed: ${Buffer.concat([result.stderr || Buffer.alloc(0), result.stdout || Buffer.alloc(0)]).toString().trim()}`)
+  }
+  return result.stdout
+}
+
 function canonicalGitPath(cwd, value) {
   const resolved = path.isAbsolute(value) ? value : path.resolve(cwd, value)
   return fs.realpathSync(resolved)
@@ -62,10 +75,110 @@ function currentBranch(worktree) {
   return result.stdout.trim()
 }
 
+function readRequiredMetadata(metadataDir, name) {
+  const file = path.join(metadataDir, name)
+  let status
+  try {
+    status = fs.lstatSync(file)
+  } catch (error) {
+    if (error.code === "ENOENT") throw new Error(`active rebase metadata is missing ${name}`)
+    throw error
+  }
+  if (!status.isFile() || status.isSymbolicLink()) {
+    throw new Error(`active rebase metadata is not a regular file: ${name}`)
+  }
+  const value = fs.readFileSync(file, "utf8").trim()
+  if (!value) throw new Error(`active rebase metadata is empty: ${name}`)
+  return value
+}
+
+function fingerprintTree(root) {
+  const entries = []
+  function visit(directory, relativeDirectory = "") {
+    for (const name of fs.readdirSync(directory).sort()) {
+      const absolute = path.join(directory, name)
+      const relative = path.join(relativeDirectory, name).split(path.sep).join("/")
+      const status = fs.lstatSync(absolute)
+      if (status.isSymbolicLink()) throw new Error(`active rebase metadata contains a symlink: ${relative}`)
+      if (status.isDirectory()) {
+        entries.push({ path: `${relative}/`, type: "directory", mode: status.mode & 0o777 })
+        visit(absolute, relative)
+        continue
+      }
+      if (!status.isFile()) throw new Error(`active rebase metadata contains a non-file: ${relative}`)
+      entries.push({
+        path: relative,
+        type: "file",
+        mode: status.mode & 0o777,
+        size: status.size,
+        sha256: sha256(fs.readFileSync(absolute)),
+      })
+    }
+  }
+  visit(root)
+  return entries
+}
+
+function fingerprintUntracked(worktree) {
+  const output = gitBuffer(worktree, ["ls-files", "--others", "--exclude-standard", "-z"])
+  const names = output.toString("utf8").split("\0").filter(Boolean).sort()
+  return names.map((name) => {
+    const absolute = path.resolve(worktree, name)
+    if (!isInside(worktree, absolute)) throw new Error(`untracked path escapes the worktree: ${name}`)
+    const status = fs.lstatSync(absolute)
+    if (status.isSymbolicLink()) {
+      return { path: name, type: "symlink", mode: status.mode & 0o777, sha256: sha256(fs.readlinkSync(absolute)) }
+    }
+    if (!status.isFile()) throw new Error(`untracked path is not a regular file: ${name}`)
+    return {
+      path: name,
+      type: "file",
+      mode: status.mode & 0o777,
+      size: status.size,
+      sha256: sha256(fs.readFileSync(absolute)),
+    }
+  })
+}
+
+function worktreeLeaseReason(worktree) {
+  const blocks = gitValue(worktree, "worktree", "list", "--porcelain").split(/\n\n+/)
+  const prefix = `worktree ${worktree}\n`
+  const block = blocks.find((entry) => `${entry}\n`.startsWith(prefix))
+  if (!block) throw new Error(`expected stable plan worktree is not registered: ${worktree}`)
+  const locked = block.split("\n").find((line) => line === "locked" || line.startsWith("locked "))
+  return locked ? locked.slice("locked".length).trim() : null
+}
+
+function activeRebaseMetadata(worktree) {
+  const mergePath = path.resolve(worktree, gitValue(worktree, "rev-parse", "--git-path", "rebase-merge"))
+  const applyPath = path.resolve(worktree, gitValue(worktree, "rev-parse", "--git-path", "rebase-apply"))
+  const candidates = [
+    ["merge", mergePath],
+    ["apply", applyPath],
+  ].filter(([, candidate]) => fs.existsSync(candidate))
+  if (candidates.length !== 1) {
+    throw new Error(candidates.length === 0
+      ? "active-rebase verification requires active Git rebase metadata"
+      : "active-rebase verification found ambiguous Git rebase metadata")
+  }
+  const [backend, metadataDir] = candidates[0]
+  if (!fs.lstatSync(metadataDir).isDirectory() || fs.lstatSync(metadataDir).isSymbolicLink()) {
+    throw new Error("active rebase metadata must be a real directory")
+  }
+  return {
+    backend,
+    metadataDir,
+    headName: readRequiredMetadata(metadataDir, "head-name"),
+    onto: readRequiredMetadata(metadataDir, "onto"),
+    origHead: readRequiredMetadata(metadataDir, "orig-head"),
+    entries: fingerprintTree(metadataDir),
+  }
+}
+
 function parseArguments(argv) {
   const command = argv.shift()
-  if (!["materialize", "materialize-run", "verify"].includes(command)) {
-    throw new Error("usage: assignment-bundle.mjs materialize|materialize-run|verify [options]")
+  if (!["materialize", "materialize-run", "inspect-active-rebase", "verify"].includes(command)) {
+    throw new Error("usage: assignment-bundle.mjs materialize|materialize-run|inspect-active-rebase|verify [options]")
   }
   const options = { pretty: false }
   while (argv.length > 0) {
@@ -317,23 +430,47 @@ function materialize(options, { run = false } = {}) {
 }
 
 function verify(options) {
-  assertKnownOptions(options, new Set(["pretty", "worktree", "bundle", "expectedBundleSha256"]))
+  const verificationMode = options.verificationMode || "branch"
+  if (verificationMode === "active-rebase") return verifyActiveRebase(options)
+  if (verificationMode !== "branch") throw new Error(`unknown verification mode: ${verificationMode}`)
+  assertKnownOptions(options, new Set(["pretty", "worktree", "bundle", "expectedBundleSha256", "verificationMode"]))
   const worktreeInput = fs.realpathSync(path.resolve(requireOption(options, "worktree")))
+  const execution = repositoryContext(worktreeInput)
+  if (worktreeInput !== execution.root) throw new Error(`--worktree must be the Git worktree root: ${execution.root}`)
+  const verifiedBundle = readVerifiedBundle(execution.root, options)
+  const { bundle, bundlePath, relativePath, bundleSha256 } = verifiedBundle
+  const branch = currentBranch(execution.root)
+  if (bundle.assignment.branch !== branch) {
+    throw new Error(`assignment branch mismatch: expected ${bundle.assignment.branch}, found ${branch}`)
+  }
+
+  return {
+    ok: true,
+    command: "verify",
+    verificationMode: "branch",
+    scope: bundle.kind === RUN_ASSIGNMENT_KIND ? "RUN" : bundle.plan.id,
+    branch,
+    generationBase: bundle.assignment.generationBase,
+    bundlePath,
+    relativePath,
+    bundleSha256,
+    snapshotSha256: bundle.snapshotSha256,
+  }
+}
+
+function readVerifiedBundle(worktree, options) {
   const bundleInput = path.resolve(requireOption(options, "bundle"))
   const expectedBundleSha256 = requireOption(options, "expectedBundleSha256")
   if (!isSha256(expectedBundleSha256)) throw new Error("--expected-bundle-sha256 must be a lowercase SHA-256")
-
-  const execution = repositoryContext(worktreeInput)
-  if (worktreeInput !== execution.root) throw new Error(`--worktree must be the Git worktree root: ${execution.root}`)
   if (!fs.existsSync(bundleInput)) throw new Error(`assignment bundle is missing: ${bundleInput}`)
   const bundlePath = fs.realpathSync(bundleInput)
   if (bundlePath !== bundleInput || fs.lstatSync(bundleInput).isSymbolicLink()) {
     throw new Error(`assignment bundle must not be a symlink: ${bundleInput}`)
   }
-  assertNoSymlinkComponents(execution.root, bundlePath)
+  assertNoSymlinkComponents(worktree, bundlePath)
   if (!fs.statSync(bundlePath).isFile()) throw new Error(`assignment bundle is not a regular file: ${bundlePath}`)
   if ((fs.statSync(bundlePath).mode & 0o222) !== 0) throw new Error("assignment bundle must be read-only")
-  const relativePath = assertIgnored(execution.root, bundlePath)
+  const relativePath = assertIgnored(worktree, bundlePath)
 
   const bytes = fs.readFileSync(bundlePath)
   const bundleSha256 = sha256(bytes)
@@ -347,21 +484,241 @@ function verify(options) {
     throw new Error(`assignment bundle is not valid JSON: ${error.message}`)
   }
   assertBundleEnvelope(bundle)
-  const branch = currentBranch(execution.root)
-  if (bundle.assignment.branch !== branch) {
-    throw new Error(`assignment branch mismatch: expected ${bundle.assignment.branch}, found ${branch}`)
+  return { bundle, bundlePath, relativePath, bundleSha256 }
+}
+
+function activeRebaseAllowedOptions({ includeStateHash }) {
+  const allowed = new Set([
+    "pretty",
+    "worktree",
+    "bundle",
+    "expectedBundleSha256",
+    "expectedWorktree",
+    "expectedBranch",
+    "expectedWorkerMode",
+    "expectedDetachedHead",
+    "expectedRebaseOnto",
+    "expectedRebaseOrigHead",
+    "expectedPlanHead",
+    "expectedCheckpointRef",
+    "expectedCheckpoint",
+    "expectedLeaseReason",
+  ])
+  if (includeStateHash) {
+    allowed.add("verificationMode")
+    allowed.add("expectedRebaseStateSha256")
+  }
+  return allowed
+}
+
+function requireObjectIdOption(options, name) {
+  const value = requireOption(options, name)
+  if (!isObjectId(value)) {
+    const flag = name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)
+    throw new Error(`--${flag} must be a full lowercase Git object ID`)
+  }
+  return value
+}
+
+function activeRebaseEvidence(options, { includeStateHash }) {
+  assertKnownOptions(options, activeRebaseAllowedOptions({ includeStateHash }))
+  const worktreeInput = fs.realpathSync(path.resolve(requireOption(options, "worktree")))
+  const expectedWorktree = path.resolve(requireOption(options, "expectedWorktree"))
+  const execution = repositoryContext(worktreeInput)
+  if (worktreeInput !== execution.root) throw new Error(`--worktree must be the Git worktree root: ${execution.root}`)
+  if (expectedWorktree !== execution.root) {
+    throw new Error(`active-rebase worktree mismatch: expected ${expectedWorktree}, found ${execution.root}`)
+  }
+
+  const expectedBranch = requireOption(options, "expectedBranch")
+  const expectedWorkerMode = requireOption(options, "expectedWorkerMode")
+  const expectedDetachedHead = requireObjectIdOption(options, "expectedDetachedHead")
+  const expectedRebaseOnto = requireObjectIdOption(options, "expectedRebaseOnto")
+  const expectedRebaseOrigHead = requireObjectIdOption(options, "expectedRebaseOrigHead")
+  const expectedPlanHead = requireObjectIdOption(options, "expectedPlanHead")
+  const expectedCheckpointRef = requireOption(options, "expectedCheckpointRef")
+  const expectedCheckpoint = requireObjectIdOption(options, "expectedCheckpoint")
+  const expectedLeaseReason = requireOption(options, "expectedLeaseReason")
+  if (expectedWorkerMode !== "GUIDED_REPAIR") {
+    throw new Error("active-rebase verification requires --expected-worker-mode GUIDED_REPAIR")
+  }
+  const branchMatch = expectedBranch.match(/^herder\/([^/]+)\/(\d{3,})$/)
+  if (!branchMatch) throw new Error(`active-rebase verification requires an exact Herder plan branch: ${expectedBranch}`)
+  const [, planName, planId] = branchMatch
+  const [leaseNamespace, leasePlanName, leasePlanId, leaseRole, leaseAttempt, ...leaseTask] = expectedLeaseReason.split(":")
+  const normalizedLeaseRole = leaseRole?.replace(/^plan[-_]/, "").toLowerCase()
+  if (leaseNamespace !== "plan-herder"
+    || leasePlanName !== planName
+    || leasePlanId !== planId
+    || normalizedLeaseRole !== "implementer"
+    || !leaseAttempt
+    || leaseTask.join(":").length === 0
+    || /[\r\n]/.test(expectedLeaseReason)) {
+    throw new Error("active-rebase verification requires the exact guided-repair Implementer lease")
+  }
+  const branchRef = `refs/heads/${expectedBranch}`
+  if (git(execution.root, ["check-ref-format", branchRef], { allowFailure: true }).status !== 0) {
+    throw new Error(`invalid expected plan branch: ${expectedBranch}`)
+  }
+  const checkpointPrefix = `refs/plan-herder/${planName}/checkpoints/${planId}/`
+  if (!expectedCheckpointRef.startsWith(checkpointPrefix)
+    || !/^\d+-\d+$/.test(expectedCheckpointRef.slice(checkpointPrefix.length))
+    || git(execution.root, ["check-ref-format", expectedCheckpointRef], { allowFailure: true }).status !== 0) {
+    throw new Error(`invalid expected Herder checkpoint ref: ${expectedCheckpointRef}`)
+  }
+  if (expectedPlanHead !== expectedRebaseOrigHead || expectedCheckpoint !== expectedRebaseOrigHead) {
+    throw new Error("active-rebase plan head, original commit, and checkpoint must identify the same pre-restack commit")
+  }
+
+  const verifiedBundle = readVerifiedBundle(execution.root, options)
+  const { bundle, bundlePath, relativePath, bundleSha256 } = verifiedBundle
+  if (bundle.kind !== ASSIGNMENT_KIND) throw new Error("active-rebase verification requires a plan assignment bundle")
+  if (bundle.plan.id !== planId) {
+    throw new Error(`assignment plan mismatch: expected ${planId}, found ${bundle.plan.id}`)
+  }
+  if (bundle.assignment.branch !== expectedBranch) {
+    throw new Error(`assignment branch mismatch: expected ${expectedBranch}, found ${bundle.assignment.branch}`)
+  }
+
+  const symbolic = git(execution.root, ["symbolic-ref", "--quiet", "HEAD"], { allowFailure: true })
+  if (symbolic.status === 0 || symbolic.stdout.trim()) {
+    throw new Error("active-rebase verification requires Git's detached rebase HEAD")
+  }
+  const rebase = activeRebaseMetadata(execution.root)
+  if (rebase.headName !== branchRef) {
+    throw new Error(`active rebase head-name mismatch: expected ${branchRef}, found ${rebase.headName}`)
+  }
+  if (rebase.onto !== expectedRebaseOnto) {
+    throw new Error(`active rebase onto mismatch: expected ${expectedRebaseOnto}, found ${rebase.onto}`)
+  }
+  if (rebase.origHead !== expectedRebaseOrigHead) {
+    throw new Error(`active rebase orig-head mismatch: expected ${expectedRebaseOrigHead}, found ${rebase.origHead}`)
+  }
+
+  const detachedHead = gitValue(execution.root, "rev-parse", "HEAD")
+  const planHead = gitValue(execution.root, "rev-parse", "--verify", branchRef)
+  const checkpoint = gitValue(execution.root, "rev-parse", "--verify", expectedCheckpointRef)
+  const origHeadRef = gitValue(execution.root, "rev-parse", "--verify", "ORIG_HEAD")
+  if (detachedHead !== expectedDetachedHead) {
+    throw new Error(`active rebase detached HEAD mismatch: expected ${expectedDetachedHead}, found ${detachedHead}`)
+  }
+  if (planHead !== expectedPlanHead) {
+    throw new Error(`active rebase plan branch moved: expected ${expectedPlanHead}, found ${planHead}`)
+  }
+  if (checkpoint !== expectedCheckpoint) {
+    throw new Error(`active rebase checkpoint mismatch: expected ${expectedCheckpoint}, found ${checkpoint}`)
+  }
+  if (origHeadRef !== expectedRebaseOrigHead) {
+    throw new Error(`active rebase ORIG_HEAD mismatch: expected ${expectedRebaseOrigHead}, found ${origHeadRef}`)
+  }
+  const leaseReason = worktreeLeaseReason(execution.root)
+  if (leaseReason !== expectedLeaseReason) {
+    throw new Error(`active-rebase lease mismatch: expected ${expectedLeaseReason}, found ${leaseReason || "unlocked"}`)
+  }
+
+  const indexStages = gitBuffer(execution.root, ["ls-files", "--stage", "-z"])
+  const conflictBytes = gitBuffer(execution.root, ["diff", "--name-only", "--diff-filter=U", "-z"])
+  const conflicts = conflictBytes.toString("utf8").split("\0").filter(Boolean).sort()
+  if (conflicts.length === 0) throw new Error("active-rebase verification requires preserved unresolved conflicts")
+  const state = {
+    schemaVersion: 1,
+    worktree: execution.root,
+    assignment: {
+      bundlePath,
+      bundleSha256,
+      kind: bundle.kind,
+      branch: bundle.assignment.branch,
+      workerMode: expectedWorkerMode,
+    },
+    leaseReason,
+    rebase: {
+      backend: rebase.backend,
+      headName: rebase.headName,
+      onto: rebase.onto,
+      origHead: rebase.origHead,
+      metadataEntries: rebase.entries,
+    },
+    refs: {
+      detachedHead,
+      planRef: branchRef,
+      planHead,
+      checkpointRef: expectedCheckpointRef,
+      checkpoint,
+      origHeadRef,
+    },
+    gitState: {
+      statusSha256: sha256(gitBuffer(execution.root, ["status", "--porcelain=v2", "-z", "--untracked-files=all"])),
+      indexStagesSha256: sha256(indexStages),
+      conflicts,
+      conflictsSha256: sha256(conflictBytes),
+      worktreeDiffSha256: sha256(gitBuffer(execution.root, ["diff", "--binary", "--full-index", "--no-ext-diff", "--"])),
+      cachedDiffSha256: sha256(gitBuffer(execution.root, ["diff", "--cached", "--binary", "--full-index", "--no-ext-diff", "--"])),
+      untracked: fingerprintUntracked(execution.root),
+    },
+  }
+  return {
+    execution,
+    bundle,
+    bundlePath,
+    relativePath,
+    bundleSha256,
+    state,
+    rebaseStateSha256: sha256(JSON.stringify(state)),
+  }
+}
+
+function inspectActiveRebase(options) {
+  const evidence = activeRebaseEvidence(options, { includeStateHash: false })
+  return {
+    ok: true,
+    command: "inspect-active-rebase",
+    verificationMode: "active-rebase",
+    scope: evidence.bundle.plan.id,
+    branch: evidence.bundle.assignment.branch,
+    workerMode: "GUIDED_REPAIR",
+    generationBase: evidence.bundle.assignment.generationBase,
+    bundlePath: evidence.bundlePath,
+    relativePath: evidence.relativePath,
+    bundleSha256: evidence.bundleSha256,
+    snapshotSha256: evidence.bundle.snapshotSha256,
+    detachedHead: evidence.state.refs.detachedHead,
+    rebaseOnto: evidence.state.rebase.onto,
+    rebaseOrigHead: evidence.state.rebase.origHead,
+    planHead: evidence.state.refs.planHead,
+    checkpointRef: evidence.state.refs.checkpointRef,
+    checkpoint: evidence.state.refs.checkpoint,
+    conflicts: evidence.state.gitState.conflicts,
+    rebaseStateSha256: evidence.rebaseStateSha256,
+  }
+}
+
+function verifyActiveRebase(options) {
+  if (options.verificationMode !== "active-rebase") {
+    throw new Error("active-rebase verification must be explicitly requested")
+  }
+  const expectedRebaseStateSha256 = requireOption(options, "expectedRebaseStateSha256")
+  if (!isSha256(expectedRebaseStateSha256)) {
+    throw new Error("--expected-rebase-state-sha256 must be a lowercase SHA-256")
+  }
+  const evidence = activeRebaseEvidence(options, { includeStateHash: true })
+  if (evidence.rebaseStateSha256 !== expectedRebaseStateSha256) {
+    throw new Error(`active rebase state mismatch: expected ${expectedRebaseStateSha256}, found ${evidence.rebaseStateSha256}`)
   }
 
   return {
     ok: true,
     command: "verify",
-    scope: bundle.kind === RUN_ASSIGNMENT_KIND ? "RUN" : bundle.plan.id,
-    branch,
-    generationBase: bundle.assignment.generationBase,
-    bundlePath,
-    relativePath,
-    bundleSha256,
-    snapshotSha256: bundle.snapshotSha256,
+    verificationMode: "active-rebase",
+    scope: evidence.bundle.plan.id,
+    branch: evidence.bundle.assignment.branch,
+    workerMode: "GUIDED_REPAIR",
+    generationBase: evidence.bundle.assignment.generationBase,
+    bundlePath: evidence.bundlePath,
+    relativePath: evidence.relativePath,
+    bundleSha256: evidence.bundleSha256,
+    snapshotSha256: evidence.bundle.snapshotSha256,
+    detachedHead: evidence.state.refs.detachedHead,
+    rebaseStateSha256: evidence.rebaseStateSha256,
   }
 }
 
@@ -375,7 +732,9 @@ function main() {
     parsed = parseArguments(process.argv.slice(2))
     const result = parsed.command === "verify"
       ? verify(parsed.options)
-      : materialize(parsed.options, { run: parsed.command === "materialize-run" })
+      : parsed.command === "inspect-active-rebase"
+        ? inspectActiveRebase(parsed.options)
+        : materialize(parsed.options, { run: parsed.command === "materialize-run" })
     print(result, parsed.options.pretty)
   } catch (error) {
     print({ ok: false, error: error.message }, parsed?.options?.pretty)

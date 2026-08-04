@@ -41,7 +41,7 @@ Resolve:
 - `scheduler_state`: Accountant-owned state for each plan: round 1–6, review pass, active role if any, queued next action, approved base/HEAD/tree, and integration-ready state; plus the optional integration-lock owner. Reconstruct this state from README lifecycle, SQLite attempts, refs, worktrees, assignments, and proofs on resume rather than writing a second state file.
 - `review_state`: per-generation round count, exact review surfaces, repair deltas, finding ledger, Judge outcomes from round 3 onward, and leak records. Use a separate ledger for final cross-plan audit.
 - `checkout_state_token`: the checkout guard token excluding only `plan_dir`.
-- `assignment_state(<id|RUN>)`: worktree-local assignment path, bundle SHA-256, compiled snapshot SHA-256, generation base, and branch.
+- `assignment_state(<id|RUN>)`: worktree-local assignment path, bundle SHA-256, compiled snapshot SHA-256, generation base, and branch. A preserved active rebase additionally has an ephemeral `rebase_state_sha256` captured and consumed immediately before one guided-repair dispatch; it is evidence, not scheduler state.
 - `execution_runtime`: explicit `native` or `orca`, never inferred.
 
 An **agent attempt** is one worker dispatch and always receives a unique usage row. A **substantive round** is an Implementer attempt that returns a result or may have mutated its worktree, followed by Accountant-run gates and Reviewer when the branch becomes reviewable. A proven clean host interruption consumes no round. Restacking an unchanged patch consumes no round.
@@ -131,6 +131,23 @@ node <assignment_manager> verify --worktree <absolute-worktree> --bundle <absolu
 ```
 
 A missing, writable, symlinked, moved, branch-mismatched, or hash-mismatched bundle is a containment failure. Do not derive a new trusted hash from the file itself.
+
+Normal verification is branch-bound and rejects every detached HEAD. There is one explicit pre-dispatch exception for an ownerless conflicted rebase preserved by Section 8. It is available only to an Implementer in `GUIDED_REPAIR` mode while a substantive round remains. The Accountant must first prove from durable plan-set evidence—not by trusting the detached state—that the stable worktree and plan branch are the expected ones, the assignment path/hash/branch are unchanged, the immutable checkpoint ref and target are the recorded pre-restack proof, the rebase `onto` and original branch commit are the expected integration and plan commits, and no live or durable worker owns the plan. It then acquires the new attempt's exact lease and explicitly captures the sealed state:
+
+```text
+node <assignment_manager> inspect-active-rebase \
+  --worktree <absolute-worktree> --bundle <absolute-assignment-path> \
+  --expected-bundle-sha256 <bundle-sha256> --expected-worktree <absolute-worktree> \
+  --expected-branch <plan-branch> --expected-worker-mode GUIDED_REPAIR \
+  --expected-detached-head <detached-head> --expected-rebase-onto <onto> \
+  --expected-rebase-orig-head <original-plan-commit> --expected-plan-head <plan-ref-target> \
+  --expected-checkpoint-ref <checkpoint-ref> --expected-checkpoint <checkpoint-target> \
+  --expected-lease-reason <new-attempt-lease> --pretty
+```
+
+The helper requires real Git rebase metadata, exact `head-name`, `onto`, `orig-head`, detached HEAD, unchanged plan and checkpoint refs, exact stable worktree registration and lease, the original read-only assignment hash and branch, unresolved conflicts, and a sealed hash over the rebase metadata, index stages, conflicts, relevant refs, tracked/cached diffs, status, and untracked-file fingerprints. The Accountant must immediately repeat the same exact arguments with `verify --verification-mode active-rebase --expected-rebase-state-sha256 <captured-sha256>`. Never enter this mode through detached-HEAD detection, never use it for Reviewer, Judge, RUN, an unrelated detached checkout, or a rebase without an immutable Herder checkpoint, and never attach HEAD, move a ref, abort/reset/clean, recreate the worktree, or rematerialize the assignment to satisfy it.
+
+After that Implementer terminates, active-rebase verification is no longer sufficient. Before gates, review, or integration, require the rebase metadata to be absent, the exact plan branch to be attached, the worktree to be clean, the checkpoint and resulting branch history to reconcile, and the ordinary branch-bound assignment verification above to pass. An unfinished or changed rebase consumes the attempted round and remains preserved; if another round remains, only a fresh explicit durable-state reconstruction, capture, and active-rebase verification may authorize another guided repair.
 
 Lock a plan worktree while a worker can access it:
 
@@ -306,6 +323,8 @@ Classify retained branches:
 - Ambiguous round ledger: treat all six rounds as exhausted and preserve for user reconciliation; do not invent a Judge approval.
 
 Resume or restack never resets the six-round count, review-pass count, or finding ledger. A fresh generation requires a user-authorized validated plan revision through Grill or Improve.
+
+The ownerless-rebase rule does not relax normal assignment containment. The Accountant must reconcile the exact `ACTIVE_WORKERS` inventory and leases, reject competing or ambiguous ownership, and use Section 3's explicit active-rebase capture and verification before returning the guided-repair action. A detached HEAD by itself is never recovery authority.
 
 For runs created by an older Herder version, preserve the recorded five-attempt-plus-Saver semantics only when the durable ledger proves that generation already dispatched or was explicitly authorized for Saver. The installed legacy Saver profile may finish that one generation under its original contract. Do not convert fresh or merely five-attempt-exhausted legacy work into Saver; all new generations use the six-round state machine.
 
