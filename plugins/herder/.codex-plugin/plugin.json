@@ -1,6 +1,6 @@
 {
   "name": "herder",
-  "version": "0.15.0+codex.20260807173327",
+  "version": "0.15.0+codex.20260807183755",
   "description": "Shape focused plans, execute them through a deterministic Run Manager, and observe them in a local graph dashboard.",
   "author": {
     "name": "minhuw",

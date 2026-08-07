@@ -13,13 +13,20 @@ import {
 	recordRunConfiguration,
 	recordUsageRecord,
 } from "../skills/plans/scripts/execution-store.mjs";
-import { GitDriver, gitValue, runCommand, type GateResult } from "./git-driver.ts";
+import {
+	GitDriver,
+	gitValue,
+	runCommand,
+	type CompletionApprovalProof,
+	type GateResult,
+} from "./git-driver.ts";
 import {
 	MANAGER_PROTOCOL_VERSION,
 	canonicalEventPayload,
 	normalizeUsage,
 	parseWorkerResult,
 	sha256,
+	stableJson,
 	type DispatchResult,
 	type HostName,
 	type ManagerAction,
@@ -29,7 +36,14 @@ import {
 	type WorkerResult,
 	type WorkerRole,
 } from "./protocol.ts";
-import { RunStore, type StoredAction, type StoredPlan, type StoredPlanSpec, type StoredRun } from "./run-store.ts";
+import {
+	RunStore,
+	type StoredAction,
+	type StoredApproval,
+	type StoredPlan,
+	type StoredPlanSpec,
+	type StoredRun,
+} from "./run-store.ts";
 import { lifecycleStatus, phaseForRole, readyPhaseForRole, roleForPhase, summarizeRun } from "./workflow.ts";
 
 const RUNTIME_ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -38,7 +52,7 @@ const PROFILE_REGISTRY = path.join(PLUGIN_ROOT, "agent-profiles/scripts/profile-
 const HELPER_ROOT = path.join(PLUGIN_ROOT, "skills/fire/scripts");
 
 interface StartInput {
-	mode: "fire" | "resume";
+	mode: "fire" | "resume" | "revise";
 	repositoryRoot: string;
 	planDirectory: string;
 	planName?: string;
@@ -57,7 +71,7 @@ interface EventInput {
 }
 
 function validateStartInput(input: StartInput): void {
-	if (!input || !["fire", "resume"].includes(input.mode)) throw new Error("Start mode must be fire or resume");
+	if (!input || !["fire", "resume", "revise"].includes(input.mode)) throw new Error("Start mode must be fire, resume, or revise");
 	if (!input.repositoryRoot || !input.planDirectory) throw new Error("Start requires repositoryRoot and planDirectory");
 	if (!["codex", "claude", "pi"].includes(input.host)) throw new Error("Start host must be codex, claude, or pi");
 	if (input.maxParallel !== undefined && (!Number.isSafeInteger(input.maxParallel) || input.maxParallel < 1 || input.maxParallel > 32)) {
@@ -205,9 +219,119 @@ function countBlocking(findings: string[]): number {
 	return findings.filter((finding) => /\[BLOCKING\]/.test(finding) && /\[(?:P0|P1)\]/.test(finding)).length;
 }
 
-function runAssignmentPath(run: StoredRun): string {
-	const relative = path.relative(run.repositoryRoot, run.planDirectory);
-	return path.join(run.integrationWorktree, relative, ".herder", "run-assignment.json");
+function compilePlanSpecs(input: {
+	runId: string;
+	graphGeneration: number;
+	graph: ReturnType<typeof buildGraph>;
+	driver: GitDriver;
+	previous?: StoredPlanSpec[];
+}): { specs: StoredPlanSpec[]; graphSha256: string } {
+	const previous = new Map((input.previous ?? []).map((spec) => [spec.planId, spec]));
+	const specs = input.graph.plans.map((plan, ordinal) => {
+		const snapshot = snapshotPlanFromGraph(input.graph, plan.id);
+		const assignment = compiledAssignmentEntry(snapshot);
+		const prior = previous.get(plan.id);
+		const semantic = {
+			planId: plan.id,
+			title: plan.title,
+			priority: plan.priority,
+			effort: plan.effort,
+			kind: plan.kind,
+			dependencies: plan.dependencies,
+			gateCommands: input.driver.extractGateCommands(snapshot.planText),
+			planFile: path.basename(plan.file),
+			assignment,
+		};
+		return {
+			runId: input.runId,
+			graphGeneration: input.graphGeneration,
+			planId: plan.id,
+			planFingerprint: sha256(stableJson(semantic)),
+			ordinal,
+			title: plan.title,
+			priority: plan.priority,
+			effort: plan.effort,
+			kind: plan.kind,
+			dependencies: plan.dependencies,
+			initialStatus: prior?.initialStatus ?? plan.status as StoredPlanSpec["initialStatus"],
+			initialStatusDetail: prior?.initialStatusDetail ?? plan.statusDetail,
+			gateCommands: semantic.gateCommands,
+			planFile: semantic.planFile,
+			assignment,
+		} satisfies StoredPlanSpec;
+	});
+	const graphSha256 = sha256(stableJson(specs.map((spec) => ({ planId: spec.planId, fingerprint: spec.planFingerprint }))));
+	return { specs, graphSha256 };
+}
+
+interface StoredTerminalRecord {
+	workerResult: WorkerResult | null;
+	usage: ReturnType<typeof normalizeUsage>;
+	outcome: string;
+	terminal: { interrupted: boolean; error: string | null; hostHandle: string | null };
+}
+
+interface TerminalTransition {
+	plan: StoredPlan;
+	runUpdate?: { status: "needs_input"; terminalDetail: string };
+	approval?: Omit<StoredApproval, "createdAt">;
+}
+
+function terminalRecord(result: WorkerResult | null, terminal: TerminalEvent, usage: ReturnType<typeof normalizeUsage>): StoredTerminalRecord {
+	return {
+		workerResult: result,
+		usage,
+		outcome: resultOutcome(result, terminal),
+		terminal: {
+			interrupted: Boolean(terminal.interrupted),
+			error: terminal.error ?? null,
+			hostHandle: terminal.hostHandle ?? null,
+		},
+	};
+}
+
+function storedWorkerResult(action: StoredAction): WorkerResult | null {
+	const record = action.result && typeof action.result === "object" && !Array.isArray(action.result)
+		? action.result as Record<string, unknown>
+		: null;
+	const result = record?.workerResult;
+	return result && typeof result === "object" && !Array.isArray(result) ? result as WorkerResult : null;
+}
+
+function storedTerminalRecord(action: StoredAction): StoredTerminalRecord | null {
+	if (!action.result || typeof action.result !== "object" || Array.isArray(action.result)) return null;
+	const record = action.result as Partial<StoredTerminalRecord>;
+	if (!record.usage || typeof record.outcome !== "string" || !record.terminal) return null;
+	return record as StoredTerminalRecord;
+}
+
+function approvalCore(input: Omit<StoredApproval, "proofSha256" | "createdAt">) {
+	return {
+		runId: input.runId,
+		planId: input.planId,
+		generation: input.generation,
+		round: input.round,
+		reviewerActionId: input.reviewerActionId,
+		decisionActionId: input.decisionActionId,
+		decisionRole: input.decisionRole,
+		assignmentSha256: input.assignmentSha256,
+		approvedBase: input.approvedBase,
+		approvedHead: input.approvedHead,
+		approvedTree: input.approvedTree,
+		reviewResultSha256: input.reviewResultSha256,
+		decisionResultSha256: input.decisionResultSha256,
+	};
+}
+
+function createApproval(input: Omit<StoredApproval, "proofSha256" | "createdAt">): Omit<StoredApproval, "createdAt"> {
+	return { ...input, proofSha256: sha256(stableJson(approvalCore(input))) };
+}
+
+function completionApproval(approval: StoredApproval): CompletionApprovalProof {
+	return {
+		...approvalCore(approval),
+		approvalProofSha256: approval.proofSha256,
+	};
 }
 
 function persistLeaks(planDirectory: string, planId: string, leaks: string[]): void {
@@ -268,6 +392,33 @@ export class HerderRunManager {
 		return spec;
 	}
 
+	private compileCurrentGraph(run: StoredRun, graphGeneration = run.currentGeneration) {
+		const graph = buildGraph(this.planDirectory);
+		if (!graph.shapeReady) throw new Error("Herder plan graph is not shape-ready");
+		if (graph.plans.length === 0) throw new Error("Herder plan graph is empty");
+		return { graph, ...compilePlanSpecs({
+			runId: run.runId,
+			graphGeneration,
+			graph,
+			driver: this.driver(run),
+			previous: this.specs(run),
+		}) };
+	}
+
+	private graphDrift(run: StoredRun): { changed: boolean; detail: string | null } {
+		try {
+			const compiled = this.compileCurrentGraph(run);
+			return {
+				changed: compiled.graphSha256 !== run.graphSha256,
+				detail: compiled.graphSha256 === run.graphSha256
+					? null
+					: `Plan graph changed after generation ${run.currentGeneration}; run Herder revise after active workers finish.`,
+			};
+		} catch (error) {
+			return { changed: true, detail: `Plan graph is currently invalid: ${(error as Error).message}` };
+		}
+	}
+
 	private projectLifecycle(run: StoredRun): void {
 		const plans = this.store.getPlans(run.runId);
 		const runtime = new Map(plans.map((plan) => [plan.planId, plan]));
@@ -286,9 +437,9 @@ export class HerderRunManager {
 		const existing = this.store.getRun();
 		if (existing) {
 			if (input.mode === "fire") throw new Error(`Run ${existing.runId} already exists; use resume`);
-			return this.resume(input);
+			return input.mode === "revise" ? this.revise(input) : this.resume(input);
 		}
-		if (input.mode === "resume") throw new Error("No deterministic Herder run is recorded; start a fresh run");
+		if (input.mode !== "fire") throw new Error("No deterministic Herder run is recorded; start a fresh run");
 		const profile = resolveProfile(input.host, input.profile);
 		const planName = input.planName || path.basename(this.planDirectory);
 		const driver = new GitDriver({
@@ -318,24 +469,9 @@ export class HerderRunManager {
 			roles: profile.roles,
 		});
 		const runId = randomUUID();
-		const specs = graph.plans.map((plan, ordinal: number) => {
-			const snapshot = snapshotPlanFromGraph(graph, plan.id);
-			return {
-				runId,
-				planId: plan.id,
-				ordinal,
-				title: plan.title,
-				priority: plan.priority,
-				effort: plan.effort,
-				kind: plan.kind,
-				dependencies: plan.dependencies,
-				initialStatus: plan.status as StoredPlanSpec["initialStatus"],
-				initialStatusDetail: plan.statusDetail,
-				gateCommands: driver.extractGateCommands(snapshot.planText),
-				planFile: path.basename(plan.file),
-				assignment: compiledAssignmentEntry(snapshot),
-			} satisfies StoredPlanSpec;
-		});
+		const graphGeneration = 1;
+		const compiled = compilePlanSpecs({ runId, graphGeneration, graph, driver });
+		const specs = compiled.specs;
 		this.store.transaction(() => {
 			this.store.createRun({
 				runId,
@@ -346,6 +482,8 @@ export class HerderRunManager {
 				profileName: profile.profile,
 				profileSha256: profile.profile_sha256,
 				maxParallel: input.maxParallel ?? 5,
+				currentGeneration: graphGeneration,
+				graphSha256: compiled.graphSha256,
 				status: "initializing",
 				checkoutStateToken,
 				baseCommit,
@@ -356,8 +494,19 @@ export class HerderRunManager {
 			this.store.putPlanSpecs(specs);
 		});
 		try {
-			driver.initializeFreshNamespace(baseCommit, specs.map((spec) => spec.assignment));
-			this.store.updateRun({ status: "running", terminalDetail: null });
+			const assignment = driver.initializeFreshNamespace(baseCommit, specs.map((spec) => spec.assignment), graphGeneration);
+			this.store.transaction(() => {
+				this.store.putGeneration({
+					runId,
+					generation: graphGeneration,
+					graphSha256: compiled.graphSha256,
+					parentGeneration: null,
+					runAssignmentPath: assignment.bundlePath,
+					runAssignmentSha256: assignment.bundleSha256,
+					runSnapshotSha256: assignment.snapshotSha256,
+				});
+				this.store.updateRun({ status: "running", terminalDetail: null });
+			});
 		} catch (error) {
 			this.store.updateRun({ terminalDetail: `Initialization incomplete: ${(error as Error).message}` });
 			throw error;
@@ -366,7 +515,7 @@ export class HerderRunManager {
 	}
 
 	async resume(input: StartInput): Promise<ManagerReply> {
-		const run = this.store.getRun();
+		let run = this.store.getRun();
 		if (!run) throw new Error("No deterministic Herder run exists");
 		if (fs.realpathSync(input.repositoryRoot) !== run.repositoryRoot) throw new Error("Resume repository does not match the recorded run");
 		if (input.host !== run.host) throw new Error(`Resume host must remain ${run.host}`);
@@ -381,14 +530,92 @@ export class HerderRunManager {
 		}
 		const driver = this.driver(run);
 		await driver.verifyCheckout(run.checkoutStateToken);
+		const drift = this.graphDrift(run);
+		if (drift.changed) throw new Error(`${drift.detail} Use revise instead of resume.`);
 		if (run.status === "initializing") {
-			driver.initializeFreshNamespace(run.baseCommit, this.specs(run).map((spec) => spec.assignment));
-			this.store.updateRun({ status: "running", terminalDetail: null });
+			const assignment = driver.initializeFreshNamespace(run.baseCommit, this.specs(run).map((spec) => spec.assignment), run.currentGeneration);
+			this.store.transaction(() => {
+				this.store.putGeneration({
+					runId: run!.runId,
+					generation: run!.currentGeneration,
+					graphSha256: run!.graphSha256,
+					parentGeneration: null,
+					runAssignmentPath: assignment.bundlePath,
+					runAssignmentSha256: assignment.bundleSha256,
+					runSnapshotSha256: assignment.snapshotSha256,
+				});
+				this.store.updateRun({ status: "running", terminalDetail: null });
+			});
 		} else {
 			const namespace = driver.inspectNamespace("resume");
 			if (!namespace.ok) throw new Error(`Cannot resume ambiguous Herder namespace: ${namespace.reason}`);
 		}
 		if (["failed", "stopped", "paused"].includes(run.status)) this.store.updateRun({ status: "running", terminalDetail: null });
+		run = this.store.getRun()!;
+		return this.reconcile(profile);
+	}
+
+	async revise(input: StartInput): Promise<ManagerReply> {
+		const run = this.store.getRun();
+		if (!run) throw new Error("No deterministic Herder run exists");
+		if (fs.realpathSync(input.repositoryRoot) !== run.repositoryRoot) throw new Error("Revision repository does not match the recorded run");
+		if (input.host !== run.host) throw new Error(`Revision host must remain ${run.host}`);
+		if (input.planName && input.planName !== run.planName) throw new Error(`Revision plan name must remain ${run.planName}`);
+		if (input.maxParallel !== undefined && input.maxParallel !== run.maxParallel) {
+			throw new Error(`Revision must preserve max parallel ${run.maxParallel}; received ${input.maxParallel}`);
+		}
+		if (activeActions(this.store, run.runId).length > 0) {
+			throw new Error("Plan graph revision requires zero proposed or dispatched workers; wait for terminal events or stop them first");
+		}
+		const profile = resolveProfile(run.host, input.profile || run.profileName);
+		if (profile.profile_sha256 !== run.profileSha256 || profile.profile !== run.profileName) {
+			throw new Error(`Recorded profile ${run.profileName} no longer matches its immutable binding`);
+		}
+		const driver = this.driver(run);
+		await driver.verifyCheckout(run.checkoutStateToken);
+		const nextGeneration = run.currentGeneration + 1;
+		const compiled = this.compileCurrentGraph(run, nextGeneration);
+		if (compiled.graphSha256 === run.graphSha256) throw new Error(`Plan graph still matches generation ${run.currentGeneration}; use resume`);
+		const previous = new Map(this.specs(run).map((spec) => [spec.planId, spec]));
+		const next = new Map(compiled.specs.map((spec) => [spec.planId, spec]));
+		const removed = [...previous.keys()].filter((planId) => !next.has(planId));
+		if (removed.length > 0) throw new Error(`Graph revision cannot remove plans from an existing namespace: ${removed.join(", ")}`);
+		for (const spec of compiled.specs) {
+			const prior = previous.get(spec.planId);
+			if (!prior) {
+				const graphPlan = compiled.graph.plans.find((plan) => plan.id === spec.planId)!;
+				if (["DONE", "IN PROGRESS"].includes(graphPlan.status)) throw new Error(`New plan ${spec.planId} cannot adopt lifecycle state ${graphPlan.status}`);
+				continue;
+			}
+			if (prior.planFingerprint === spec.planFingerprint) continue;
+			const runtime = this.store.getPlan(run.runId, spec.planId);
+			if (runtime) {
+				throw new Error(`Graph revision changed ${spec.planId} after execution started; create a trusted-base recovery namespace instead`);
+			}
+		}
+		const namespace = driver.inspectNamespace("resume");
+		if (!namespace.ok) throw new Error(`Cannot revise ambiguous Herder namespace: ${namespace.reason}`);
+		const integrationHead = driver.branchHead(run.integrationBranch);
+		const assignment = driver.materializeRunAssignment(integrationHead, compiled.specs.map((spec) => spec.assignment), nextGeneration);
+		this.store.transaction(() => {
+			this.store.putPlanSpecs(compiled.specs);
+			this.store.putGeneration({
+				runId: run.runId,
+				generation: nextGeneration,
+				graphSha256: compiled.graphSha256,
+				parentGeneration: run.currentGeneration,
+				runAssignmentPath: assignment.bundlePath,
+				runAssignmentSha256: assignment.bundleSha256,
+				runSnapshotSha256: assignment.snapshotSha256,
+			});
+			this.store.deletePlan(run.runId, "RUN");
+			this.store.updateRun({
+				status: "running",
+				terminalDetail: `Adopted plan graph generation ${nextGeneration} from generation ${run.currentGeneration}.`,
+				currentGeneration: nextGeneration,
+				graphSha256: compiled.graphSha256,
+			});
+		});
 		return this.reconcile(profile);
 	}
 
@@ -407,6 +634,13 @@ export class HerderRunManager {
 		if (input.kind === "dispatch_results") schedule = !(await this.applyDispatchResults(input.dispatchResults ?? []));
 		else if (input.kind === "terminals") await this.applyTerminals(input.terminals ?? []);
 		else this.applyUserInput(input.userInput!, input.eventId);
+		const current = this.store.getRun()!;
+		const drift = this.graphDrift(current);
+		if (drift.changed) {
+			this.store.updateRun({ status: "paused", terminalDetail: drift.detail });
+			this.store.recordEvent(run.runId, input.eventId, input.kind, input);
+			return this.reply();
+		}
 		const reply = await this.reconcile(profile, { schedule });
 		this.store.recordEvent(run.runId, input.eventId, input.kind, input);
 		return reply;
@@ -443,9 +677,15 @@ export class HerderRunManager {
 		const run = this.store.getRun()!;
 		const driver = this.driver(run);
 		for (const terminal of [...terminals].sort((left, right) => left.actionId.localeCompare(right.actionId))) {
-			const action = this.store.getAction(terminal.actionId);
+			let action = this.store.getAction(terminal.actionId);
 			if (!action || action.runId !== run.runId) throw new Error(`Unknown terminal action ${terminal.actionId}`);
-			if (action.state === "terminal") continue;
+			if (action.state === "terminal") {
+				const record = storedTerminalRecord(action);
+				if (record) this.recordTerminalUsage(run, action, record);
+				const completedPlan = this.store.getPlan(run.runId, action.planId);
+				if (completedPlan && driver.leaseReason(completedPlan.worktree) === action.leaseReason) driver.release(completedPlan.worktree, action.leaseReason);
+				continue;
+			}
 			if (action.state !== "dispatched") throw new Error(`Action ${terminal.actionId} is not dispatched`);
 			if (terminal.hostHandle && action.hostHandle && terminal.hostHandle !== action.hostHandle) {
 				throw new Error(`Terminal handle mismatch for ${terminal.actionId}`);
@@ -453,9 +693,12 @@ export class HerderRunManager {
 			const plan = this.store.getPlan(run.runId, action.planId);
 			if (!plan) throw new Error(`Action ${action.actionId} has no plan runtime record`);
 			await driver.verifyCheckout(run.checkoutStateToken);
-			const alreadyApplied = plan.phase !== phaseForRole(action.role as WorkerRole);
+			if (plan.phase !== phaseForRole(action.role as WorkerRole)) throw new Error(`Action ${action.actionId} does not own plan phase ${plan.phase}`);
+			if (plan.generation !== action.generation || plan.round !== action.round) {
+				throw new Error(`Action ${action.actionId} does not match plan generation/round`);
+			}
 			const lease = driver.leaseReason(plan.worktree);
-			if (lease !== action.leaseReason && !(alreadyApplied && lease === null)) throw new Error(`Lease mismatch for ${action.actionId}`);
+			if (lease !== action.leaseReason) throw new Error(`Lease mismatch for ${action.actionId}`);
 			let parsed: WorkerResult | null = null;
 			let parseError: string | null = null;
 			if (!terminal.interrupted && terminal.response) {
@@ -463,62 +706,69 @@ export class HerderRunManager {
 				catch (error) { parseError = (error as Error).message; }
 			}
 			const usage = normalizeUsage(parsed, terminal);
-			if (!alreadyApplied) {
-				if (terminal.interrupted) {
-					const detail = terminal.error || "Worker transport was interrupted";
-					if (action.role === "plan-implementer") this.retryImplementerTransport(run, plan, action, detail);
-					else this.retryTransportOrPause(run, plan, action, detail);
-				} else if (!parsed) {
-					const detail = `Worker result was malformed: ${parseError || terminal.error || "missing response"}`;
-					if (action.role === "plan-implementer") this.retryImplementerTransport(run, plan, action, detail);
-					else this.retryTransportOrPause(run, plan, action, detail);
-				} else if (parsed.kind === "implementer") {
-					await this.finishImplementer(run, plan, parsed);
-				} else if (parsed.kind === "reviewer") {
-					await this.finishReviewer(run, plan, parsed);
-				} else {
-					await this.finishJudge(run, plan, parsed);
-				}
-			}
-			recordUsageRecord(this.planDirectory, {
-				plan: plan.planId,
-				role: action.role,
-				attempt: action.attemptId,
-				model: action.model,
-				effort: action.effort,
-				outcome: resultOutcome(parsed, terminal),
-				inputTokens: usage.inputTokens ?? "unknown",
-				cachedInputTokens: usage.cachedInputTokens ?? "unknown",
-				outputTokens: usage.outputTokens ?? "unknown",
-				reasoningTokens: usage.reasoningTokens ?? "unknown",
-				source: usage.source,
-				round: action.round,
-				generation: `generation-${action.generation}`,
-				harness: run.host,
-				serviceTier: action.serviceTier || undefined,
-				startedAt: usage.startedAt,
-				finishedAt: usage.finishedAt,
-				durationMs: usage.durationMs,
+			let transition: TerminalTransition;
+			if (terminal.interrupted) {
+				const detail = terminal.error || "Worker transport was interrupted";
+				transition = action.role === "plan-implementer"
+					? this.retryImplementerTransport(run, plan, action, detail)
+					: this.retryTransportOrPause(run, plan, action, detail);
+			} else if (!parsed) {
+				const detail = `Worker result was malformed: ${parseError || terminal.error || "missing response"}`;
+				transition = action.role === "plan-implementer"
+					? this.retryImplementerTransport(run, plan, action, detail)
+					: this.retryTransportOrPause(run, plan, action, detail);
+			} else if (parsed.kind === "implementer") transition = this.finishImplementer(run, plan, parsed);
+			else if (parsed.kind === "reviewer") transition = this.finishReviewer(run, plan, action, parsed);
+			else transition = this.finishJudge(run, plan, action, parsed);
+			const record = terminalRecord(parsed, terminal, usage);
+			const actionId = action.actionId;
+			this.store.transaction(() => {
+				action = this.store.markTerminal(actionId, record);
+				if (transition.approval) this.store.putApproval(transition.approval);
+				this.store.putPlan(transition.plan);
+				if (transition.runUpdate) this.store.updateRun(transition.runUpdate);
 			});
+			this.recordTerminalUsage(run, action, record);
 			driver.release(plan.worktree, action.leaseReason);
-			this.store.markTerminal(action.actionId, parsed ?? { interrupted: terminal.interrupted, error: parseError || terminal.error });
 			await driver.verifyCheckout(run.checkoutStateToken);
 		}
 	}
 
-	private retryImplementerTransport(run: StoredRun, plan: StoredPlan, action: StoredAction, detail: string): void {
-		const driver = this.driver(run);
-		const mutationMayHaveOccurred = driver.worktreeHead(plan.worktree) !== plan.generationBase || Boolean(driver.worktreeStatus(plan.worktree));
-		if (!mutationMayHaveOccurred) {
-			this.retryTransportOrPause(run, plan, action, detail);
-			return;
-		}
-		if (plan.round >= 6) {
-				this.updatePlan(plan, { phase: "BLOCKED", repair: [detail] });
-		} else this.updatePlan(plan, { phase: "READY_IMPLEMENTER", round: plan.round + 1, repair: [detail] });
+	private recordTerminalUsage(run: StoredRun, action: StoredAction, record: StoredTerminalRecord): void {
+		const usage = record.usage;
+		recordUsageRecord(this.planDirectory, {
+			plan: action.planId,
+			role: action.role,
+			attempt: action.attemptId,
+			model: action.model,
+			effort: action.effort,
+			outcome: record.outcome,
+			inputTokens: usage.inputTokens ?? "unknown",
+			cachedInputTokens: usage.cachedInputTokens ?? "unknown",
+			outputTokens: usage.outputTokens ?? "unknown",
+			reasoningTokens: usage.reasoningTokens ?? "unknown",
+			source: usage.source,
+			round: action.round,
+			generation: `generation-${action.generation}`,
+			harness: run.host,
+			serviceTier: action.serviceTier || undefined,
+			startedAt: usage.startedAt,
+			finishedAt: usage.finishedAt,
+			durationMs: usage.durationMs,
+		});
 	}
 
-	private retryTransportOrPause(run: StoredRun, plan: StoredPlan, action: StoredAction, detail: string): void {
+	private retryImplementerTransport(run: StoredRun, plan: StoredPlan, action: StoredAction, detail: string): TerminalTransition {
+		const driver = this.driver(run);
+		const mutationMayHaveOccurred = driver.worktreeHead(plan.worktree) !== plan.generationBase || Boolean(driver.worktreeStatus(plan.worktree));
+		if (!mutationMayHaveOccurred) return this.retryTransportOrPause(run, plan, action, detail);
+		if (plan.round >= 6) {
+			return { plan: { ...plan, phase: "BLOCKED", repair: [detail] } };
+		}
+		return { plan: { ...plan, phase: "READY_IMPLEMENTER", round: plan.round + 1, repair: [detail] } };
+	}
+
+	private retryTransportOrPause(run: StoredRun, plan: StoredPlan, action: StoredAction, detail: string): TerminalTransition {
 		const equivalentAttempts = this.store.getActions(run.runId).filter((candidate) =>
 			candidate.planId === action.planId
 			&& candidate.generation === action.generation
@@ -526,15 +776,16 @@ export class HerderRunManager {
 			&& candidate.role === action.role
 		).length;
 		if (equivalentAttempts < 3) {
-			this.updatePlan(plan, { phase: readyPhaseForRole(action.role), repair: [detail] });
-			return;
+			return { plan: { ...plan, phase: readyPhaseForRole(action.role), repair: [detail] } };
 		}
 		const terminalDetail = `${action.role} transport failed ${equivalentAttempts} times for ${action.planId} generation ${action.generation} round ${action.round}: ${detail}`;
-		this.updatePlan(plan, { phase: "NEEDS_INPUT", repair: [terminalDetail] });
-		this.store.updateRun({ status: "needs_input", terminalDetail });
+		return {
+			plan: { ...plan, phase: "NEEDS_INPUT", repair: [terminalDetail] },
+			runUpdate: { status: "needs_input", terminalDetail },
+		};
 	}
 
-	private async finishImplementer(run: StoredRun, plan: StoredPlan, result: Extract<WorkerResult, { kind: "implementer" }>): Promise<void> {
+	private finishImplementer(run: StoredRun, plan: StoredPlan, result: Extract<WorkerResult, { kind: "implementer" }>): TerminalTransition {
 		const driver = this.driver(run);
 		let failure: string | null = null;
 		if (result.status !== "COMPLETE") failure = result.stoppedBecause || result.notes || `Implementer returned ${result.status}`;
@@ -559,27 +810,20 @@ export class HerderRunManager {
 		}
 		if (failure) {
 			if (plan.round >= 6) {
-				this.updatePlan(plan, { phase: "BLOCKED", repair: [failure], gates });
-			} else {
-				this.updatePlan(plan, { phase: "READY_IMPLEMENTER", round: plan.round + 1, repair: [failure], gates });
+				return { plan: { ...plan, phase: "BLOCKED", repair: [failure], gates } };
 			}
-			return;
+			return { plan: { ...plan, phase: "READY_IMPLEMENTER", round: plan.round + 1, repair: [failure], gates } };
 		}
-		this.store.putPlan({
-			...plan,
-			phase: "READY_REVIEWER",
-			gates,
-			generationBase: reviewBase,
-			approvedBase: reviewBase,
-			approvedHead: head,
-			approvedTree: driver.worktreeTree(plan.worktree),
-			repair: result.discoveredPaths,
-			rebase: null,
-		});
+		return { plan: {
+			...plan, phase: "READY_REVIEWER", gates, generationBase: reviewBase,
+			approvedBase: reviewBase, approvedHead: head, approvedTree: driver.worktreeTree(plan.worktree),
+			repair: result.discoveredPaths, rebase: null,
+		} };
 	}
 
-	private async finishReviewer(run: StoredRun, plan: StoredPlan, result: Extract<WorkerResult, { kind: "reviewer" }>): Promise<void> {
+	private finishReviewer(run: StoredRun, plan: StoredPlan, action: StoredAction, result: Extract<WorkerResult, { kind: "reviewer" }>): TerminalTransition {
 		const driver = this.driver(run);
+		driver.verifyAssignment(plan.worktree, plan.assignmentPath, plan.assignmentSha256);
 		if (driver.worktreeHead(plan.worktree) !== plan.approvedHead || driver.worktreeTree(plan.worktree) !== plan.approvedTree || driver.worktreeStatus(plan.worktree)) {
 			throw new Error(`Reviewer mutated frozen plan ${plan.planId}`);
 		}
@@ -587,44 +831,69 @@ export class HerderRunManager {
 		const verdict = result.verdict === "REVISE" && blockers === 0 && result.scope === "PASS" ? "APPROVE" : result.verdict;
 		if (plan.planId === "RUN") {
 			if (verdict === "APPROVE" && result.scope === "PASS" && blockers === 0) {
-				this.updatePlan(plan, { phase: "FINAL_APPROVED", reviewPass: plan.reviewPass + 1, findings: result.findings });
-			} else {
-				const detail = result.rationale || result.findings[0] || "Final cross-plan audit did not approve";
-				this.updatePlan(plan, { phase: "NEEDS_INPUT", reviewPass: plan.reviewPass + 1, findings: result.findings, repair: [detail] });
-				this.store.updateRun({ status: "needs_input", terminalDetail: detail });
+				return { plan: { ...plan, phase: "FINAL_APPROVED", reviewPass: plan.reviewPass + 1, findings: result.findings } };
 			}
-			return;
+			const detail = result.rationale || result.findings[0] || "Final cross-plan audit did not approve";
+			return {
+				plan: { ...plan, phase: "NEEDS_INPUT", reviewPass: plan.reviewPass + 1, findings: result.findings, repair: [detail] },
+				runUpdate: { status: "needs_input", terminalDetail: detail },
+			};
 		}
 		const decision = decideReview({ round: plan.round, verdict, scope: result.scope, openBlockers: blockers });
 		const reviewed = { ...plan, reviewPass: plan.reviewPass + 1, findings: result.findings };
 		if (decision.action === "READY_TO_INTEGRATE") {
-			this.updatePlan(reviewed, { phase: "READY_TO_INTEGRATE", repair: [] });
+			if (!plan.approvedBase || !plan.approvedHead || !plan.approvedTree) throw new Error(`Reviewer approval has no frozen patch for ${plan.planId}`);
+			const resultSha256 = sha256(stableJson(result));
+			const approval = createApproval({
+				runId: run.runId, planId: plan.planId, generation: plan.generation, round: plan.round,
+				reviewerActionId: action.actionId, decisionActionId: action.actionId, decisionRole: "plan-reviewer",
+				assignmentSha256: plan.assignmentSha256, approvedBase: plan.approvedBase,
+				approvedHead: plan.approvedHead, approvedTree: plan.approvedTree,
+				reviewResultSha256: resultSha256, decisionResultSha256: resultSha256,
+			});
+			return { plan: { ...reviewed, phase: "READY_TO_INTEGRATE", repair: [] }, approval };
 		} else if (decision.action === "REPAIR_DIRECT") {
-			this.updatePlan(reviewed, { phase: "READY_IMPLEMENTER", round: decision.nextRound!, repair: result.fixGuidance });
+			return { plan: { ...reviewed, phase: "READY_IMPLEMENTER", round: decision.nextRound!, repair: result.fixGuidance } };
 		} else if (decision.action === "JUDGE") {
-			this.updatePlan(reviewed, { phase: "READY_JUDGE", repair: result.fixGuidance });
-		} else {
-			this.updatePlan(reviewed, { phase: "BLOCKED" });
+			return { plan: { ...reviewed, phase: "READY_JUDGE", repair: result.fixGuidance } };
 		}
+		return { plan: { ...reviewed, phase: "BLOCKED" } };
 	}
 
-	private async finishJudge(run: StoredRun, plan: StoredPlan, result: Extract<WorkerResult, { kind: "judge" }>): Promise<void> {
+	private finishJudge(run: StoredRun, plan: StoredPlan, action: StoredAction, result: Extract<WorkerResult, { kind: "judge" }>): TerminalTransition {
 		const driver = this.driver(run);
+		driver.verifyAssignment(plan.worktree, plan.assignmentPath, plan.assignmentSha256);
 		if (driver.worktreeHead(plan.worktree) !== plan.approvedHead || driver.worktreeTree(plan.worktree) !== plan.approvedTree || driver.worktreeStatus(plan.worktree)) {
 			throw new Error(`Judge mutated frozen plan ${plan.planId}`);
 		}
 		persistLeaks(this.planDirectory, plan.planId, result.leaks);
 		const decision = decideJudge({ round: plan.round, decision: result.decision });
 		if (decision.action === "READY_TO_INTEGRATE") {
-			this.updatePlan(plan, { phase: "READY_TO_INTEGRATE", findings: result.findings, repair: [] });
+			if (!plan.approvedBase || !plan.approvedHead || !plan.approvedTree) throw new Error(`Judge approval has no frozen patch for ${plan.planId}`);
+			const reviewer = this.store.getActions(run.runId).filter((candidate) =>
+				candidate.planId === plan.planId && candidate.generation === plan.generation
+				&& candidate.round === plan.round && candidate.role === "plan-reviewer" && candidate.state === "terminal"
+			).at(-1);
+			const reviewResult = reviewer ? storedWorkerResult(reviewer) : null;
+			if (!reviewer || !reviewResult || reviewResult.kind !== "reviewer") throw new Error(`Judge cannot approve ${plan.planId} without a terminal Reviewer result`);
+			const approval = createApproval({
+				runId: run.runId, planId: plan.planId, generation: plan.generation, round: plan.round,
+				reviewerActionId: reviewer.actionId, decisionActionId: action.actionId, decisionRole: "plan-judge",
+				assignmentSha256: plan.assignmentSha256, approvedBase: plan.approvedBase,
+				approvedHead: plan.approvedHead, approvedTree: plan.approvedTree,
+				reviewResultSha256: sha256(stableJson(reviewResult)), decisionResultSha256: sha256(stableJson(result)),
+			});
+			return { plan: { ...plan, phase: "READY_TO_INTEGRATE", findings: result.findings, repair: [] }, approval };
 		} else if (decision.action === "REPAIR_GUIDED") {
-			this.updatePlan(plan, { phase: "READY_IMPLEMENTER", round: decision.nextRound!, findings: result.findings, repair: result.repairContracts });
+			return { plan: { ...plan, phase: "READY_IMPLEMENTER", round: decision.nextRound!, findings: result.findings, repair: result.repairContracts } };
 		} else if (decision.action === "NEEDS_INPUT") {
-			this.updatePlan(plan, { phase: "NEEDS_INPUT", findings: result.findings, repair: result.question ? [result.question] : [] });
-			this.store.updateRun({ status: "needs_input", terminalDetail: result.question || result.rationale });
-		} else {
-			this.updatePlan(plan, { phase: "BLOCKED", findings: result.findings });
+			const terminalDetail = result.question || result.rationale;
+			return {
+				plan: { ...plan, phase: "NEEDS_INPUT", findings: result.findings, repair: result.question ? [result.question] : [] },
+				runUpdate: { status: "needs_input", terminalDetail },
+			};
 		}
+		return { plan: { ...plan, phase: "BLOCKED", findings: result.findings } };
 	}
 
 	private applyUserInput(value: string, eventId: string): void {
@@ -643,15 +912,79 @@ export class HerderRunManager {
 		this.store.updateRun({ status: "running", terminalDetail: null });
 	}
 
+	private validateApproval(run: StoredRun, plan: StoredPlan, approval: StoredApproval): CompletionApprovalProof {
+		if (approval.runId !== run.runId || approval.planId !== plan.planId || approval.generation !== plan.generation || approval.round !== plan.round) {
+			throw new Error(`Approval identity does not match ${plan.planId} generation ${plan.generation} round ${plan.round}`);
+		}
+		if (approval.assignmentSha256 !== plan.assignmentSha256
+			|| approval.approvedBase !== plan.approvedBase
+			|| approval.approvedHead !== plan.approvedHead
+			|| approval.approvedTree !== plan.approvedTree) {
+			throw new Error(`Approval patch binding does not match plan ${plan.planId}`);
+		}
+		if (sha256(stableJson(approvalCore(approval))) !== approval.proofSha256) throw new Error(`Approval proof hash changed for ${plan.planId}`);
+		const reviewer = this.store.getAction(approval.reviewerActionId);
+		const decision = this.store.getAction(approval.decisionActionId);
+		if (!reviewer || reviewer.runId !== run.runId || reviewer.planId !== plan.planId
+			|| reviewer.generation !== plan.generation || reviewer.round !== plan.round
+			|| reviewer.role !== "plan-reviewer" || reviewer.state !== "terminal") {
+			throw new Error(`Approval for ${plan.planId} lacks its exact terminal Reviewer action`);
+		}
+		if (!decision || decision.runId !== run.runId || decision.planId !== plan.planId
+			|| decision.generation !== plan.generation || decision.round !== plan.round
+			|| decision.role !== approval.decisionRole || decision.state !== "terminal") {
+			throw new Error(`Approval for ${plan.planId} lacks its exact terminal decision action`);
+		}
+		const reviewerResult = storedWorkerResult(reviewer);
+		const decisionResult = storedWorkerResult(decision);
+		if (!reviewerResult || reviewerResult.kind !== "reviewer"
+			|| sha256(stableJson(reviewerResult)) !== approval.reviewResultSha256) {
+			throw new Error(`Reviewer result proof changed for ${plan.planId}`);
+		}
+		if (!decisionResult || sha256(stableJson(decisionResult)) !== approval.decisionResultSha256) {
+			throw new Error(`Decision result proof changed for ${plan.planId}`);
+		}
+		if (approval.decisionRole === "plan-reviewer" && (decision.actionId !== reviewer.actionId || decisionResult.kind !== "reviewer")) {
+			throw new Error(`Direct Reviewer approval is inconsistent for ${plan.planId}`);
+		}
+		if (approval.decisionRole === "plan-judge" && decisionResult.kind !== "judge") {
+			throw new Error(`Judge approval is inconsistent for ${plan.planId}`);
+		}
+		return completionApproval(approval);
+	}
+
+	private recoverTerminalSideEffects(run: StoredRun, driver: GitDriver): void {
+		for (const action of this.store.getActions(run.runId, ["terminal"])) {
+			const record = storedTerminalRecord(action);
+			if (!record) throw new Error(`Terminal action ${action.actionId} has no durable result envelope`);
+			this.recordTerminalUsage(run, action, record);
+			const plan = this.store.getPlan(run.runId, action.planId);
+			if (!plan) continue;
+			const lease = driver.leaseReason(plan.worktree);
+			if (lease === action.leaseReason) driver.release(plan.worktree, action.leaseReason);
+		}
+	}
+
 	private async reconcile(profile: ResolvedProfile, options: { schedule?: boolean } = {}): Promise<ManagerReply> {
 		let run = this.store.getRun();
 		if (!run) throw new Error("No deterministic Herder run exists");
 		if (run.status !== "running") return this.reply();
 		const driver = this.driver(run);
 		await driver.verifyCheckout(run.checkoutStateToken);
+		this.recoverTerminalSideEffects(run, driver);
 
 		for (const plan of this.store.getPlans(run.runId).filter((candidate) => candidate.phase === "READY_TO_INTEGRATE").sort((a, b) => a.planId.localeCompare(b.planId))) {
-			if (!plan.approvedBase || !plan.approvedHead) throw new Error(`Plan ${plan.planId} has no approved integration surface`);
+			if (!plan.approvedBase || !plan.approvedHead || !plan.approvedTree) throw new Error(`Plan ${plan.planId} has no approved integration surface`);
+			const approval = this.store.getApproval(run.runId, plan.planId, plan.generation);
+			if (!approval) throw new Error(`Plan ${plan.planId} has no durable approval proof`);
+			const completionProof = this.validateApproval(run, plan, approval);
+			driver.verifyAssignment(plan.worktree, plan.assignmentPath, plan.assignmentSha256);
+			if (driver.worktreeHead(plan.worktree) !== plan.approvedHead
+				|| driver.worktreeTree(plan.worktree) !== plan.approvedTree
+				|| driver.worktreeStatus(plan.worktree)) {
+				throw new Error(`Approved patch changed before integration for ${plan.planId}`);
+			}
+			if (driver.leaseReason(plan.worktree)) throw new Error(`Approved plan ${plan.planId} is still leased`);
 			const integration = driver.integrate({
 				planId: plan.planId,
 				branch: plan.branch,
@@ -661,6 +994,7 @@ export class HerderRunManager {
 				generation: plan.generation,
 				checkpointOrdinal: plan.reviewPass || 1,
 				gateCommands: this.spec(run, plan.planId).gateCommands,
+				approval: completionProof,
 			});
 			if (integration.status === "conflict") {
 				if (plan.round >= 6) {
@@ -703,13 +1037,16 @@ export class HerderRunManager {
 					this.store.updateRun({ status: "failed", terminalDetail: `Final integration gate failed: ${failedGate.command} (log ${failedGate.logPath})` });
 					return this.reply();
 				}
-				const assignmentPath = runAssignmentPath(run);
+				const generation = this.store.getGeneration(run.runId, run.currentGeneration);
+				if (!generation) throw new Error(`Run generation ${run.currentGeneration} has no assignment evidence`);
+				const assignmentPath = generation.runAssignmentPath;
 				const bytes = fs.readFileSync(assignmentPath);
+				if (sha256(bytes) !== generation.runAssignmentSha256) throw new Error(`Run assignment changed for generation ${run.currentGeneration}`);
 				const assignment = JSON.parse(bytes.toString("utf8")) as { snapshotSha256: string; assignment: { generationBase: string } };
 				this.store.putPlan({
 					runId: run.runId,
 					planId: "RUN",
-					generation: 1,
+					generation: run.currentGeneration,
 					round: 1,
 					phase: "READY_REVIEWER",
 					branch: run.integrationBranch,
@@ -766,7 +1103,7 @@ export class HerderRunManager {
 			const plan = this.store.putPlan({
 				runId: run.runId,
 				planId,
-				generation: 1,
+				generation: spec.graphGeneration,
 				round: 1,
 				phase: "READY_IMPLEMENTER",
 				branch: execution.branch,
@@ -875,7 +1212,7 @@ export class HerderRunManager {
 	}
 
 	reply(): ManagerReply {
-		const run = this.store.getRun();
+		let run = this.store.getRun();
 		if (!run) return {
 			protocolVersion: MANAGER_PROTOCOL_VERSION,
 			runId: "",
@@ -887,6 +1224,10 @@ export class HerderRunManager {
 			summary: { total: 0, done: 0, rejected: 0, inProgress: 0, available: 0 },
 			message: "No Herder run has started.",
 		};
+		if (run.status === "running") {
+			const drift = this.graphDrift(run);
+			if (drift.changed) run = this.store.updateRun({ status: "paused", terminalDetail: drift.detail });
+		}
 		const overview = summarizeRun(this.specs(run), this.store.getPlans(run.runId));
 		const proposed = this.store.getActions(run.runId, ["proposed"]);
 		const active = this.store.getActions(run.runId, ["proposed", "dispatched"]);

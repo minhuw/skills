@@ -22,11 +22,12 @@ Available commands:
 
 - `/herder-fire [plan-dir] [--profile name] [--max-parallel n] [--dashboard-port n]`
 - `/herder-resume [plan-dir] [--profile name] [--max-parallel n] [--dashboard-port n]`
+- `/herder-revise [plan-dir] [--profile name] [--dashboard-port n]`
 - `/herder-status [plan-dir]`
 - `/herder-dashboard [plan-dir]`
 - `/herder-stop`
 
-The `herder` tool exposes fire, resume, status, and dashboard actions to the active Pi model. Fire and resume start or reuse the persistent local Run Manager and its dashboard, dispatch the first available worker batch, then return. A compact Pi widget and the dashboard report progress.
+The `herder` tool exposes fire, resume, revise, status, and dashboard actions to the active Pi model. Fire and resume start or reuse the persistent local Run Manager and its dashboard, dispatch the first available worker batch, then return. Revise adopts a validated new immutable graph generation after all active workers settle. A compact Pi widget and the dashboard report progress.
 
 ## Responsibility boundary
 

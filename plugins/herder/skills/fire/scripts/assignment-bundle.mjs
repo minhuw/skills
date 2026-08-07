@@ -13,7 +13,10 @@ export const ASSIGNMENT_SCHEMA_VERSION = 1
 export const ASSIGNMENT_KIND = "herder-plan-assignment"
 export const RUN_ASSIGNMENT_KIND = "herder-run-assignment"
 export const ASSIGNMENT_RELATIVE_SUFFIX = path.join(".herder", "assignment.json")
-export const RUN_ASSIGNMENT_RELATIVE_SUFFIX = path.join(".herder", "run-assignment.json")
+export function runAssignmentRelativeSuffix(generation = 1) {
+  if (!Number.isSafeInteger(generation) || generation < 1) throw new Error("run assignment generation must be a positive integer")
+  return path.join(".herder", `run-assignment-generation-${generation}.json`)
+}
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex")
@@ -316,10 +319,10 @@ export function compiledAssignmentEntry(snapshot) {
 
 /**
  * @param {Record<string, any>} options
- * @param {{run?: boolean, entries?: any[] | null}} configuration
+ * @param {{run?: boolean, entries?: any[] | null, runGeneration?: number}} configuration
  */
 export function materializeAssignment(options, configuration = {}) {
-  const { run = false, entries: compiledEntries = null } = configuration
+  const { run = false, entries: compiledEntries = null, runGeneration = 1 } = configuration
   const allowed = new Set([
     "pretty",
     "planDir",
@@ -338,6 +341,9 @@ export function materializeAssignment(options, configuration = {}) {
   const expectedBranch = requireOption(options, "expectedBranch")
   const expectedHead = requireOption(options, "expectedHead")
   const expectedSnapshotSha256 = run ? null : requireOption(options, "expectedSnapshotSha256")
+  if (run && (!Number.isSafeInteger(runGeneration) || runGeneration < 1)) {
+    throw new Error("run assignment generation must be a positive integer")
+  }
   if (!run && !isSha256(expectedSnapshotSha256)) {
     throw new Error("--expected-snapshot-sha256 must be a lowercase SHA-256")
   }
@@ -380,7 +386,7 @@ export function materializeAssignment(options, configuration = {}) {
   const bundlePath = path.join(
     execution.root,
     relativePlanDir,
-    run ? RUN_ASSIGNMENT_RELATIVE_SUFFIX : ASSIGNMENT_RELATIVE_SUFFIX,
+    run ? runAssignmentRelativeSuffix(runGeneration) : ASSIGNMENT_RELATIVE_SUFFIX,
   )
   assertNoSymlinkComponents(execution.root, bundlePath)
   const relativePath = assertIgnored(execution.root, bundlePath)
@@ -394,6 +400,7 @@ export function materializeAssignment(options, configuration = {}) {
         assignment: {
           branch,
           generationBase: head,
+          graphGeneration: runGeneration,
         },
       }
     : {

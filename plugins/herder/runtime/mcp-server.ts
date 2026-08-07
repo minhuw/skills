@@ -14,13 +14,13 @@ interface Request {
 
 const TOOL = {
 	name: "herder_control",
-	description: "Start, resume, inspect, stop, or deliver a structured host event to a deterministic Herder run.",
+	description: "Start, resume, revise, inspect, stop, or deliver a structured host event to a deterministic Herder run.",
 	inputSchema: {
 		type: "object",
 		additionalProperties: false,
 		required: ["operation", "planDirectory"],
 		properties: {
-			operation: { enum: ["fire", "resume", "status", "stop", "event"] },
+			operation: { enum: ["fire", "resume", "revise", "status", "stop", "event"] },
 			planDirectory: { type: "string" },
 			repositoryRoot: { type: "string" },
 			planName: { type: "string" },
@@ -62,10 +62,10 @@ async function control(args: Record<string, unknown>): Promise<Record<string, un
 		if (!args.event || typeof args.event !== "object" || Array.isArray(args.event)) throw new Error("event operation requires a structured event object");
 		return requestService(service, "/v1/event", args.event);
 	}
-	if (!["fire", "resume"].includes(operation)) throw new Error(`Unknown Herder operation: ${operation}`);
+	if (!["fire", "resume", "revise"].includes(operation)) throw new Error(`Unknown Herder operation: ${operation}`);
 	const host = String(args.host || "");
-	if (!repositoryHost(host)) throw new Error("fire/resume requires host codex or claude");
-	if (typeof args.repositoryRoot !== "string" || !args.repositoryRoot.trim()) throw new Error("fire/resume requires repositoryRoot");
+	if (!repositoryHost(host)) throw new Error("fire/resume/revise requires host codex or claude");
+	if (typeof args.repositoryRoot !== "string" || !args.repositoryRoot.trim()) throw new Error("fire/resume/revise requires repositoryRoot");
 	const repositoryRoot = path.resolve(args.repositoryRoot);
 	return requestService(service, "/v1/start", {
 		mode: operation,

@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process"
 import { buildGraph } from "../../plans/scripts/herder-plans.mjs"
 import { executionReport, readManagerState, readUsageState } from "../../plans/scripts/execution-store.mjs"
 import { validatePlanName } from "../../fire/scripts/namespace-run.mjs"
+import { inspectCompletionProof } from "../../fire/scripts/completion-proof.mjs"
 
 export const DASHBOARD_STATE_VERSION = 1
 
@@ -285,7 +286,11 @@ export function buildDashboardState(input = {}) {
   const worktreeByBranch = new Map(worktrees.filter((item) => item.branch).map((item) => [item.branch, item]))
   const completionByPlan = new Map(coordinationRefs
     .filter((item) => /^completed\/\d{3,}$/.test(item.relative))
-    .map((item) => [item.relative.slice("completed/".length), item]))
+    .map((item) => {
+      const plan = item.relative.slice("completed/".length)
+      const proof = inspectCompletionProof(context.repoRoot, item.ref)
+      return [plan, { ...item, proof, target: proof.ok ? proof.object : item.target }]
+    }))
   const runtimeById = new Map(manager.plans.map((plan) => [plan.planId, plan]))
   const activeActionById = new Map(manager.actions.filter((action) => ["proposed", "dispatched"].includes(action.state)).map((action) => [action.planId, action]))
   const sourcePlans = graph.plans

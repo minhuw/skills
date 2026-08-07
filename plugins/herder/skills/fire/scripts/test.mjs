@@ -72,10 +72,12 @@ try {
   assert.match(skill, /SQLite is the only runtime lifecycle authority/)
   assert.match(skill, /Implementer, Reviewer, and Judge/)
   assert.doesNotMatch(skill, /Accountant|Saver|base64|orca-runtime/)
-  assert.match(protocol, /immutable plan specification compiled into .*execution\.sqlite3/)
+  assert.match(protocol, /immutable plan-graph generations compiled into .*execution\.sqlite3/)
   assert.match(protocol, /README\.md.*projection of SQLite/)
   assert.match(protocol, /Implementer -> manager gates -> Reviewer -> integrate/)
   assert.match(protocol, /Beginning at unresolved round 3, Judge filters findings/)
+  assert.match(protocol, /annotated completion tag/)
+  assert.match(protocol, /`revise` may compile a new immutable graph generation/)
 
   const pluginRoot = path.resolve(scriptDir, "../../..")
   const roleFiles = ["plan-implementer.md", "plan-reviewer.md", "plan-judge.md"]

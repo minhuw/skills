@@ -1,5 +1,5 @@
 export interface FireOptions {
-	mode: "fire" | "resume";
+	mode: "fire" | "resume" | "revise";
 	planDir: string;
 	profile?: string;
 	maxParallel?: number;
@@ -80,7 +80,7 @@ function port(value: string): number {
 	return parsed;
 }
 
-export function parseFireArguments(input: string, mode: "fire" | "resume"): FireOptions {
+export function parseFireArguments(input: string, mode: "fire" | "resume" | "revise"): FireOptions {
 	const tokens = tokenizeArguments(input);
 	let planDir = "herder-plans";
 	let profile: string | undefined;
@@ -106,7 +106,7 @@ export function parseFireArguments(input: string, mode: "fire" | "resume"): Fire
 		}
 	}
 
-	return { mode, planDir, ...(profile ? { profile } : {}), ...(maxParallel === undefined && mode === "resume" ? {} : { maxParallel: maxParallel ?? 5 }), dashboardPort };
+	return { mode, planDir, ...(profile ? { profile } : {}), ...(maxParallel === undefined && mode !== "fire" ? {} : { maxParallel: maxParallel ?? 5 }), dashboardPort };
 }
 
 export function parsePlanDirArguments(input: string): PlanDirOptions {

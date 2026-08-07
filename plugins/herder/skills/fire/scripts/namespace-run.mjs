@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { buildGraph } from "../../plans/scripts/herder-plans.mjs"
 import { parseCoordinationRefRelative } from "./coordination-ref.mjs"
+import { inspectCompletionProof } from "./completion-proof.mjs"
 
 function fail(message) {
   throw new Error(message)
@@ -172,6 +173,10 @@ export function inspectNamespace(input) {
     const identity = parseCoordinationRefRelative(item.relative)
     return identity?.plan ? !planIds.has(identity.plan) : false
   })
+  const invalidCompletionRefs = recognizedCoordinationRefs
+    .filter((item) => parseCoordinationRefRelative(item.relative)?.kind === "completed")
+    .map((item) => ({ item, proof: inspectCompletionProof(repoRoot, item.ref) }))
+    .filter(({ item, proof }) => !proof.ok || proof.payload.planId !== parseCoordinationRefRelative(item.relative)?.plan)
   const worktrees = listWorktrees(repoRoot)
   const namespaceBranchNames = new Set(branches.map((item) => item.branch))
   const namespaceWorktrees = worktrees.filter((item) => namespaceBranchNames.has(item.branch))
@@ -197,13 +202,15 @@ export function inspectNamespace(input) {
     conflicts.push(...unindexedBranches.map((item) => ({ type: "unindexed-plan", branch: item.branch, plan: item.relative, head: item.head })))
     conflicts.push(...unknownCoordinationRefs.map((item) => ({ type: "unknown-coordination-ref", ref: item.ref, target: item.target })))
     conflicts.push(...unindexedCoordinationRefs.map((item) => ({ type: "unindexed-coordination-ref", ref: item.ref, target: item.target })))
+    conflicts.push(...invalidCompletionRefs.map(({ item, proof }) => ({ type: "invalid-completion-proof", ref: item.ref, target: item.target, detail: proof.error ?? "plan identity mismatch" })))
     if (integration && baseRef && !isAncestor(repoRoot, baseRef.target, integration.head)) {
       conflicts.push({ type: "base-not-reachable", ref: baseRef.ref, target: baseRef.target, integrationHead: integration.head })
     }
     if (integration) {
       for (const item of recognizedCoordinationRefs.filter((ref) => parseCoordinationRefRelative(ref.relative)?.kind === "completed")) {
-        if (!isAncestor(repoRoot, item.target, integration.head)) {
-          conflicts.push({ type: "completion-not-reachable", ref: item.ref, target: item.target, integrationHead: integration.head })
+        const proof = inspectCompletionProof(repoRoot, item.ref)
+        if (proof.ok && !isAncestor(repoRoot, proof.object, integration.head)) {
+          conflicts.push({ type: "completion-not-reachable", ref: item.ref, target: proof.object, integrationHead: integration.head })
         }
       }
     }
@@ -230,6 +237,7 @@ export function inspectNamespace(input) {
     coordinationRefs,
     unknownCoordinationRefs,
     unindexedCoordinationRefs,
+    invalidCompletionRefs: invalidCompletionRefs.map(({ item, proof }) => ({ ref: item.ref, target: item.target, proof })),
     worktrees: namespaceWorktrees,
     conflicts,
   }

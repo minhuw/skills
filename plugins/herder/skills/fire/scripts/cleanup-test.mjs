@@ -8,6 +8,7 @@ import process from "node:process"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { parseWorktreeRecords } from "./cleanup-run.mjs"
+import { buildCompletionProofPayload, writeCompletionProof } from "./completion-proof.mjs"
 import { formatCheckpointRef } from "./coordination-ref.mjs"
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
@@ -114,6 +115,26 @@ function commitFile(worktree, name, contents, message) {
   git(worktree, "commit", "-q", "-m", message)
 }
 
+function addCompletionProof(repo, ref, planId, commit) {
+  const payload = buildCompletionProofPayload({
+    runId: "cleanup-test",
+    planId,
+    generation: 1,
+    round: 1,
+    reviewerActionId: `reviewer-${planId}`,
+    decisionActionId: `reviewer-${planId}`,
+    decisionRole: "plan-reviewer",
+    assignmentSha256: "a".repeat(64),
+    approvedBase: commit,
+    approvedHead: commit,
+    approvedTree: git(repo, "rev-parse", `${commit}^{tree}`),
+    reviewResultSha256: "b".repeat(64),
+    decisionResultSha256: "b".repeat(64),
+    integratedHead: commit,
+  })
+  return writeCompletionProof(repo, ref, payload, `herder-plans-${planId}-generation-1`)
+}
+
 function cleanupResult(repo, planDir, extra = [], { allowFailure = false, env = process.env } = {}) {
   const result = run(process.execPath, [
     cleanup,
@@ -177,7 +198,7 @@ try {
   const completionCommit = git(done, "rev-parse", "HEAD")
   git(integration, "merge", "-q", "--ff-only", doneBranch)
   const completionRef = "refs/plan-herder/plans/completed/001"
-  git(repo, "update-ref", completionRef, completionCommit, "")
+  addCompletionProof(repo, completionRef, "001", completionCommit)
   assert.equal(git(integration, "rev-list", "--min-parents=2", `${initial}..HEAD`), "")
   assert.doesNotMatch(git(integration, "log", "--format=%B", `${initial}..HEAD`), /herder|plan[- ]?\d+/i)
 
@@ -190,12 +211,12 @@ try {
 
   const dirtyDoneBranch = "herder/plans/004"
   const dirtyDone = addWorktree(repo, worktrees, dirtyDoneBranch, integrationBranch)
-  git(repo, "update-ref", "refs/plan-herder/plans/completed/004", git(dirtyDone, "rev-parse", "HEAD"), "")
+  addCompletionProof(repo, "refs/plan-herder/plans/completed/004", "004", git(dirtyDone, "rev-parse", "HEAD"))
   fs.writeFileSync(path.join(dirtyDone, "uncommitted.txt"), "preserve me\n")
 
   const lockedDoneBranch = "herder/plans/005"
   const lockedDone = addWorktree(repo, worktrees, lockedDoneBranch, integrationBranch)
-  git(repo, "update-ref", "refs/plan-herder/plans/completed/005", git(lockedDone, "rev-parse", "HEAD"), "")
+  addCompletionProof(repo, "refs/plan-herder/plans/completed/005", "005", git(lockedDone, "rev-parse", "HEAD"))
   git(repo, "worktree", "lock", "--reason", "plan-herder:plans:005:reviewer-active", lockedDone)
 
   const unknownBranch = "herder/plans/manual"
@@ -226,7 +247,7 @@ try {
   assert.deepEqual(cleaned.removed.map((item) => item.branch), [doneBranch])
   assert.equal(fs.existsSync(done), false)
   assert.equal(git(repo, "branch", "--list", doneBranch), "")
-  assert.equal(git(repo, "rev-parse", completionRef), completionCommit)
+  assert.equal(git(repo, "rev-parse", `${completionRef}^{commit}`), completionCommit)
   assert.notEqual(git(repo, "branch", "--list", integrationBranch), "")
 
   const failedPreview = cleanupResult(repo, planDir, ["--include-failed", "--dry-run"]).json
@@ -291,7 +312,7 @@ try {
   git(finalIntegration, "merge", "-q", "--ff-only", finalDoneBranch)
   const finalCompletionCommit = git(finalIntegration, "rev-parse", "HEAD")
   const finalCompletionRef = "refs/plan-herder/plans/completed/001"
-  git(finalRepo, "update-ref", finalCompletionRef, finalCompletionCommit, "")
+  const finalCompletion = addCompletionProof(finalRepo, finalCompletionRef, "001", finalCompletionCommit)
   const finalCheckpointRef = "refs/plan-herder/plans/checkpoints/001/0-1"
   git(finalRepo, "update-ref", finalCheckpointRef, finalCompletionCommit, "")
   const finalCurrentCheckpointRef = formatCheckpointRef({
@@ -312,7 +333,7 @@ try {
     { ref: finalBaseRef, target: finalInitial, kind: "base" },
     { ref: finalCheckpointRef, target: finalCompletionCommit, kind: "checkpoint", plan: "001" },
     { ref: finalCurrentCheckpointRef, target: finalCompletionCommit, kind: "checkpoint", plan: "001" },
-    { ref: finalCompletionRef, target: finalCompletionCommit, kind: "completed", plan: "001" },
+    { ref: finalCompletionRef, target: finalCompletion.object, kind: "completed", plan: "001" },
   ])
 
   const finalized = cleanupResult(finalRepo, finalPlanDir, ["--finalize"]).json

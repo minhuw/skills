@@ -7,6 +7,7 @@ import path from "node:path"
 import process from "node:process"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { buildCompletionProofPayload, writeCompletionProof } from "./completion-proof.mjs"
 import { formatCheckpointRef } from "./coordination-ref.mjs"
 import { inspectNamespace } from "./namespace-run.mjs"
 import { projectStatuses } from "../../plans/scripts/herder-plans.mjs"
@@ -162,7 +163,22 @@ try {
   assert.equal(git(repo, "rev-list", "--min-parents=2", `${base}..${integrationBranch}`), "")
 
   const completionRef = "refs/plan-herder/plans/completed/001"
-  git(repo, "update-ref", completionRef, reviewedHead, "")
+  writeCompletionProof(repo, completionRef, buildCompletionProofPayload({
+    runId: "branch-model-test",
+    planId: "001",
+    generation: 1,
+    round: 1,
+    reviewerActionId: "reviewer-001",
+    decisionActionId: "reviewer-001",
+    decisionRole: "plan-reviewer",
+    assignmentSha256: "a".repeat(64),
+    approvedBase: base,
+    approvedHead: reviewedHead,
+    approvedTree: reviewedTree,
+    reviewResultSha256: "b".repeat(64),
+    decisionResultSha256: "b".repeat(64),
+    integratedHead: reviewedHead,
+  }), "herder-plans-001-generation-1")
   projectStatuses(planDir, [{ id: "001", status: "DONE" }])
 
   const resumed = inspectNamespace({ repo, planDir, mode: "resume" })
@@ -183,7 +199,7 @@ try {
   assert.equal(git(repo, "branch", "--list", planBranch), "")
   assert.notEqual(git(repo, "branch", "--list", integrationBranch), "")
   assert.equal(git(repo, "rev-parse", checkpointRef), preRestackHead)
-  assert.equal(git(repo, "rev-parse", completionRef), reviewedHead)
+  assert.equal(git(repo, "rev-parse", `${completionRef}^{commit}`), reviewedHead)
 
   const resumedAfterCleanup = inspectNamespace({ repo, planDir, mode: "resume" })
   assert.equal(resumedAfterCleanup.ok, true)

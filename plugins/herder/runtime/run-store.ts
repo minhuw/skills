@@ -17,6 +17,8 @@ export interface StoredRun {
 	profileName: string;
 	profileSha256: string;
 	maxParallel: number;
+	currentGeneration: number;
+	graphSha256: string;
 	status: RunStatus;
 	checkoutStateToken: string;
 	baseCommit: string;
@@ -59,7 +61,9 @@ export interface StoredPlan {
 
 export interface StoredPlanSpec {
 	runId: string;
+	graphGeneration: number;
 	planId: string;
+	planFingerprint: string;
 	ordinal: number;
 	title: string;
 	priority: string;
@@ -83,6 +87,35 @@ export interface StoredPlanSpec {
 		};
 		planText: string;
 	};
+}
+
+export interface StoredGeneration {
+	runId: string;
+	generation: number;
+	graphSha256: string;
+	parentGeneration: number | null;
+	runAssignmentPath: string;
+	runAssignmentSha256: string;
+	runSnapshotSha256: string;
+	createdAt: string;
+}
+
+export interface StoredApproval {
+	runId: string;
+	planId: string;
+	generation: number;
+	round: number;
+	reviewerActionId: string;
+	decisionActionId: string;
+	decisionRole: "plan-reviewer" | "plan-judge";
+	assignmentSha256: string;
+	approvedBase: string;
+	approvedHead: string;
+	approvedTree: string;
+	reviewResultSha256: string;
+	decisionResultSha256: string;
+	proofSha256: string;
+	createdAt: string;
 }
 
 export interface StoredAction {
@@ -140,6 +173,8 @@ function rowToRun(row: Record<string, unknown> | undefined): StoredRun | null {
 		profileName: String(row.profile_name),
 		profileSha256: String(row.profile_sha256),
 		maxParallel: Number(row.max_parallel),
+		currentGeneration: Number(row.current_generation),
+		graphSha256: String(row.graph_sha256),
 		status: row.status as RunStatus,
 		checkoutStateToken: String(row.checkout_state_token),
 		baseCommit: String(row.base_commit),
@@ -180,7 +215,9 @@ function rowToPlan(row: Record<string, unknown>): StoredPlan {
 function rowToPlanSpec(row: Record<string, unknown>): StoredPlanSpec {
 	return {
 		runId: String(row.run_id),
+		graphGeneration: Number(row.graph_generation),
 		planId: String(row.plan_id),
+		planFingerprint: String(row.plan_fingerprint),
 		ordinal: Number(row.ordinal),
 		title: String(row.title),
 		priority: String(row.priority),
@@ -192,6 +229,39 @@ function rowToPlanSpec(row: Record<string, unknown>): StoredPlanSpec {
 		gateCommands: parseJson(String(row.gate_commands_json), []),
 		planFile: String(row.plan_file),
 		assignment: JSON.parse(String(row.assignment_json)) as StoredPlanSpec["assignment"],
+	};
+}
+
+function rowToGeneration(row: Record<string, unknown>): StoredGeneration {
+	return {
+		runId: String(row.run_id),
+		generation: Number(row.generation),
+		graphSha256: String(row.graph_sha256),
+		parentGeneration: row.parent_generation === null ? null : Number(row.parent_generation),
+		runAssignmentPath: String(row.run_assignment_path),
+		runAssignmentSha256: String(row.run_assignment_sha256),
+		runSnapshotSha256: String(row.run_snapshot_sha256),
+		createdAt: String(row.created_at),
+	};
+}
+
+function rowToApproval(row: Record<string, unknown>): StoredApproval {
+	return {
+		runId: String(row.run_id),
+		planId: String(row.plan_id),
+		generation: Number(row.generation),
+		round: Number(row.round_number),
+		reviewerActionId: String(row.reviewer_action_id),
+		decisionActionId: String(row.decision_action_id),
+		decisionRole: row.decision_role as StoredApproval["decisionRole"],
+		assignmentSha256: String(row.assignment_sha256),
+		approvedBase: String(row.approved_base),
+		approvedHead: String(row.approved_head),
+		approvedTree: String(row.approved_tree),
+		reviewResultSha256: String(row.review_result_sha256),
+		decisionResultSha256: String(row.decision_result_sha256),
+		proofSha256: String(row.proof_sha256),
+		createdAt: String(row.created_at),
 	};
 }
 
@@ -253,17 +323,20 @@ export class RunStore {
 		};
 	}
 
-	getPlanSpecs(runId: string): StoredPlanSpec[] {
-		return (this.database.prepare("SELECT * FROM manager_plan_specs WHERE run_id = ? ORDER BY ordinal, plan_id").all(runId) as Record<string, unknown>[]).map(rowToPlanSpec);
+	getPlanSpecs(runId: string, graphGeneration?: number): StoredPlanSpec[] {
+		const generation = graphGeneration ?? this.getRun()?.currentGeneration;
+		if (!generation) return [];
+		return (this.database.prepare("SELECT * FROM manager_plan_specs WHERE run_id = ? AND graph_generation = ? ORDER BY ordinal, plan_id").all(runId, generation) as Record<string, unknown>[]).map(rowToPlanSpec);
 	}
 
 	putPlanSpecs(specs: StoredPlanSpec[]): void {
 		const statement = this.database.prepare(`
 			INSERT INTO manager_plan_specs (
-				run_id, plan_id, ordinal, title, priority, effort, kind, dependencies_json,
+				run_id, graph_generation, plan_id, plan_fingerprint, ordinal, title, priority, effort, kind, dependencies_json,
 				initial_status, initial_status_detail, gate_commands_json, plan_file, assignment_json
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(run_id, plan_id) DO UPDATE SET
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(run_id, graph_generation, plan_id) DO UPDATE SET
+				plan_fingerprint = excluded.plan_fingerprint,
 				ordinal = excluded.ordinal,
 				title = excluded.title,
 				priority = excluded.priority,
@@ -278,11 +351,41 @@ export class RunStore {
 		`);
 		for (const input of specs) {
 			statement.run(
-				input.runId, input.planId, input.ordinal, input.title, input.priority, input.effort,
+				input.runId, input.graphGeneration, input.planId, input.planFingerprint,
+				input.ordinal, input.title, input.priority, input.effort,
 				input.kind, JSON.stringify(input.dependencies), input.initialStatus, input.initialStatusDetail,
 				JSON.stringify(input.gateCommands), input.planFile, JSON.stringify(input.assignment),
 			);
 		}
+	}
+
+	getGeneration(runId: string, generation: number): StoredGeneration | null {
+		const row = this.database.prepare("SELECT * FROM manager_generations WHERE run_id = ? AND generation = ?").get(runId, generation) as Record<string, unknown> | undefined;
+		return row ? rowToGeneration(row) : null;
+	}
+
+	getGenerations(runId: string): StoredGeneration[] {
+		return (this.database.prepare("SELECT * FROM manager_generations WHERE run_id = ? ORDER BY generation").all(runId) as Record<string, unknown>[]).map(rowToGeneration);
+	}
+
+	putGeneration(input: Omit<StoredGeneration, "createdAt">): StoredGeneration {
+		const existing = this.getGeneration(input.runId, input.generation);
+		if (existing) {
+			const expected = { ...input, createdAt: existing.createdAt };
+			if (JSON.stringify(existing) !== JSON.stringify(expected)) throw new Error(`Generation ${input.generation} evidence changed`);
+			return existing;
+		}
+		this.database.prepare(`
+			INSERT INTO manager_generations (
+				run_id, generation, graph_sha256, parent_generation,
+				run_assignment_path, run_assignment_sha256, run_snapshot_sha256, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`).run(
+			input.runId, input.generation, input.graphSha256, input.parentGeneration,
+			input.runAssignmentPath, input.runAssignmentSha256, input.runSnapshotSha256,
+			new Date().toISOString(),
+		);
+		return this.getGeneration(input.runId, input.generation)!;
 	}
 
 	createRun(input: Omit<StoredRun, "createdAt" | "updatedAt" | "dashboardUrl" | "terminalDetail"> & { dashboardUrl?: string | null }): StoredRun {
@@ -292,27 +395,37 @@ export class RunStore {
 		this.database.prepare(`
 				INSERT INTO manager_runs (
 					run_id, repository_root, plan_directory, plan_name, host,
-					profile_name, profile_sha256, max_parallel, status, checkout_state_token,
+					profile_name, profile_sha256, max_parallel, current_generation, graph_sha256,
+					status, checkout_state_token,
 					base_commit, integration_branch, integration_worktree, dashboard_url,
 					terminal_detail, created_at, updated_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
 			`).run(
 				input.runId, input.repositoryRoot, input.planDirectory, input.planName, input.host,
-			input.profileName, input.profileSha256, input.maxParallel, input.status, input.checkoutStateToken,
+			input.profileName, input.profileSha256, input.maxParallel, input.currentGeneration, input.graphSha256,
+			input.status, input.checkoutStateToken,
 			input.baseCommit, input.integrationBranch, input.integrationWorktree, input.dashboardUrl ?? null,
 			now, now,
 		);
 		return this.getRun()!;
 	}
 
-	updateRun(input: { status?: RunStatus; dashboardUrl?: string | null; terminalDetail?: string | null }): StoredRun {
+	updateRun(input: {
+		status?: RunStatus;
+		dashboardUrl?: string | null;
+		terminalDetail?: string | null;
+		currentGeneration?: number;
+		graphSha256?: string;
+	}): StoredRun {
 		const run = this.getRun();
 		if (!run) throw new Error("No Herder manager run exists");
 		const status = input.status ?? run.status;
 		const dashboardUrl = input.dashboardUrl === undefined ? run.dashboardUrl : input.dashboardUrl;
 		const terminalDetail = input.terminalDetail === undefined ? run.terminalDetail : input.terminalDetail;
-		this.database.prepare("UPDATE manager_runs SET status = ?, dashboard_url = ?, terminal_detail = ?, updated_at = ? WHERE run_id = ?")
-			.run(status, dashboardUrl, terminalDetail, new Date().toISOString(), run.runId);
+		const currentGeneration = input.currentGeneration ?? run.currentGeneration;
+		const graphSha256 = input.graphSha256 ?? run.graphSha256;
+		this.database.prepare("UPDATE manager_runs SET status = ?, dashboard_url = ?, terminal_detail = ?, current_generation = ?, graph_sha256 = ?, updated_at = ? WHERE run_id = ?")
+			.run(status, dashboardUrl, terminalDetail, currentGeneration, graphSha256, new Date().toISOString(), run.runId);
 		return this.getRun()!;
 	}
 
@@ -323,6 +436,10 @@ export class RunStore {
 	getPlan(runId: string, planId: string): StoredPlan | null {
 		const row = this.database.prepare("SELECT * FROM manager_plans WHERE run_id = ? AND plan_id = ?").get(runId, planId) as Record<string, unknown> | undefined;
 		return row ? rowToPlan(row) : null;
+	}
+
+	deletePlan(runId: string, planId: string): void {
+		this.database.prepare("DELETE FROM manager_plans WHERE run_id = ? AND plan_id = ?").run(runId, planId);
 	}
 
 	putPlan(input: Omit<StoredPlan, "updatedAt"> | StoredPlan): StoredPlan {
@@ -420,6 +537,39 @@ export class RunStore {
 		this.database.prepare("UPDATE manager_actions SET state = 'terminal', result_json = ?, updated_at = ? WHERE action_id = ?")
 			.run(JSON.stringify(result), new Date().toISOString(), actionId);
 		return this.getAction(actionId)!;
+	}
+
+	getApproval(runId: string, planId: string, generation: number): StoredApproval | null {
+		const row = this.database.prepare("SELECT * FROM manager_approvals WHERE run_id = ? AND plan_id = ? AND generation = ?")
+			.get(runId, planId, generation) as Record<string, unknown> | undefined;
+		return row ? rowToApproval(row) : null;
+	}
+
+	getApprovals(runId: string): StoredApproval[] {
+		return (this.database.prepare("SELECT * FROM manager_approvals WHERE run_id = ? ORDER BY plan_id, generation").all(runId) as Record<string, unknown>[]).map(rowToApproval);
+	}
+
+	putApproval(input: Omit<StoredApproval, "createdAt">): StoredApproval {
+		const existing = this.getApproval(input.runId, input.planId, input.generation);
+		if (existing) {
+			const expected = { ...input, createdAt: existing.createdAt };
+			if (JSON.stringify(existing) !== JSON.stringify(expected)) throw new Error(`Approval proof changed for ${input.planId} generation ${input.generation}`);
+			return existing;
+		}
+		this.database.prepare(`
+			INSERT INTO manager_approvals (
+				run_id, plan_id, generation, round_number, reviewer_action_id,
+				decision_action_id, decision_role, assignment_sha256, approved_base,
+				approved_head, approved_tree, review_result_sha256,
+				decision_result_sha256, proof_sha256, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`).run(
+			input.runId, input.planId, input.generation, input.round, input.reviewerActionId,
+			input.decisionActionId, input.decisionRole, input.assignmentSha256, input.approvedBase,
+			input.approvedHead, input.approvedTree, input.reviewResultSha256,
+			input.decisionResultSha256, input.proofSha256, new Date().toISOString(),
+		);
+		return this.getApproval(input.runId, input.planId, input.generation)!;
 	}
 
 	readEvent(eventId: string): { payloadSha256: string } | null {

@@ -9,7 +9,13 @@ import {
 	verifyAssignment,
 } from "../skills/fire/scripts/assignment-bundle.mjs";
 import { inspectNamespace } from "../skills/fire/scripts/namespace-run.mjs";
+import {
+	buildCompletionProofPayload,
+	inspectCompletionProof,
+	writeCompletionProof,
+} from "../skills/fire/scripts/completion-proof.mjs";
 import type { StoredPlanSpec } from "./run-store.ts";
+import { stableJson } from "./protocol.ts";
 
 const ZERO_OID = "0000000000000000000000000000000000000000";
 
@@ -44,6 +50,28 @@ export interface ActiveRebaseEvidence {
 	onto: string;
 	detachedHead: string;
 	rebaseStateSha256?: string;
+}
+
+export interface CompletionApprovalProof {
+	runId: string;
+	planId: string;
+	generation: number;
+	round: number;
+	reviewerActionId: string;
+	decisionActionId: string;
+	decisionRole: "plan-reviewer" | "plan-judge";
+	assignmentSha256: string;
+	approvedBase: string;
+	approvedHead: string;
+	approvedTree: string;
+	reviewResultSha256: string;
+	decisionResultSha256: string;
+	approvalProofSha256: string;
+}
+
+interface CompletionTagPayload extends CompletionApprovalProof {
+	schemaVersion: 1;
+	integratedHead: string;
 }
 
 function compact(value: string): string {
@@ -111,6 +139,22 @@ function isGateCommand(value: string): boolean {
 	return /^(?:(?:npm|pnpm|yarn|bun|node|deno|python|python3|pytest|uv|cargo|go|make|cmake|ninja|swift|xcodebuild|gradle|mvn|dotnet|ruby|bundle|rspec)(?:\s|$)|git\s+(?:diff|grep)(?:\s|$)|rg(?:\s|$))/.test(value);
 }
 
+function completionPayload(approval: CompletionApprovalProof, integratedHead: string): CompletionTagPayload {
+	return buildCompletionProofPayload({ ...approval, integratedHead }) as CompletionTagPayload;
+}
+
+function parseCompletionTag(repoRoot: string, ref: string): { object: string; payload: CompletionTagPayload } {
+	const proof = inspectCompletionProof(repoRoot, ref);
+	if (!proof.ok) throw new Error(`Completion evidence ${ref} is invalid: ${proof.error}`);
+	const object = String(proof.object || "");
+	if (!object) throw new Error(`Completion evidence ${ref} has no commit object`);
+	return { object, payload: proof.payload as CompletionTagPayload };
+}
+
+function createCompletionTag(repoRoot: string, ref: string, tagName: string, payload: CompletionTagPayload): void {
+	writeCompletionProof(repoRoot, ref, payload, tagName);
+}
+
 export class GitDriver {
 	readonly repoRoot: string;
 	readonly planDirectory: string;
@@ -162,7 +206,7 @@ export class GitDriver {
 		});
 	}
 
-	initializeFreshNamespace(baseCommit: string, assignments: StoredPlanSpec["assignment"][]): AssignmentEvidence {
+	initializeFreshNamespace(baseCommit: string, assignments: StoredPlanSpec["assignment"][], graphGeneration = 1): AssignmentEvidence {
 		const branchRef = `refs/heads/${this.integrationBranch}`;
 		const baseRef = `refs/plan-herder/${this.planName}/base`;
 		const allowedRefs = new Set([branchRef, baseRef]);
@@ -191,16 +235,16 @@ export class GitDriver {
 		if (git(this.repoRoot, ["show-ref", "--verify", "--quiet", baseRef], true).status !== 0) {
 			git(this.repoRoot, ["update-ref", baseRef, baseCommit, ZERO_OID]);
 		}
-		return this.materializeRunAssignment(baseCommit, assignments);
+		return this.materializeRunAssignment(baseCommit, assignments, graphGeneration);
 	}
 
-	materializeRunAssignment(expectedHead: string, assignments: StoredPlanSpec["assignment"][]): AssignmentEvidence {
+	materializeRunAssignment(expectedHead: string, assignments: StoredPlanSpec["assignment"][], graphGeneration: number): AssignmentEvidence {
 		const result = materializeAssignment({
 			planDir: this.planDirectory,
 			worktree: this.integrationWorktree,
 			expectedBranch: this.integrationBranch,
 			expectedHead,
-		}, { run: true, entries: assignments });
+		}, { run: true, entries: assignments, runGeneration: graphGeneration });
 		return {
 			bundlePath: String(result.bundlePath),
 			bundleSha256: String(result.bundleSha256),
@@ -383,16 +427,28 @@ export class GitDriver {
 		generation: number;
 		checkpointOrdinal: number;
 		gateCommands: string[];
+		approval: CompletionApprovalProof;
 	}): IntegrationResult {
 		let integrationHead = this.branchHead(this.integrationBranch);
 		let approvedHead = input.approvedHead;
 		const completionRef = `refs/plan-herder/${this.planName}/completed/${input.planId}`;
 		const completion = git(this.repoRoot, ["rev-parse", "--verify", "--quiet", completionRef], true).stdout.trim();
 		if (completion) {
-			if (completion !== integrationHead || this.branchHead(input.branch) !== completion) {
+			const evidence = parseCompletionTag(this.repoRoot, completionRef);
+			const expected = completionPayload(input.approval, evidence.object);
+			if (stableJson(evidence.payload) !== stableJson(expected)) throw new Error(`Completion approval proof changed for plan ${input.planId}`);
+			if (evidence.object !== integrationHead || this.branchHead(input.branch) !== evidence.object) {
 				throw new Error(`Completion evidence for plan ${input.planId} is inconsistent with integration`);
 			}
-			return { status: "integrated", head: completion };
+			return { status: "integrated", head: evidence.object };
+		}
+		if (input.approval.planId !== input.planId || input.approval.generation !== input.generation) {
+			throw new Error(`Approval identity does not match plan ${input.planId} generation ${input.generation}`);
+		}
+		if (integrationHead === input.approvedHead && this.branchHead(input.branch) === input.approvedHead) {
+			const payload = completionPayload(input.approval, integrationHead);
+			createCompletionTag(this.repoRoot, completionRef, `herder-${this.planName}-${input.planId}-generation-${input.generation}`, payload);
+			return { status: "integrated", head: integrationHead };
 		}
 		if (input.approvedBase !== integrationHead) {
 			const checkpoint = `refs/plan-herder/${this.planName}/checkpoints/${input.planId}/generation-${input.generation}-${String(input.checkpointOrdinal).padStart(3, "0")}`;
@@ -446,8 +502,15 @@ export class GitDriver {
 		const head = integrationHead;
 		if (head !== approvedHead) throw new Error(`Integration head mismatch for plan ${input.planId}`);
 		const existingCompletion = git(this.repoRoot, ["rev-parse", "--verify", "--quiet", completionRef], true).stdout.trim();
-		if (existingCompletion && existingCompletion !== head) throw new Error(`Completion ref for plan ${input.planId} moved`);
-		if (!existingCompletion) git(this.repoRoot, ["update-ref", completionRef, head, ZERO_OID]);
+		if (existingCompletion) {
+			const evidence = parseCompletionTag(this.repoRoot, completionRef);
+			if (evidence.object !== head || stableJson(evidence.payload) !== stableJson(completionPayload(input.approval, head))) {
+				throw new Error(`Completion ref for plan ${input.planId} moved`);
+			}
+		} else {
+			const payload = completionPayload(input.approval, head);
+			createCompletionTag(this.repoRoot, completionRef, `herder-${this.planName}-${input.planId}-generation-${input.generation}`, payload);
+		}
 		return { status: "integrated", head };
 	}
 }

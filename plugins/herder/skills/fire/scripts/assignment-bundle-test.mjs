@@ -213,9 +213,10 @@ try {
       "--expected-head", fixture.head,
     ])
     assert.equal(runMaterialized.scope, "RUN")
-    assert.equal(runMaterialized.relativePath, "herder-plans/.herder/run-assignment.json")
+    assert.equal(runMaterialized.relativePath, "herder-plans/.herder/run-assignment-generation-1.json")
     const runBundle = JSON.parse(fs.readFileSync(runMaterialized.bundlePath))
     assert.equal(runBundle.kind, "herder-run-assignment")
+    assert.equal(runBundle.assignment.graphGeneration, 1)
     assert.equal(runBundle.plans.length, 1)
     assert.equal(runBundle.plans[0].plan.id, "001")
     assert.equal(runBundle.plans[0].planText, fixture.snapshot.planText)

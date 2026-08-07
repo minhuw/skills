@@ -6,14 +6,16 @@ This protocol governs new native Fire runs on Codex, Claude Code, and Pi. The Ty
 
 The manager process is replaceable. Durable authority is reconstructed from:
 
-1. the immutable plan specification compiled into `.herder/execution.sqlite3` at fresh start;
-2. SQLite manager runs, typed plan phases, idempotent events/actions, parsed worker results, profile binding, attempts, usage, and service identity;
-3. exact Git branches, stable worktrees, leases, base/completion/checkpoint refs, commits, and trees; and
+1. immutable plan-graph generations compiled into `.herder/execution.sqlite3`, each with its exact graph hash and RUN assignment evidence;
+2. SQLite manager runs, typed plan phases, idempotent events/actions, exact approval proofs, parsed worker results, profile binding, attempts, usage, and service identity;
+3. exact Git branches, stable worktrees, leases, base/completion/checkpoint refs, commits, trees, and approval-bearing completion tags; and
 4. immutable worktree-local assignment bundles and SHA-256 evidence.
 
 `README.md` lifecycle cells are an idempotent human-readable projection of SQLite. They are never read back as scheduler authority after initial compilation.
 
 The process owns no authoritative in-memory queue. A healthy service is identified by its random instance ID, PID, loopback port, bearer token, and authenticated `/health` response matching the SQLite row. PID liveness alone is insufficient. A replacement process may overwrite only a stale service row and must read the run before accepting an event.
+
+Plan lifecycle text is excluded from the graph fingerprint because it is a projection. Plan content, metadata, dependencies, gate commands, filenames, and immutable assignment snapshots are included.
 
 ## 2. Fresh start
 
@@ -55,17 +57,25 @@ The first evidence-complete review is broad `DISCOVERY`; later reviews are targe
 
 Reviewer and Judge may not mutate. The manager compares frozen branch HEAD, tree, status, assignment, and user checkout around their action.
 
+Reviewer approval is not a conversational implication. The manager atomically stores the terminal action envelope, the next plan phase, and an exact approval row bound to run, plan, generation, round, assignment hash, approved base/HEAD/tree, Reviewer action/result, and—when Judge is involved—the Judge action/result. A plan cannot enter `READY_TO_INTEGRATE` without that transaction.
+
 ## 5. Integration
 
 Only the manager integrates, one plan at a time. It freezes approved base/HEAD/tree. If base equals integration HEAD, it fast-forwards. If stale, it creates an immutable checkpoint, rebases the same plan branch/worktree onto current integration, proves patch equivalence, reruns gates, and then fast-forwards.
 
 A conflicted restack remains preserved in place and advances to a GUIDED_REPAIR Implementer when a round remains. Detached HEAD is never generally accepted. Before dispatch, the manager acquires the exact action lease and explicitly invokes `inspect-active-rebase`, then `verify --verification-mode active-rebase` with the captured state hash and its recorded worktree, branch, assignment hash, checkpoint ref/target, rebase `onto`, original head, detached HEAD, and lease. Any mismatch fails closed and releases the unused lease. The worker may resolve only that sealed conflict and complete `git rebase --continue`; its terminal result must pass ordinary attached-branch assignment verification again.
 
-After integration, the manager creates the absent exact completion ref, proves reachability, and transitions the plan to `DONE`. Newly dependency-ready plans may then start immediately. Other workers continue while one integration transaction runs.
+Before any integration mutation, the manager mechanically reconstructs and validates the approval hash and both terminal action records. After integration, it creates an annotated completion tag under the exact completion ref. The tag binds the approval proof to the integrated commit; bare commit refs and malformed or mismatched proof tags fail closed. Only then does the plan transition to `DONE`. Newly dependency-ready plans may start immediately. Other workers continue while one integration transaction runs.
 
-## 6. Completion and recovery
+## 6. Plan-graph revision
 
-When every plan is terminal and no worker is active, the manager schedules one read-only RUN Reviewer over the immutable run assignment, integrated tree, dependency guarantees, combined public transitions, and project-wide gates. Approval marks the run complete. A final blocker becomes `needs_input` or failed evidence; it does not silently reopen arbitrary implementation. Completion reporting and dashboard phases are projected from the same SQLite plan specification, phases, attempts, and timing records, never inferred from conversation history or leases.
+Any graph drift pauses scheduling. `resume` refuses to reinterpret it. With zero proposed or dispatched workers, `revise` may compile a new immutable graph generation, materialize a generation-specific RUN assignment, and atomically select it as current.
+
+A revision may add plans and may change content or dependencies only for plans with no runtime row. Existing plans may not be removed. Any plan with execution, review, integration, or final-audit evidence remains bound to its original generation and assignment. Changing such a plan requires a separate trusted-base recovery namespace; Herder never rewrites history or silently reuses approval across changed content.
+
+## 7. Completion and recovery
+
+When every plan is terminal and no worker is active, the manager schedules one read-only RUN Reviewer over the current generation's immutable RUN assignment, integrated tree, dependency guarantees, combined public transitions, and project-wide gates. A later graph revision invalidates that final audit and creates a new one for the new generation. Approval marks the run complete. A final blocker becomes `needs_input` or failed evidence; it does not silently reopen arbitrary implementation. Completion reporting and dashboard phases are projected from the same SQLite generation, plan specification, phases, approvals, attempts, and timing records, never inferred from conversation history or leases.
 
 On process restart, the service reloads the same database, proposed/dispatched actions, and Git leases. The host adapter restores known handles from its own session state; unknown ownership preserves the action for explicit host reconciliation rather than dispatching a competitor. Conversation history is never recovery authority.
 

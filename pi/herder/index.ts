@@ -135,7 +135,7 @@ export default function registerHerderPi(pi: ExtensionAPI): void {
 		await validateHerderRoleAgents(PI_AGENT_ROOT, profile, ctx.modelRegistry.getAvailable());
 	};
 
-	const updateFromReply = (reply: ManagerReply, profile?: string, mode?: "fire" | "resume") => {
+	const updateFromReply = (reply: ManagerReply, profile?: string, mode?: "fire" | "resume" | "revise") => {
 		if (reply.status === "idle") {
 			currentState = undefined;
 			lastSummary = undefined;
@@ -299,6 +299,7 @@ export default function registerHerderPi(pi: ExtensionAPI): void {
 
 	pi.registerCommand("herder-fire", { description: "Start a deterministic background Herder run.", handler: command((args, ctx) => launch(parseFireArguments(args, "fire"), ctx)) });
 	pi.registerCommand("herder-resume", { description: "Resume a deterministic Herder run.", handler: command((args, ctx) => launch(parseFireArguments(args, "resume"), ctx)) });
+	pi.registerCommand("herder-revise", { description: "Adopt a validated new plan-graph generation.", handler: command((args, ctx) => launch(parseFireArguments(args, "revise"), ctx)) });
 	pi.registerCommand("herder-status", { description: "Show Herder manager and plan status.", handler: command((args, ctx) => status(parsePlanDirArguments(args).planDir, ctx)) });
 	pi.registerCommand("herder-dashboard", { description: "Open the manager-hosted Herder dashboard.", handler: command((args, ctx) => dashboard(parsePlanDirArguments(args).planDir, ctx)) });
 	pi.registerCommand("herder-stop", {
@@ -313,9 +314,9 @@ export default function registerHerderPi(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "herder",
 		label: "Herder",
-		description: "Start, resume, inspect, or open the dashboard for a deterministic Herder plan run.",
+		description: "Start, resume, revise, inspect, or open the dashboard for a deterministic Herder plan run.",
 		parameters: Type.Object({
-			action: Type.Union([Type.Literal("fire"), Type.Literal("resume"), Type.Literal("status"), Type.Literal("dashboard")]),
+			action: Type.Union([Type.Literal("fire"), Type.Literal("resume"), Type.Literal("revise"), Type.Literal("status"), Type.Literal("dashboard")]),
 			planDir: Type.Optional(Type.String()),
 			profile: Type.Optional(Type.String()),
 			maxParallel: Type.Optional(Type.Integer({ minimum: 1, maximum: 32 })),
@@ -325,7 +326,7 @@ export default function registerHerderPi(pi: ExtensionAPI): void {
 			try {
 				if (params.action === "status") return toolResult(await status(params.planDir, ctx));
 				if (params.action === "dashboard") return toolResult(await dashboard(params.planDir, ctx));
-				return toolResult(await launch({ mode: params.action, planDir: params.planDir || "herder-plans", ...(params.profile ? { profile: params.profile } : {}), ...(params.maxParallel === undefined && params.action === "resume" ? {} : { maxParallel: params.maxParallel ?? 5 }), dashboardPort: 0 }, ctx));
+				return toolResult(await launch({ mode: params.action, planDir: params.planDir || "herder-plans", ...(params.profile ? { profile: params.profile } : {}), ...(params.maxParallel === undefined && params.action !== "fire" ? {} : { maxParallel: params.maxParallel ?? 5 }), dashboardPort: 0 }, ctx));
 			} catch (error) { return toolResult(message(error), true); }
 		},
 	});

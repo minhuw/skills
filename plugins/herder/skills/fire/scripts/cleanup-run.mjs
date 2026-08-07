@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { buildGraph } from "../../plans/scripts/herder-plans.mjs"
 import { parseCoordinationRefRelative } from "./coordination-ref.mjs"
+import { inspectCompletionProof } from "./completion-proof.mjs"
 
 function fail(message) {
   throw new Error(message)
@@ -196,7 +197,8 @@ function listCompletionRefs(repoRoot, planName) {
     const ref = line.slice(0, separator)
     const target = line.slice(separator + 1)
     const relative = ref.slice(prefix.length)
-    return { ref, target, relative, plan: /^\d{3,}$/.test(relative) ? relative : null }
+    const plan = /^\d{3,}$/.test(relative) ? relative : null
+    return { ref, target, relative, plan, proof: inspectCompletionProof(repoRoot, ref) }
   })
 }
 
@@ -222,7 +224,7 @@ function completionProofs(repoRoot, integrationHead, completionRefs) {
   const completedPlans = new Set()
   for (const item of completionRefs) {
     if (!item.plan) continue
-    if (isAncestor(repoRoot, item.target, integrationHead)) completedPlans.add(item.plan)
+    if (item.proof.ok && item.proof.payload.planId === item.plan && isAncestor(repoRoot, item.proof.object, integrationHead)) completedPlans.add(item.plan)
   }
   return completedPlans
 }
@@ -394,8 +396,13 @@ export function cleanupRun(input) {
             finalization.blockers.push({ reason: "completion-ref-plan-not-done", ref: item.ref, plan: item.plan })
             continue
           }
-          if (!isAncestor(repoRoot, item.target, integrationHead)) {
-            finalization.blockers.push({ reason: "completion-ref-not-reachable", ref: item.ref, target: item.target })
+          const proof = inspectCompletionProof(repoRoot, item.ref)
+          if (!proof.ok || proof.payload.planId !== item.plan) {
+            finalization.blockers.push({ reason: "completion-approval-proof-invalid", ref: item.ref, detail: proof.error ?? "plan identity mismatch" })
+            continue
+          }
+          if (!isAncestor(repoRoot, proof.object, integrationHead)) {
+            finalization.blockers.push({ reason: "completion-ref-not-reachable", ref: item.ref, target: proof.object })
             continue
           }
         }

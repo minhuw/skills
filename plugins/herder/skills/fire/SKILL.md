@@ -1,6 +1,6 @@
 ---
 name: fire
-description: Execute, resume, inspect, stop, or clean a validated herder-plans/ backlog through Herder's deterministic Run Manager. Use when the user asks to fire, run, resume, monitor, stop, or clean Herder plans. Do not use to create plans or implement one ordinary task directly.
+description: Execute, resume, revise, inspect, stop, or clean a validated herder-plans/ backlog through Herder's deterministic Run Manager. Use when the user asks to fire, run, revise, resume, monitor, stop, or clean Herder plans. Do not use to create plans or implement one ordinary task directly.
 ---
 
 # Herder Fire
@@ -16,6 +16,7 @@ Codex uses `$herder:fire`; Claude Code uses `/herder:fire`.
 ```text
 herder:fire [<plan-dir>] [--plan-name <name>] [--max-parallel <n>] [--profile <name>]
 herder:fire resume [<plan-dir>] [--profile <name>]
+herder:fire revise [<plan-dir>] [--profile <name>]
 herder:fire status [<plan-dir>]
 herder:fire stop [<plan-dir>]
 herder:fire cleanup [<plan-dir>] [--plan <id>] [--dry-run] [--include-failed] [--finalize] [--handoff-target <branch>]
@@ -25,9 +26,11 @@ Defaults: `herder-plans/`, host profile `eclipse` on Codex or `shannon` on Claud
 
 ## Control loop
 
-Use the plugin's structured `herder_control` tool for `fire`, `resume`, `status`, `stop`, and every manager event. Never encode manager events into shell arguments or mutate SQLite directly.
+Use the plugin's structured `herder_control` tool for `fire`, `resume`, `revise`, `status`, `stop`, and every manager event. Never encode manager events into shell arguments or mutate SQLite directly.
 
-For `fire` or `resume`, pass the absolute plan directory and repository root, current host, requested profile, plan name, and parallel limit. Validate the returned protocol version and run ID. The manager response contains zero or more actions.
+For `fire`, `resume`, or `revise`, pass the absolute plan directory and repository root, current host, requested profile, plan name, and parallel limit. Validate the returned protocol version and run ID. The manager response contains zero or more actions.
+
+If plan content or dependencies change during a run, the manager pauses on graph drift. Wait until no worker action is proposed or dispatched, validate the revised plan set, then use `revise`. Revision creates a new immutable graph generation and RUN assignment. It may add plans or change plans whose execution has never started; it cannot remove plans or rewrite any plan with runtime evidence. Use `resume` only when the graph still matches the recorded generation.
 
 For every action:
 
@@ -58,6 +61,8 @@ node <plugin-root>/skills/plans/scripts/herder-plans.mjs report RUN <plan-dir> -
 
 - SQLite is the only runtime lifecycle authority. README status is a manager-maintained projection; Git refs and worktrees are proof/effect state.
 - The manager schedules only Implementer, Reviewer, and Judge in one role-agnostic pool. Each plan has at most one active role; only integration is serialized.
+- A plan becomes integration-ready only in the same SQLite transaction that records its exact terminal Reviewer/Judge result and approval proof. Integration revalidates that proof against run, plan, generation, round, assignment, approved base/HEAD/tree, and the exact terminal actions.
+- A completion ref is an annotated proof object bound to the approval and integrated commit. A bare commit ref is invalid completion evidence.
 - Reviewer and Judge are read-only. Implementer must leave the expected branch attached, assignment unchanged, worktree clean, and committed changes passing manager-run gates.
 - A nonapproving review in rounds 1–2 goes directly to repair. Beginning with unresolved round 3, Judge filters findings before repair. Six substantive rounds are available.
 - File and line counts never gate scope. Preserve the user's checkout and never merge into it, push, publish, deploy, or open a PR.

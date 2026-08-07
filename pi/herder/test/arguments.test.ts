@@ -24,6 +24,11 @@ test("fire defaults to a five-worker pool and an ephemeral dashboard port", () =
 		planDir: "herder-plans",
 		dashboardPort: 0,
 	});
+	assert.deepEqual(parseFireArguments("", "revise"), {
+		mode: "revise",
+		planDir: "herder-plans",
+		dashboardPort: 0,
+	});
 	assert.deepEqual(parseFireArguments("custom --profile offcut --max-parallel 7 --dashboard-port 4312", "resume"), {
 		mode: "resume",
 		planDir: "custom",

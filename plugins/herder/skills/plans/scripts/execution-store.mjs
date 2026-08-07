@@ -5,7 +5,7 @@ import path from "node:path"
 const require = createRequire(import.meta.url)
 
 export const EXECUTION_DATABASE_RELATIVE = ".herder/execution.sqlite3"
-export const EXECUTION_SCHEMA_VERSION = 5
+export const EXECUTION_SCHEMA_VERSION = 6
 
 const IDENTITY_FIELDS = [
   "attempt",
@@ -103,6 +103,8 @@ function initializeSchema(database, { allowInitialize = true } = {}) {
         profile_name TEXT NOT NULL,
         profile_sha256 TEXT NOT NULL,
         max_parallel INTEGER NOT NULL CHECK (max_parallel > 0),
+        current_generation INTEGER NOT NULL CHECK (current_generation > 0),
+        graph_sha256 TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('initializing', 'running', 'paused', 'needs_input', 'complete', 'failed', 'stopped')),
         checkout_state_token TEXT NOT NULL,
         base_commit TEXT NOT NULL,
@@ -114,6 +116,18 @@ function initializeSchema(database, { allowInitialize = true } = {}) {
         updated_at TEXT NOT NULL
       );
       CREATE UNIQUE INDEX manager_runs_plan_directory ON manager_runs(plan_directory);
+
+      CREATE TABLE manager_generations (
+        run_id TEXT NOT NULL REFERENCES manager_runs(run_id) ON DELETE CASCADE,
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        graph_sha256 TEXT NOT NULL,
+        parent_generation INTEGER,
+        run_assignment_path TEXT NOT NULL,
+        run_assignment_sha256 TEXT NOT NULL,
+        run_snapshot_sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, generation)
+      );
 
       CREATE TABLE manager_plans (
         run_id TEXT NOT NULL REFERENCES manager_runs(run_id) ON DELETE CASCADE,
@@ -185,7 +199,9 @@ function initializeSchema(database, { allowInitialize = true } = {}) {
 
       CREATE TABLE manager_plan_specs (
         run_id TEXT NOT NULL REFERENCES manager_runs(run_id) ON DELETE CASCADE,
+        graph_generation INTEGER NOT NULL CHECK (graph_generation > 0),
         plan_id TEXT NOT NULL,
+        plan_fingerprint TEXT NOT NULL,
         ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
         title TEXT NOT NULL,
         priority TEXT NOT NULL,
@@ -197,10 +213,30 @@ function initializeSchema(database, { allowInitialize = true } = {}) {
         gate_commands_json TEXT NOT NULL,
         plan_file TEXT NOT NULL,
         assignment_json TEXT NOT NULL,
-        PRIMARY KEY (run_id, plan_id)
+        PRIMARY KEY (run_id, graph_generation, plan_id)
       );
-      CREATE UNIQUE INDEX manager_plan_specs_ordinal ON manager_plan_specs(run_id, ordinal);
-      PRAGMA user_version = 5;
+      CREATE UNIQUE INDEX manager_plan_specs_ordinal ON manager_plan_specs(run_id, graph_generation, ordinal);
+
+      CREATE TABLE manager_approvals (
+        run_id TEXT NOT NULL REFERENCES manager_runs(run_id) ON DELETE CASCADE,
+        plan_id TEXT NOT NULL,
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        round_number INTEGER NOT NULL CHECK (round_number BETWEEN 1 AND 6),
+        reviewer_action_id TEXT NOT NULL REFERENCES manager_actions(action_id),
+        decision_action_id TEXT NOT NULL REFERENCES manager_actions(action_id),
+        decision_role TEXT NOT NULL CHECK (decision_role IN ('plan-reviewer', 'plan-judge')),
+        assignment_sha256 TEXT NOT NULL,
+        approved_base TEXT NOT NULL,
+        approved_head TEXT NOT NULL,
+        approved_tree TEXT NOT NULL,
+        review_result_sha256 TEXT NOT NULL,
+        decision_result_sha256 TEXT NOT NULL,
+        proof_sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, plan_id, generation)
+      );
+      CREATE UNIQUE INDEX manager_approvals_proof ON manager_approvals(proof_sha256);
+      PRAGMA user_version = 6;
   `)
 }
 
@@ -447,14 +483,16 @@ function parseJsonColumn(value, fallback) {
 
 export function readManagerState(planDir) {
   const database = openDatabase(planDir, { readOnly: true })
-  if (!database) return { run: null, specs: [], plans: [], actions: [], service: null }
+  if (!database) return { run: null, specs: [], plans: [], actions: [], generations: [], approvals: [], service: null }
   try {
     const table = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'manager_runs'").get()
-    if (!table) return { run: null, specs: [], plans: [], actions: [], service: null }
+    if (!table) return { run: null, specs: [], plans: [], actions: [], generations: [], approvals: [], service: null }
     const run = database.prepare("SELECT * FROM manager_runs ORDER BY created_at DESC LIMIT 1").get() ?? null
     const plans = run ? database.prepare("SELECT * FROM manager_plans WHERE run_id = ? ORDER BY plan_id").all(run.run_id) : []
-    const specs = run ? database.prepare("SELECT * FROM manager_plan_specs WHERE run_id = ? ORDER BY ordinal, plan_id").all(run.run_id) : []
+    const specs = run ? database.prepare("SELECT * FROM manager_plan_specs WHERE run_id = ? AND graph_generation = ? ORDER BY ordinal, plan_id").all(run.run_id, run.current_generation) : []
     const actions = run ? database.prepare("SELECT * FROM manager_actions WHERE run_id = ? ORDER BY created_at, action_id").all(run.run_id) : []
+    const generations = run ? database.prepare("SELECT * FROM manager_generations WHERE run_id = ? ORDER BY generation").all(run.run_id) : []
+    const approvals = run ? database.prepare("SELECT * FROM manager_approvals WHERE run_id = ? ORDER BY plan_id, generation").all(run.run_id) : []
     const service = database.prepare(`
       SELECT instance_id, pid, port, dashboard_url, forwarded_url, started_at
       FROM manager_service WHERE singleton = 1
@@ -467,6 +505,8 @@ export function readManagerState(planDir) {
         profile: run.profile_name,
         profileSha256: run.profile_sha256,
         maxParallel: run.max_parallel,
+        currentGeneration: run.current_generation,
+        graphSha256: run.graph_sha256,
         status: run.status,
         integrationBranch: run.integration_branch,
         integrationWorktree: run.integration_worktree,
@@ -476,7 +516,9 @@ export function readManagerState(planDir) {
         updatedAt: run.updated_at,
       } : null,
       specs: specs.map((spec) => ({
+        graphGeneration: spec.graph_generation,
         planId: spec.plan_id,
+        planFingerprint: spec.plan_fingerprint,
         ordinal: spec.ordinal,
         title: spec.title,
         priority: spec.priority,
@@ -519,6 +561,31 @@ export function readManagerState(planDir) {
         hostHandle: action.host_handle,
         createdAt: action.created_at,
         updatedAt: action.updated_at,
+      })),
+      generations: generations.map((generation) => ({
+        generation: generation.generation,
+        graphSha256: generation.graph_sha256,
+        parentGeneration: generation.parent_generation,
+        runAssignmentPath: generation.run_assignment_path,
+        runAssignmentSha256: generation.run_assignment_sha256,
+        runSnapshotSha256: generation.run_snapshot_sha256,
+        createdAt: generation.created_at,
+      })),
+      approvals: approvals.map((approval) => ({
+        planId: approval.plan_id,
+        generation: approval.generation,
+        round: approval.round_number,
+        reviewerActionId: approval.reviewer_action_id,
+        decisionActionId: approval.decision_action_id,
+        decisionRole: approval.decision_role,
+        assignmentSha256: approval.assignment_sha256,
+        approvedBase: approval.approved_base,
+        approvedHead: approval.approved_head,
+        approvedTree: approval.approved_tree,
+        reviewResultSha256: approval.review_result_sha256,
+        decisionResultSha256: approval.decision_result_sha256,
+        proofSha256: approval.proof_sha256,
+        createdAt: approval.created_at,
       })),
       service: service ? {
         instanceId: service.instance_id,

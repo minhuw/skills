@@ -9,6 +9,7 @@ import process from "node:process"
 import { spawnSync } from "node:child_process"
 import { recordUsage } from "../../plans/scripts/herder-plans.mjs"
 import { executionDatabasePath } from "../../plans/scripts/execution-store.mjs"
+import { buildCompletionProofPayload, writeCompletionProof } from "../../fire/scripts/completion-proof.mjs"
 import { buildDashboardState, buildForecast, derivePlanPhase, parseLease, parseWorktreeList } from "./dashboard-state.mjs"
 import { detectDashboardEnvironment, enableDashboardHostAccess, resolveOrcaCommand, resolveVSCodeProxyUrl, runHostCommand } from "./dashboard-host.mjs"
 import { createDashboardServer, parseDashboardArguments } from "./herder-dashboard.mjs"
@@ -17,6 +18,27 @@ function git(root, ...args) {
   const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" })
   assert.equal(result.status, 0, result.stderr || result.stdout)
   return result.stdout.trim()
+}
+
+function addCompletionProof(repo, planId) {
+  const head = git(repo, "rev-parse", "HEAD")
+  const payload = buildCompletionProofPayload({
+    runId: "dashboard-test",
+    planId,
+    generation: 1,
+    round: 1,
+    reviewerActionId: `reviewer-${planId}`,
+    decisionActionId: `reviewer-${planId}`,
+    decisionRole: "plan-reviewer",
+    assignmentSha256: "a".repeat(64),
+    approvedBase: head,
+    approvedHead: head,
+    approvedTree: git(repo, "rev-parse", "HEAD^{tree}"),
+    reviewResultSha256: "b".repeat(64),
+    decisionResultSha256: "b".repeat(64),
+    integratedHead: head,
+  })
+  writeCompletionProof(repo, `refs/plan-herder/demo/completed/${planId}`, payload, `herder-demo-${planId}-generation-1`)
 }
 
 function requestWithHost(url, host) {
@@ -248,8 +270,8 @@ function createFixture() {
   const worker = path.join(root, "worker-002")
   git(repo, "worktree", "add", "-q", worker, "herder/demo/002")
   git(repo, "worktree", "lock", "--reason", "plan-herder:demo:002:plan-reviewer:demo-002-reviewer-2:review", worker)
-  git(repo, "update-ref", "refs/plan-herder/demo/completed/001", "HEAD")
-  git(repo, "update-ref", "refs/plan-herder/demo/completed/005", "HEAD")
+  addCompletionProof(repo, "001")
+  addCompletionProof(repo, "005")
   return {
     root,
     repo,

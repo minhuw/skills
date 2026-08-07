@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const MANAGER_PROTOCOL_VERSION = 1;
+export const MANAGER_PROTOCOL_VERSION = 2;
 export const RUN_STATUSES = ["initializing", "running", "paused", "needs_input", "complete", "failed", "stopped"] as const;
 export const WORKER_ROLES = ["plan-implementer", "plan-reviewer", "plan-judge"] as const;
 export const PLAN_PHASES = [
