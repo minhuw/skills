@@ -4,3 +4,5 @@
 .envrc
 .envrc.local
 .DS_Store
+node_modules/
+.pi-subagents/

@@ -1,6 +1,26 @@
 # Herder
 
-Herder is a task orchestrator engine for Claude Code and Codex. It shapes objectives into focused semantically bounded plan graphs, executes independent six-round implementation/review loops, and uses an independent Judge to filter unresolved findings from round three onward. One persistent Accountant owns scheduling, SQLite attempt accounting and rich run reports, lifecycle transitions, gates, Git transactions, and integration while the root only dispatches and waits for workers. A read-only local dashboard visualizes dependency pipelines and execution evidence, and the optional Orca runtime can route plan workers across different CLI harnesses while preserving one plan, review, and integration protocol.
+Herder is a task orchestrator engine for Pi, Claude Code, and Codex. It shapes objectives into focused semantically bounded plan graphs, executes independent six-round implementation/review loops, and uses an independent Judge to filter unresolved findings from round three onward. One persistent Accountant owns scheduling, SQLite attempt accounting and rich run reports, lifecycle transitions, gates, Git transactions, and integration. A read-only local dashboard visualizes dependency pipelines and execution evidence, and the optional Orca runtime can route plan workers across different CLI harnesses while preserving one plan, review, and integration protocol.
+
+## Pi
+
+Install the orchestration runtime once, then install Herder as a native Pi package rather than a skill:
+
+```sh
+pi install npm:pi-subagents
+pi install git:github.com/minhuw/skills
+```
+
+For development, install this checkout directly with `pi install /absolute/path/to/skills`. Start Pi with the selected profile's root model and thinking level, then launch Herder:
+
+```text
+pi --model <provider>/gpt-5.6-sol --thinking max
+/herder-fire herder-plans --profile eclipse
+```
+
+Herder does not vendor or install `pi-subagents`; the first command above installs the shared runtime independently. Herder registers five package-scoped role agents and provides `/herder-fire`, `/herder-resume`, `/herder-status`, `/herder-dashboard`, and `/herder-stop` plus the model-callable `herder` tool. At launch it verifies the runtime's public RPC contract and reports the installation command if the runtime is absent. Keeping one runtime installation avoids duplicate tool registration when other Pi packages also use `pi-subagents`. Fire runs in the background, launches the read-only dashboard on an available port, and keeps independent Implementer → Reviewer pipelines full up to `--max-parallel` (default 5). The persistent Pi controller is outside that worker count.
+
+Pi uses one generic agent definition per Herder role. A profile supplies each launch's exact model and thinking level, so adding profiles does not multiply agent files. Herder validates the active root model, every child model, and its own package-agent metadata; the independently installed runtime validates its RPC protocol and launch execution before repository mutation.
 
 ## Claude Code
 
@@ -22,15 +42,15 @@ Start a new Codex session and run `$herder:install`. Follow any printed Multi-Ag
 
 ## Native role profiles
 
-Install registers every bundled profile and keeps the historical unqualified roles only for old-run resume compatibility. Fire selects a named profile with `--profile`; without it, Codex uses `eclipse` and Claude uses `shannon`.
+Install registers every bundled profile and keeps the historical unqualified roles only for old-run resume compatibility. Fire selects a named profile with `--profile`; without it, Codex and Pi use `eclipse`, while Claude uses `shannon`.
 
 | Profile | Root orchestrator | Accountant | Implementer | Reviewer | Judge | Saver |
 |---|---|---|---|---|---|---|
 | `eclipse` | GPT-5.6 Sol, max | GPT-5.6 Luna, max, Fast | GPT-5.6 Luna, max, Fast | GPT-5.6 Sol, xhigh | GPT-5.6 Sol, xhigh | GPT-5.6 Sol, xhigh |
 | `shannon` | Claude Opus 4.8, high | Claude Opus 4.8, medium | Claude Opus 4.8, high | Claude Opus 4.8, xhigh | Claude Opus 4.8, xhigh | Claude Opus 4.8, xhigh |
-| `offcut` | Kimi K3 (`kimi-k3`), max | Grok 4.5, max | Grok 4.5, high | GPT-5.6 Sol, xhigh | GPT-5.6 Sol, xhigh | GPT-5.6 Sol, max |
+| `offcut` | Kimi K3 (`kimi-k3`), max | Grok 4.5, high | Grok 4.5, high | GPT-5.6 Sol, xhigh | GPT-5.6 Sol, xhigh | GPT-5.6 Sol, max |
 
-`eclipse` and `offcut` are available on both native hosts; `shannon` is Claude-only. A profile declares the required root-orchestrator model and controls Herder's persistent Accountant and worker roles. Select the root model when launching Codex or Claude Code; `--profile` validates the requirement but cannot replace the model of an already-running session.
+All three profiles are available in Pi because Pi resolves their model identifiers through its active model registry. `eclipse` and `offcut` are available on both legacy native hosts; `shannon` is Claude-only outside Pi. A profile declares the required root-orchestrator model and controls Herder's persistent Accountant and worker roles. Select the root model when launching Pi, Codex, or Claude Code; `--profile` validates the requirement but cannot replace the model of an already-running session.
 
 ```text
 $herder:fire herder-plans --profile offcut

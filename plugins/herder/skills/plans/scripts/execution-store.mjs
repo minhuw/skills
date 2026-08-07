@@ -362,7 +362,7 @@ function normalizeRunConfiguration(input = {}) {
   const profileSha256 = requiredText(input.profileSha256, "Profile SHA-256").toLowerCase()
   if (!/^[0-9a-f]{64}$/.test(profileSha256)) fail("Profile SHA-256 must contain 64 hexadecimal characters")
   const host = requiredText(input.host, "Host")
-  if (!["codex", "claude"].includes(host)) fail("Host must be codex or claude")
+  if (!["codex", "claude", "pi"].includes(host)) fail("Host must be codex, claude, or pi")
   let roles
   try {
     roles = typeof input.roles === "string" ? JSON.parse(input.roles) : input.roles

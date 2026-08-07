@@ -11,7 +11,7 @@ const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "../..");
 const CATALOG_PATH = path.join(PLUGIN_ROOT, "agent-profiles/profiles.json");
 const MANIFEST_PATH = path.join(PLUGIN_ROOT, "agent-profiles/manifest.json");
 const ROLES = ["plan-accountant", "plan-implementer", "plan-reviewer", "plan-judge", "plan-saver"];
-const HOSTS = ["codex", "claude"];
+const HOSTS = ["codex", "claude", "pi"];
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:+/-]*$/;
 const EFFORTS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
@@ -19,8 +19,8 @@ class UsageError extends Error {}
 
 function usage() {
   return `Usage:
-  profile-registry.mjs list [--host codex|claude] [--pretty]
-  profile-registry.mjs resolve --host codex|claude [--profile name] [--pretty]
+  profile-registry.mjs list [--host codex|claude|pi] [--pretty]
+  profile-registry.mjs resolve --host codex|claude|pi [--profile name] [--pretty]
   profile-registry.mjs build
   profile-registry.mjs check
 `;
@@ -42,7 +42,7 @@ function parseArgs(argv) {
       else options.profile = value;
     } else throw new UsageError(`Unknown argument: ${argument}`);
   }
-  if (options.host && !HOSTS.includes(options.host)) throw new UsageError("--host must be codex or claude");
+  if (options.host && !HOSTS.includes(options.host)) throw new UsageError("--host must be codex, claude, or pi");
   if (command === "resolve" && !options.host) throw new UsageError("resolve requires --host");
   if (!["resolve"].includes(command) && options.profile) throw new UsageError("--profile is valid only with resolve");
   if (["build", "check"].includes(command) && options.host) throw new UsageError(`--host is not valid with ${command}`);
@@ -78,7 +78,7 @@ function parseCatalog(bytes) {
   const unknownCatalogFields = Object.keys(catalog).filter((field) => !["schema_version", "defaults", "profiles"].includes(field));
   if (unknownCatalogFields.length) throw new Error(`Unknown profile catalog fields: ${unknownCatalogFields.join(", ")}`);
   if (Object.keys(catalog.defaults).length !== HOSTS.length || HOSTS.some((host) => !Object.hasOwn(catalog.defaults, host))) {
-    throw new Error("Profile defaults must define exactly codex and claude");
+    throw new Error("Profile defaults must define exactly codex, claude, and pi");
   }
   const names = new Set();
   for (const profile of catalog.profiles) {
@@ -135,6 +135,10 @@ function claudeIdentity(profileName, role) {
   return `${profileName}-${role}`;
 }
 
+function piIdentity(role) {
+  return `herder.${role}`;
+}
+
 function roleTemplate(host, role) {
   if (role === "plan-accountant") {
     return host === "codex"
@@ -183,6 +187,7 @@ async function generatedState(catalog) {
     hosts: {
       codex: { mode: "copy", files: [] },
       claude: { mode: "bundled", files: [] },
+      pi: { mode: "package", files: [] },
     },
   };
   const files = new Map();
@@ -193,6 +198,9 @@ async function generatedState(catalog) {
     const claudeBytes = await readFile(path.join(PLUGIN_ROOT, claudeSource));
     manifest.hosts.codex.files.push({ source: codexSource, target: path.basename(codexSource), legacy: true, sha256: sha256(codexBytes) });
     manifest.hosts.claude.files.push({ source: claudeSource, identifier: `herder:${role}`, legacy: true, sha256: sha256(claudeBytes) });
+    const piSource = `../../pi/herder/agents/${role}.md`;
+    const piBytes = await readFile(path.resolve(PLUGIN_ROOT, piSource));
+    manifest.hosts.pi.files.push({ source: piSource, identifier: piIdentity(role), role, generic: true, sha256: sha256(piBytes) });
   }
   for (const profile of catalog.profiles) {
     const hash = profileHash(profile);
@@ -209,7 +217,7 @@ async function generatedState(catalog) {
           files.set(source, bytes);
           manifest.hosts.codex.files.push({ source, target, profile: profile.name, role, sha256: sha256(bytes) });
           roles[role] = { agent_type: codexIdentity(profile.name, role), model: mapping.model, effort: mapping.effort, ...(mapping.service_tier ? { service_tier: mapping.service_tier } : {}) };
-        } else {
+        } else if (host === "claude") {
           const template = await readFile(path.join(PLUGIN_ROOT, roleTemplate(host, role)), "utf8");
           const name = claudeIdentity(profile.name, role);
           const source = `agents/${name}.md`;
@@ -218,6 +226,13 @@ async function generatedState(catalog) {
           const identifier = `herder:${name}`;
           manifest.hosts.claude.files.push({ source, identifier, profile: profile.name, role, sha256: sha256(bytes) });
           roles[role] = { agent_type: identifier, model: mapping.model, effort: mapping.effort };
+        } else {
+          roles[role] = {
+            agent_type: piIdentity(role),
+            model: mapping.model,
+            effort: mapping.effort,
+            ...(mapping.service_tier ? { service_tier: mapping.service_tier } : {}),
+          };
         }
       }
       entry.hosts[host] = { roles };
@@ -302,7 +317,7 @@ function resolveProfile(catalog, manifest, host, requested) {
 }
 
 async function verifyCompiledProfileFiles(manifest, profile, host) {
-  const files = manifest.hosts?.[host]?.files?.filter((file) => file.profile === profile) || [];
+  const files = manifest.hosts?.[host]?.files?.filter((file) => host === "pi" ? file.generic === true : file.profile === profile) || [];
   if (files.length !== ROLES.length || ROLES.some((role) => !files.some((file) => file.role === role))) {
     throw new Error(`Compiled Herder profile ${JSON.stringify(profile)} has an incomplete ${host} role set`);
   }

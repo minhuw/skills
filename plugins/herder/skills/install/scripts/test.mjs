@@ -74,7 +74,7 @@ process.stdout.write("multi_agent_v2                       under development  tr
   const frontierReviewer = await readFile(path.join(projectRoot, ".codex/agents/offcut_plan_reviewer.toml"), "utf8");
   const frontierSaver = await readFile(path.join(projectRoot, ".codex/agents/offcut_plan_saver.toml"), "utf8");
   assert.match(frontierAccountant, /^model = "grok-4\.5"$/m);
-  assert.match(frontierAccountant, /^model_reasoning_effort = "max"$/m);
+  assert.match(frontierAccountant, /^model_reasoning_effort = "high"$/m);
   assert.match(frontierAccountant, /bind the resolved profile/);
   assert.match(frontierImplementer, /^model = "grok-4\.5"$/m);
   assert.match(frontierReviewer, /^model = "gpt-5\.6-sol"$/m);

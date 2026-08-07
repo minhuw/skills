@@ -775,7 +775,7 @@ function usage() {
     "  herder-plans snapshot <plan-id> [plan-dir] [--pretty]",
     "  herder-plans transition <plan-id> <status> [plan-dir] [--detail <text>] [--pretty]",
     "  herder-plans record-usage <plan-id|RUN> <role> [plan-dir] --attempt <id> --model <model> --effort <effort> --outcome <outcome> [--input-tokens <n|unknown>] [--cached-input-tokens <n|unknown>] [--output-tokens <n|unknown>] [--reasoning-tokens <n|unknown>] [--source <host-source|unknown>] [--round <1..6>] [--generation <id>] [--runtime <native|orca>] [--harness <name>] [--service-tier <tier>] [--started-at <iso>] [--finished-at <iso>] [--duration-ms <n>] [--pretty]",
-    "  herder-plans bind-profile [plan-dir] --profile <name> --profile-sha256 <hash> --host <codex|claude> --roles-json <json> [--pretty]",
+    "  herder-plans bind-profile [plan-dir] --profile <name> --profile-sha256 <hash> --host <codex|claude|pi> --roles-json <json> [--pretty]",
     "  herder-plans profile [plan-dir] [--pretty]",
     "  herder-plans usage [plan-dir] [--pretty]",
     "  herder-plans report <plan-id|RUN> [plan-dir] [--pretty]",

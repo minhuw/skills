@@ -212,6 +212,18 @@ try {
     () => bindRunProfile(valid.planDir, { ...runProfile, profile: "eclipse" }),
     /already bound to offcut/,
   )
+  const piProfileDir = writeFixture(path.join(root, "pi-profile"))
+  const piProfile = {
+    ...runProfile,
+    host: "pi",
+    roles: Object.fromEntries(Object.entries(runProfile.roles).map(([role, mapping]) => [role, {
+      ...mapping,
+      agent_type: `herder.${role}`,
+    }])),
+  }
+  assert.equal(bindRunProfile(piProfileDir, piProfile).recorded, true)
+  assert.equal(getRunProfile(piProfileDir).configuration.host, "pi")
+  assert.equal(getRunProfile(piProfileDir).configuration.roles["plan-reviewer"].agent_type, "herder.plan-reviewer")
   const implementerUsage = {
     plan: "002",
     role: "plan-implementer",

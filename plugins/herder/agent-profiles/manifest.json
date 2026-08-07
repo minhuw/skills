@@ -1,15 +1,16 @@
 {
   "schema_version": 2,
   "profile_set": "herder",
-  "catalog_sha256": "d8888ea08bf051b939150529f3c4ad3885e98a7cd48e260b6e190df124e71ff2",
+  "catalog_sha256": "e54e269258c33d5445f6e40f43d46e050723645cb15726bfc25da9e7313fd232",
   "defaults": {
     "codex": "eclipse",
-    "claude": "shannon"
+    "claude": "shannon",
+    "pi": "eclipse"
   },
   "profiles": {
     "eclipse": {
       "description": "Herder's native Codex role mapping, also available from Claude Code.",
-      "sha256": "c8dc927eb2137710075b6e67f4095981454f7b9bafbac0a561a45f4533b10c94",
+      "sha256": "8792c8b1d35ec48c2ff9ba88a3f5a2046d51ae0ac15c1ab38ff0834d1a368424",
       "orchestrator": {
         "model": "gpt-5.6-sol",
         "effort": "max"
@@ -74,12 +75,43 @@
               "effort": "xhigh"
             }
           }
+        },
+        "pi": {
+          "roles": {
+            "plan-accountant": {
+              "agent_type": "herder.plan-accountant",
+              "model": "gpt-5.6-luna",
+              "effort": "max",
+              "service_tier": "fast"
+            },
+            "plan-implementer": {
+              "agent_type": "herder.plan-implementer",
+              "model": "gpt-5.6-luna",
+              "effort": "max",
+              "service_tier": "fast"
+            },
+            "plan-reviewer": {
+              "agent_type": "herder.plan-reviewer",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            },
+            "plan-judge": {
+              "agent_type": "herder.plan-judge",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            },
+            "plan-saver": {
+              "agent_type": "herder.plan-saver",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            }
+          }
         }
       }
     },
     "shannon": {
       "description": "Herder's native Claude Code role mapping.",
-      "sha256": "72a32c0b0c76471b07fc4221c18f2a981b7234b9d59ff6df7f65f893e656bfb9",
+      "sha256": "3dde6d7a5b3d27fa93daf0ac3bd687712bcb6c7559070a18eae08410c78849a4",
       "orchestrator": {
         "model": "claude-opus-4-8",
         "effort": "high"
@@ -113,12 +145,41 @@
               "effort": "xhigh"
             }
           }
+        },
+        "pi": {
+          "roles": {
+            "plan-accountant": {
+              "agent_type": "herder.plan-accountant",
+              "model": "claude-opus-4-8",
+              "effort": "medium"
+            },
+            "plan-implementer": {
+              "agent_type": "herder.plan-implementer",
+              "model": "claude-opus-4-8",
+              "effort": "high"
+            },
+            "plan-reviewer": {
+              "agent_type": "herder.plan-reviewer",
+              "model": "claude-opus-4-8",
+              "effort": "xhigh"
+            },
+            "plan-judge": {
+              "agent_type": "herder.plan-judge",
+              "model": "claude-opus-4-8",
+              "effort": "xhigh"
+            },
+            "plan-saver": {
+              "agent_type": "herder.plan-saver",
+              "model": "claude-opus-4-8",
+              "effort": "xhigh"
+            }
+          }
         }
       }
     },
     "offcut": {
       "description": "Kimi orchestrates, Grok accounts and implements, and Sol reviews, judges, and recovers.",
-      "sha256": "8a06e848902c33d32ef290066f10fd8d1d5a289fd7d7d3a18f8bb742378c693b",
+      "sha256": "2bc8ffc4922956e5dad9cc2e56ad28cc596a3030570fbea715b192b813374258",
       "orchestrator": {
         "model": "kimi-k3",
         "effort": "max"
@@ -129,7 +190,7 @@
             "plan-accountant": {
               "agent_type": "offcut_plan_accountant",
               "model": "grok-4.5",
-              "effort": "max"
+              "effort": "high"
             },
             "plan-implementer": {
               "agent_type": "offcut_plan_implementer",
@@ -158,7 +219,7 @@
             "plan-accountant": {
               "agent_type": "herder:offcut-plan-accountant",
               "model": "grok-4.5",
-              "effort": "max"
+              "effort": "high"
             },
             "plan-implementer": {
               "agent_type": "herder:offcut-plan-implementer",
@@ -177,6 +238,35 @@
             },
             "plan-saver": {
               "agent_type": "herder:offcut-plan-saver",
+              "model": "gpt-5.6-sol",
+              "effort": "max"
+            }
+          }
+        },
+        "pi": {
+          "roles": {
+            "plan-accountant": {
+              "agent_type": "herder.plan-accountant",
+              "model": "grok-4.5",
+              "effort": "high"
+            },
+            "plan-implementer": {
+              "agent_type": "herder.plan-implementer",
+              "model": "grok-4.5",
+              "effort": "high"
+            },
+            "plan-reviewer": {
+              "agent_type": "herder.plan-reviewer",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            },
+            "plan-judge": {
+              "agent_type": "herder.plan-judge",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            },
+            "plan-saver": {
+              "agent_type": "herder.plan-saver",
               "model": "gpt-5.6-sol",
               "effort": "max"
             }
@@ -259,7 +349,7 @@
           "target": "offcut_plan_accountant.toml",
           "profile": "offcut",
           "role": "plan-accountant",
-          "sha256": "a226f96d02bbecb58d394fa5c230591aeb3570904eb3ced25ccc76572ad657e3"
+          "sha256": "c7a122e8989dee7edae45eb8fe58f421ab7253e431efdfe9d638934696a3f1c4"
         },
         {
           "source": "agent-profiles/generated/codex/offcut_plan_implementer.toml",
@@ -399,7 +489,7 @@
           "identifier": "herder:offcut-plan-accountant",
           "profile": "offcut",
           "role": "plan-accountant",
-          "sha256": "59e42eede501648e98fca5aad0a67fa16ead086a6a47dd83cb1ac18cac47fd4e"
+          "sha256": "e9d0466ceee05f5730bbea35a5037374a519d3f356e9b01296d8bc45fbabd1ef"
         },
         {
           "source": "agents/offcut-plan-implementer.md",
@@ -428,6 +518,46 @@
           "profile": "offcut",
           "role": "plan-saver",
           "sha256": "e0b3d95357eff01a5d8e814e0904fcd037f63ceb2884344b76609627ac21eb87"
+        }
+      ]
+    },
+    "pi": {
+      "mode": "package",
+      "files": [
+        {
+          "source": "../../pi/herder/agents/plan-accountant.md",
+          "identifier": "herder.plan-accountant",
+          "role": "plan-accountant",
+          "generic": true,
+          "sha256": "286f146b853067a8b0f46a500de7fb3c8bbde29c2ade582e86752a03124cf15d"
+        },
+        {
+          "source": "../../pi/herder/agents/plan-implementer.md",
+          "identifier": "herder.plan-implementer",
+          "role": "plan-implementer",
+          "generic": true,
+          "sha256": "a8ca3f5037ac94c85f7b69d3b751a41fdf8ddaa142d43e794a83bb87deec2b9d"
+        },
+        {
+          "source": "../../pi/herder/agents/plan-reviewer.md",
+          "identifier": "herder.plan-reviewer",
+          "role": "plan-reviewer",
+          "generic": true,
+          "sha256": "f492c79dc1f000405061572324272bdd9676058bb8fe12747f17e004c887fadd"
+        },
+        {
+          "source": "../../pi/herder/agents/plan-judge.md",
+          "identifier": "herder.plan-judge",
+          "role": "plan-judge",
+          "generic": true,
+          "sha256": "f917cda10cd4203dba0ad03acffc825f81f8f98291a6483c3f8aa7b5dd528b5e"
+        },
+        {
+          "source": "../../pi/herder/agents/plan-saver.md",
+          "identifier": "herder.plan-saver",
+          "role": "plan-saver",
+          "generic": true,
+          "sha256": "cd6e31d418934a5c8548b9df86510c0bf8ab43708d346a58c3d5db6ec34ace7a"
         }
       ]
     }

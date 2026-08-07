@@ -2,6 +2,16 @@
 
 Run these checks after changing any Herder skill, plan protocol, agent profile, installer, or plugin manifest.
 
+For the native Pi package, install dependencies once and run its type and deterministic extension tests:
+
+```bash
+npm install
+npm run typecheck:pi
+npm run test:pi
+```
+
+Those tests cover native command parsing, profile hashing and model availability, local package-agent validation, safe controller workflow serialization, the separately installed `pi-subagents` request/reply RPC contract, persisted session-state recovery, the absence of a bundled runtime or Pi skill registration, nested-dispatch containment, rolling first-completion scheduling, and stable Herder worktree ownership.
+
 ## Fast deterministic checks
 
 From the marketplace repository root:
