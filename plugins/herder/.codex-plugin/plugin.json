@@ -1,7 +1,7 @@
 {
   "name": "herder",
-  "version": "0.14.0+codex.20260807100548",
-  "description": "Shape focused plans, execute them through a persistent Accountant, and observe them in a local graph dashboard.",
+  "version": "0.15.0+codex.20260807173327",
+  "description": "Shape focused plans, execute them through a deterministic Run Manager, and observe them in a local graph dashboard.",
   "author": {
     "name": "minhuw",
     "url": "https://github.com/minhuw"
@@ -22,7 +22,7 @@
   "interface": {
     "displayName": "Herder",
     "shortDescription": "Clarify, create, and execute plans with specialized agents.",
-    "longDescription": "Herder shapes requested changes and verified findings into focused dependency-aware plans, compiles shared context into immutable snapshots, runs parallel per-plan implementation-review loops through a persistent Accountant control plane, escalates unresolved findings to an independent Judge, integrates verified work transactionally, stores worker-attempt metadata in SQLite, visualizes live execution through a read-only local graph dashboard, and can route plan workers across CLI harnesses through Orca.",
+    "longDescription": "Herder shapes requested changes and verified findings into focused dependency-aware plans, compiles shared context into immutable snapshots, runs parallel per-plan implementation-review loops through a persistent deterministic TypeScript control plane, escalates unresolved findings to an independent Judge, integrates verified work transactionally, stores run and worker-attempt metadata in SQLite, and automatically hosts a read-only local graph dashboard.",
     "developerName": "minhuw",
     "category": "Developer Tools",
     "capabilities": [
@@ -30,10 +30,8 @@
     ],
     "defaultPrompt": [
       "Grill me one decision at a time, then create a focused validated Herder plan graph for this objective.",
-      "Interactively configure and verify Herder role routing for this repository.",
-      "Audit this repository and create prioritized Herder plans.",
-      "Fire the implementation plans in this repository.",
-      "Open a read-only local dashboard for this Herder plan run."
+      "Install Herder's bundled role profiles for this host.",
+      "Fire the implementation plans in this repository and open its live dashboard."
     ]
   }
 }

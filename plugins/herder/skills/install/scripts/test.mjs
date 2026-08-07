@@ -1,182 +1,98 @@
 #!/usr/bin/env node
 
-import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import process from "node:process";
-import { fileURLToPath } from "node:url";
+import assert from "node:assert/strict"
+import { execFileSync, spawnSync } from "node:child_process"
+import { access, chmod, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import process from "node:process"
+import { fileURLToPath } from "node:url"
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const installer = path.join(scriptDir, "install-herder.mjs");
-const pluginRoot = path.resolve(scriptDir, "../../..");
-const manifest = JSON.parse(await readFile(path.join(pluginRoot, "agent-profiles/manifest.json"), "utf8"));
-const expectedCodexTargets = manifest.hosts.codex.files.map((file) => file.target).sort();
-const fixtureRoot = await mkdtemp(path.join(tmpdir(), "herder-plugin-install-test-"));
+const scriptDir = path.dirname(fileURLToPath(import.meta.url))
+const installer = path.join(scriptDir, "install-herder.mjs")
+const pluginRoot = path.resolve(scriptDir, "../../..")
+const manifest = JSON.parse(await readFile(path.join(pluginRoot, "agent-profiles/manifest.json"), "utf8"))
+const fixtureRoot = await mkdtemp(path.join(tmpdir(), "herder-plugin-install-test-"))
 
-let fakeCodex = "";
+let fakeCodex
 
 function run(...args) {
   return execFileSync(process.execPath, [installer, ...args], {
     encoding: "utf8",
     env: { ...process.env, HERDER_CODEX_BIN: fakeCodex },
     stdio: ["ignore", "pipe", "pipe"],
-  });
+  })
 }
 
 try {
-  fakeCodex = path.join(fixtureRoot, "codex-enabled.mjs");
+  fakeCodex = path.join(fixtureRoot, "codex-enabled.mjs")
   await writeFile(fakeCodex, `#!/usr/bin/env node
 if (process.argv.slice(2).join(" ") !== "features list") process.exit(2)
-process.stdout.write("multi_agent_v2                       under development  true\\n")
-`);
-  await chmod(fakeCodex, 0o700);
+process.stdout.write("multi_agent_v2 under development true\\n")
+`)
+  await chmod(fakeCodex, 0o700)
 
-  const projectRoot = path.join(fixtureRoot, "project");
-  const common = ["--host", "codex", "--project-root", projectRoot];
+  const projectRoot = path.join(fixtureRoot, "project")
+  const args = ["--host", "codex", "--project-root", projectRoot]
+  const first = run(...args)
+  assert.match(first, /multi_agent_v2 is enabled/)
+  assert.match(first, /tool_namespace = "herder_agents"/)
+  assert.match(first, /max_concurrent_threads_per_session = 5/)
+  assert.match(first, /Named profiles: eclipse, offcut/)
 
-  const first = run(...common);
-  assert.match(first, /Installed: .*plan_implementer\.toml/);
-  assert.match(first, /Installed: .*plan_accountant\.toml/);
-  assert.match(first, /multi_agent_v2 is enabled/);
-  assert.match(first, /tool_namespace = "herder_agents"/);
-  assert.match(first, /max_concurrent_threads_per_session = 6/);
-  assert.match(first, /Reserve one child thread for the selected profile's plan-accountant/);
-  assert.match(first, /Named profiles: eclipse, offcut/);
-  assert.match(first, /Orchestrator \(eclipse\): gpt-5\.6-sol\/max/);
-  assert.match(first, /Orchestrator \(offcut\): kimi-k3\/max/);
-  const installed = path.join(projectRoot, ".codex/agents/plan_implementer.toml");
-  const source = path.join(pluginRoot, "agent-profiles/codex/plan_implementer.toml");
-  assert.deepEqual(await readFile(installed), await readFile(source));
-  const expectedNicknames = {
-    plan_accountant: ["Ledger", "Tally", "Abacus", "Quill", "Keeper", "Scribe", "Balance", "Audit", "Count", "Record"],
-    plan_implementer: ["Mocha", "Latte", "Cortado", "Piccolo", "Doppio", "Affogato", "Espresso", "Macchiato", "Cappuccino", "Ristretto"],
-    plan_reviewer: ["Kiwi", "Mango", "Peach", "Fig", "Lychee", "Yuzu", "Guava", "Cherry", "Plum", "Papaya"],
-    plan_judge: ["Sage", "Atlas", "Solon", "Themis", "Verity", "Justus", "Minerva", "Cato", "Portia", "Astraea"],
-    plan_saver: ["Daisy", "Poppy", "Iris", "Peony", "Aster", "Violet", "Zinnia", "Dahlia", "Lotus", "Marigold"],
-  };
-  for (const [profile, nicknames] of Object.entries(expectedNicknames)) {
-    const installedProfile = path.join(projectRoot, ".codex/agents", `${profile}.toml`);
-    const sourceProfile = path.join(pluginRoot, "agent-profiles/codex", `${profile}.toml`);
-    const declaration = `nickname_candidates = [${nicknames.map((nickname) => JSON.stringify(nickname)).join(", ")}]`;
-    assert.deepEqual(await readFile(installedProfile), await readFile(sourceProfile));
-    assert.equal((await readFile(installedProfile, "utf8")).includes(declaration), true, `wrong nicknames for ${profile}`);
+  const codexFiles = manifest.hosts.codex.files
+  assert.equal(codexFiles.length, 6)
+  assert.deepEqual([...new Set(codexFiles.map((file) => file.role))].sort(), ["plan-implementer", "plan-judge", "plan-reviewer"])
+  for (const file of codexFiles) {
+    const installed = path.join(projectRoot, ".codex/agents", file.target)
+    assert.deepEqual(await readFile(installed), await readFile(path.join(pluginRoot, file.source)))
+    assert.match(first, new RegExp(`Installed: .*${file.target.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}`))
   }
-  assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_implementer.toml"), "utf8"), /^service_tier = "fast"$/m);
-  const accountant = await readFile(path.join(projectRoot, ".codex/agents/plan_accountant.toml"), "utf8");
-  assert.match(accountant, /^model = "gpt-5\.6-luna"$/m);
-  assert.match(accountant, /^model_reasoning_effort = "max"$/m);
-  assert.match(accountant, /^service_tier = "fast"$/m);
-  assert.match(accountant, /root exclusively owns host worker handles/);
-  const frontierAccountant = await readFile(path.join(projectRoot, ".codex/agents/offcut_plan_accountant.toml"), "utf8");
-  const frontierImplementer = await readFile(path.join(projectRoot, ".codex/agents/offcut_plan_implementer.toml"), "utf8");
-  const frontierReviewer = await readFile(path.join(projectRoot, ".codex/agents/offcut_plan_reviewer.toml"), "utf8");
-  const frontierSaver = await readFile(path.join(projectRoot, ".codex/agents/offcut_plan_saver.toml"), "utf8");
-  assert.match(frontierAccountant, /^model = "grok-4\.5"$/m);
-  assert.match(frontierAccountant, /^model_reasoning_effort = "high"$/m);
-  assert.match(frontierAccountant, /bind the resolved profile/);
-  assert.match(frontierImplementer, /^model = "grok-4\.5"$/m);
-  assert.match(frontierReviewer, /^model = "gpt-5\.6-sol"$/m);
-  assert.match(frontierReviewer, /^model_reasoning_effort = "xhigh"$/m);
-  assert.match(frontierSaver, /^model_reasoning_effort = "max"$/m);
-  assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_implementer.toml"), "utf8"), /DISCOVERED_PATHS:/);
-  assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_reviewer.toml"), "utf8"), /JUSTIFIED\|SCOPE_VIOLATION/);
-  assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_judge.toml"), "utf8"), /ACCEPTED\|REJECTED/);
-  assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_saver.toml"), "utf8"), /never expand the discovered-path set/);
+  assert.deepEqual((await readdir(path.join(projectRoot, ".codex/agents"))).sort(), codexFiles.map((file) => file.target).sort())
 
-  const second = run(...common);
-  assert.match(second, /Unchanged: .*plan_implementer\.toml/);
+  const second = run(...args)
+  assert.match(second, /Unchanged: .*eclipse_plan_implementer\.toml/)
 
-  await writeFile(installed, "customized\n");
-  const conflict = spawnSync(process.execPath, [installer, ...common], {
+  const customized = path.join(projectRoot, ".codex/agents/eclipse_plan_implementer.toml")
+  await writeFile(customized, "customized\n")
+  const conflict = spawnSync(process.execPath, [installer, ...args], {
     encoding: "utf8",
     env: { ...process.env, HERDER_CODEX_BIN: fakeCodex },
-  });
-  assert.equal(conflict.status, 3);
-  assert.equal(await readFile(installed, "utf8"), "customized\n");
+  })
+  assert.equal(conflict.status, 3)
+  assert.equal(await readFile(customized, "utf8"), "customized\n")
+  assert.match(run(...args, "--dry-run"), /Conflict \(would preserve\): .*eclipse_plan_implementer\.toml/)
 
-  const preview = run(...common, "--dry-run");
-  assert.match(preview, /Conflict \(would preserve\): .*plan_implementer\.toml/);
-  assert.equal(await readFile(installed, "utf8"), "customized\n");
+  assert.match(run(...args, "--force"), /Installed \(replaced\): .*eclipse_plan_implementer\.toml/)
+  const backupRoot = path.join(projectRoot, ".codex/.plan-herder-backups")
+  const stamps = await readdir(backupRoot)
+  assert.equal(stamps.length, 1)
+  assert.equal(await readFile(path.join(backupRoot, stamps[0], "eclipse_plan_implementer.toml"), "utf8"), "customized\n")
 
-  const forced = run(...common, "--force");
-  assert.match(forced, /Installed \(replaced\): .*plan_implementer\.toml/);
-  assert.deepEqual(await readFile(installed), await readFile(source));
-  const backupRoot = path.join(projectRoot, ".codex/.plan-herder-backups");
-  const stamps = await readdir(backupRoot);
-  assert.equal(stamps.length, 1);
-  assert.equal(await readFile(path.join(backupRoot, stamps[0], "plan_implementer.toml"), "utf8"), "customized\n");
-  assert.deepEqual((await readdir(path.join(projectRoot, ".codex/agents"))).sort(), expectedCodexTargets);
-  await assert.rejects(access(path.join(projectRoot, ".codex/agents/.herder-backups")));
+  const claude = run("--host", "claude", "--project-root", path.join(fixtureRoot, "claude-project"))
+  const claudeFiles = manifest.hosts.claude.files
+  assert.equal(claudeFiles.length, 9)
+  for (const file of claudeFiles) assert.match(claude, new RegExp(`Bundled: ${file.identifier}`))
+  assert.match(claude, /Named profiles: eclipse, offcut, shannon/)
 
-  const migrationProject = path.join(fixtureRoot, "migration-project");
-  const migrationCommon = ["--host", "codex", "--project-root", migrationProject];
-  run(...migrationCommon);
-  const legacyRoot = path.join(migrationProject, ".codex/agents/.herder-backups");
-  const legacyStamp = "2026-07-15T12-58-16-000Z";
-  const legacyProfile = path.join(legacyRoot, legacyStamp, "plan_reviewer.toml");
-  await mkdir(path.dirname(legacyProfile), { recursive: true });
-  await writeFile(legacyProfile, "legacy reviewer\n");
+  const dryProject = path.join(fixtureRoot, "dry-project")
+  assert.match(run("--host", "codex", "--project-root", dryProject, "--dry-run"), /Would install:/)
+  await assert.rejects(access(path.join(dryProject, ".codex/agents")))
 
-  const migrationPreview = run(...migrationCommon, "--dry-run");
-  assert.match(migrationPreview, /Would migrate legacy Codex backups:/);
-  assert.equal(await readFile(legacyProfile, "utf8"), "legacy reviewer\n");
-
-  const migrated = run(...migrationCommon);
-  assert.match(migrated, /Migrated legacy Codex backups:/);
-  await assert.rejects(access(legacyRoot));
-  const migrationBackupRoot = path.join(migrationProject, ".codex/.plan-herder-backups");
-  const migratedDirs = (await readdir(migrationBackupRoot)).filter((entry) => entry.startsWith("legacy-"));
-  assert.equal(migratedDirs.length, 1);
-  assert.equal(
-    await readFile(path.join(migrationBackupRoot, migratedDirs[0], legacyStamp, "plan_reviewer.toml"), "utf8"),
-    "legacy reviewer\n",
-  );
-  assert.deepEqual((await readdir(path.join(migrationProject, ".codex/agents"))).sort(), expectedCodexTargets);
-
-  const claudeProject = path.join(fixtureRoot, "claude-project");
-  const claude = run("--host", "claude", "--project-root", claudeProject);
-  assert.match(claude, /Bundled: herder:plan-accountant/);
-  assert.match(claude, /Bundled: herder:plan-implementer/);
-  assert.match(claude, /Bundled: herder:eclipse-plan-accountant/);
-  assert.match(claude, /Bundled: herder:eclipse-plan-reviewer/);
-  assert.match(claude, /Bundled: herder:offcut-plan-accountant/);
-  assert.match(claude, /Bundled: herder:offcut-plan-saver/);
-  assert.match(claude, /Named profiles: eclipse, offcut, shannon/);
-  await assert.rejects(access(path.join(claudeProject, ".claude/agents")));
-
-  const allProject = path.join(fixtureRoot, "all-project");
-  const all = run("--host", "all", "--project-root", allProject);
-  assert.match(all, /Installed: .*plan_implementer\.toml/);
-  assert.match(all, /Bundled: herder:plan-reviewer/);
-
-  const dryProject = path.join(fixtureRoot, "dry-project");
-  const dry = run("--host", "codex", "--project-root", dryProject, "--dry-run");
-  assert.match(dry, /Would install: .*plan_implementer\.toml/);
-  await assert.rejects(access(path.join(dryProject, ".codex/agents")));
-
-  const disabledCodex = path.join(fixtureRoot, "codex-disabled.mjs");
-  await writeFile(disabledCodex, `#!/usr/bin/env node
+  const disabled = path.join(fixtureRoot, "codex-disabled.mjs")
+  await writeFile(disabled, `#!/usr/bin/env node
 if (process.argv.slice(2).join(" ") !== "features list") process.exit(2)
-process.stdout.write("multi_agent_v2                       under development  false\\n")
-`);
-  await chmod(disabledCodex, 0o700);
-  fakeCodex = disabledCodex;
-  const warningProject = path.join(fixtureRoot, "warning-project");
-  const warning = run("--host", "codex", "--project-root", warningProject);
-  assert.match(warning, /WARNING: Codex multi_agent_v2 is disabled/);
-  assert.match(warning, /codex features enable multi_agent_v2/);
-  assert.match(warning, /hide_spawn_agent_metadata = false/);
-  assert.match(warning, /start a new Codex session/);
+process.stdout.write("multi_agent_v2 under development false\\n")
+`)
+  await chmod(disabled, 0o700)
+  fakeCodex = disabled
+  const warning = run("--host", "codex", "--project-root", path.join(fixtureRoot, "warning-project"))
+  assert.match(warning, /WARNING: Codex multi_agent_v2 is disabled/)
+  assert.match(warning, /codex features enable multi_agent_v2/)
 
-  const badHost = spawnSync(process.execPath, [installer, "--host", "other"], {
-    encoding: "utf8",
-    env: { ...process.env, HERDER_CODEX_BIN: fakeCodex },
-  });
-  assert.equal(badHost.status, 2);
-
-  console.log("herder plugin installer tests passed");
+  const badHost = spawnSync(process.execPath, [installer, "--host", "other"], { encoding: "utf8" })
+  assert.equal(badHost.status, 2)
+  console.log("herder plugin installer tests passed")
 } finally {
-  await rm(fixtureRoot, { recursive: true, force: true });
+  await rm(fixtureRoot, { recursive: true, force: true })
 }

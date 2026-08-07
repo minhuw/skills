@@ -184,6 +184,17 @@ try {
     assert.equal(bundleBytes.includes(Buffer.from(fixture.repo)), false)
     assert.equal(fs.statSync(materialized.bundlePath).mode & 0o222, 0)
 
+    const rematerialized = assignment([
+      "materialize",
+      "--plan", "001",
+      "--plan-dir", fixture.planDir,
+      "--worktree", fixture.worktree,
+      "--expected-branch", fixture.branch,
+      "--expected-head", fixture.head,
+      "--expected-snapshot-sha256", fixture.snapshot.snapshotSha256,
+    ])
+    assert.equal(rematerialized.bundleSha256, materialized.bundleSha256)
+
     const verified = assignment([
       "verify",
       "--worktree", fixture.worktree,
@@ -217,6 +228,15 @@ try {
     ])
     assert.equal(runVerified.scope, "RUN")
     assert.equal(runVerified.snapshotSha256, runMaterialized.snapshotSha256)
+
+    const runRematerialized = assignment([
+      "materialize-run",
+      "--plan-dir", fixture.planDir,
+      "--worktree", fixture.worktree,
+      "--expected-branch", fixture.branch,
+      "--expected-head", fixture.head,
+    ])
+    assert.equal(runRematerialized.bundleSha256, runMaterialized.bundleSha256)
 
     fs.chmodSync(materialized.bundlePath, 0o644)
     fs.appendFileSync(materialized.bundlePath, " ")

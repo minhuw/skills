@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { formatCheckpointRef } from "./coordination-ref.mjs"
 import { inspectNamespace } from "./namespace-run.mjs"
-import { transitionStatus } from "../../plans/scripts/herder-plans.mjs"
+import { projectStatuses } from "../../plans/scripts/herder-plans.mjs"
 
 const cleanup = path.join(path.dirname(fileURLToPath(import.meta.url)), "cleanup-run.mjs")
 
@@ -124,7 +124,7 @@ try {
   git(repo, "update-ref", `refs/heads/${planBranch}`, base, "")
   const planWorktree = path.join(worktreeRoot, "001")
   git(repo, "worktree", "add", "-q", planWorktree, planBranch)
-  transitionStatus(planDir, "001", "IN PROGRESS")
+  projectStatuses(planDir, [{ id: "001", status: "IN PROGRESS" }])
 
   fs.writeFileSync(path.join(planWorktree, "plan.txt"), "plan change\n")
   git(planWorktree, "add", "plan.txt")
@@ -163,7 +163,7 @@ try {
 
   const completionRef = "refs/plan-herder/plans/completed/001"
   git(repo, "update-ref", completionRef, reviewedHead, "")
-  transitionStatus(planDir, "001", "DONE")
+  projectStatuses(planDir, [{ id: "001", status: "DONE" }])
 
   const resumed = inspectNamespace({ repo, planDir, mode: "resume" })
   assert.equal(resumed.ok, true)
@@ -176,7 +176,6 @@ try {
     "--repo", repo,
     "--plan-dir", planDir,
     "--plan", "001",
-    "--runtime", "native",
     "--pretty",
   ], { cwd: repo })
   const cleaned = JSON.parse(cleanupResult.stdout)

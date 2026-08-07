@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["pi/herder/**/*.ts"]
+  "include": ["pi/herder/**/*.ts", "plugins/herder/runtime/**/*.ts"]
 }

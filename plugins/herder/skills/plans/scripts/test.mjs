@@ -13,11 +13,10 @@ import {
   getRunProfile,
   getUsageReport,
   initPlanDir,
-  migrateUsage,
+  projectStatuses,
   recordUsage,
   setTracking,
   snapshotPlan,
-  transitionStatus,
 } from "./herder-plans.mjs"
 import { executionDatabasePath } from "./execution-store.mjs"
 
@@ -128,20 +127,6 @@ function expectFailure(fn, pattern) {
   assert.throws(fn, pattern)
 }
 
-function legacyUsageSection(attempt = "legacy-002-reviewer-1") {
-  return `
-<!-- herder-usage:start -->
-## Execution usage
-
-### Attempts
-
-| Attempt | Plan | Role | Model | Effort | Outcome | Input tokens | Cached input | Output tokens | Reasoning tokens | Source |
-|---|---|---|---|---|---|---:|---:|---:|---:|---|
-| ${attempt} | 002 | plan-reviewer | gpt-5.6-sol | xhigh | APPROVE | 300 | 100 | 50 | 20 | codex-exec |
-<!-- herder-usage:end -->
-`
-}
-
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "herder-plans-test-"))
 try {
   const repo = path.join(root, "repo")
@@ -198,11 +183,9 @@ try {
     profileSha256: "1c5a08366d983d588fe0b8dfaf9f2c03d1c0801ab194b27c85da8b5e7f6453e2",
     host: "codex",
     roles: {
-      "plan-accountant": { agent_type: "offcut_plan_accountant", model: "grok-4.5", effort: "max" },
       "plan-implementer": { agent_type: "offcut_plan_implementer", model: "grok-4.5", effort: "high" },
       "plan-reviewer": { agent_type: "offcut_plan_reviewer", model: "gpt-5.6-sol", effort: "xhigh" },
       "plan-judge": { agent_type: "offcut_plan_judge", model: "gpt-5.6-sol", effort: "xhigh" },
-      "plan-saver": { agent_type: "offcut_plan_saver", model: "gpt-5.6-sol", effort: "max" },
     },
   }
   assert.equal(bindRunProfile(valid.planDir, runProfile).recorded, true)
@@ -238,7 +221,6 @@ try {
     source: "codex-exec",
     round: "1",
     generation: "generation-1",
-    runtime: "native",
     harness: "codex",
     serviceTier: "fast",
     startedAt: "2026-08-03T00:00:00Z",
@@ -257,7 +239,6 @@ try {
     source: "unknown",
     round: "1",
     generation: "generation-1",
-    runtime: "native",
     harness: "codex",
     serviceTier: "standard",
     startedAt: "2026-08-03T00:00:02Z",
@@ -289,7 +270,7 @@ try {
   assert.equal(planReport.timing.attemptDurationMs, 5000)
   assert.deepEqual(planReport.timing.durationCoverage, { reported: 2, total: 2 })
   assert.equal(planReport.byRole.find((row) => row.key === "plan-reviewer").attempts, 1)
-  assert.equal(planReport.byRuntime.find((row) => row.key === "native / codex").attempts, 2)
+  assert.equal(planReport.byHarness.find((row) => row.key === "codex").attempts, 2)
   assert.equal(planReport.byGeneration.find((row) => row.key === "generation-1").attempts, 2)
   assert.equal(planReport.byServiceTier.find((row) => row.key === "fast").attempts, 1)
   assert.equal(planReport.lifecycle.status, "TODO")
@@ -328,50 +309,13 @@ Keep shared fixture facts in one compiled snapshot input.
   assert.equal(composedSnapshot.snapshotInputs.length, 2)
   assert.equal(composedSnapshot.contextText.includes("Plan-Set Context"), true)
 
-  const progress = transitionStatus(valid.planDir, "002", "IN PROGRESS")
-  assert.equal(progress.from, "TODO")
+  projectStatuses(valid.planDir, [{ id: "002", status: "IN PROGRESS" }])
   assert.equal(buildGraph(valid.planDir).plans.find((plan) => plan.id === "002").status, "IN PROGRESS")
-  expectFailure(() => transitionStatus(valid.planDir, "002", "BLOCKED"), /requires a one-line status detail/)
-  transitionStatus(valid.planDir, "002", "BLOCKED", "verification failed")
+  expectFailure(() => projectStatuses(valid.planDir, [{ id: "002", status: "BLOCKED" }]), /requires a one-line status detail/)
+  projectStatuses(valid.planDir, [{ id: "002", status: "BLOCKED", detail: "verification failed" }])
   assert.equal(buildGraph(valid.planDir).plans.find((plan) => plan.id === "002").statusDetail, "verification failed")
-  expectFailure(() => transitionStatus(valid.planDir, "002", "DONE"), /Invalid plan transition/)
-  transitionStatus(valid.planDir, "002", "IN PROGRESS")
-  const completed = transitionStatus(valid.planDir, "002", "DONE")
-  assert.equal(completed.report.lifecycle.status, "DONE")
-  assert.equal(completed.report.attempts, 2)
+  projectStatuses(valid.planDir, [{ id: "002", status: "DONE" }])
   assert.equal(buildGraph(valid.planDir).plans.find((plan) => plan.id === "002").status, "DONE")
-
-  const legacyDir = writeFixture(path.join(root, "legacy-usage"))
-  const legacyReadme = path.join(legacyDir, "README.md")
-  fs.appendFileSync(legacyReadme, legacyUsageSection())
-  const legacyMarkdown = fs.readFileSync(legacyReadme, "utf8")
-  assert.equal(fs.existsSync(executionDatabasePath(legacyDir)), false)
-  const legacyReadOnly = getUsageReport(legacyDir)
-  assert.equal(legacyReadOnly.storage, "legacy-readonly")
-  assert.equal(legacyReadOnly.attempts, 1)
-  assert.equal(fs.existsSync(executionDatabasePath(legacyDir)), false)
-  assert.equal(fs.readFileSync(legacyReadme, "utf8"), legacyMarkdown)
-  const migrated = migrateUsage(legacyDir)
-  assert.equal(migrated.migrated, 1)
-  assert.equal(migrated.removedLegacySection, true)
-  assert.equal(fs.existsSync(executionDatabasePath(legacyDir)), true)
-  assert.doesNotMatch(fs.readFileSync(legacyReadme, "utf8"), /herder-usage|legacy-002-reviewer-1/)
-  const repeatedMigration = migrateUsage(legacyDir)
-  assert.equal(repeatedMigration.migrated, 0)
-  assert.equal(repeatedMigration.removedLegacySection, false)
-  assert.equal(getUsageReport(legacyDir).attempts, 1)
-
-  const malformedLegacyDir = writeFixture(path.join(root, "malformed-legacy-usage"))
-  const malformedLegacyReadme = path.join(malformedLegacyDir, "README.md")
-  fs.appendFileSync(malformedLegacyReadme, "\n<!-- herder-usage:start -->\n")
-  expectFailure(() => migrateUsage(malformedLegacyDir), /malformed legacy Herder usage section markers/)
-  assert.equal(fs.existsSync(executionDatabasePath(malformedLegacyDir)), false)
-
-  const symlinkDatabaseDir = writeFixture(path.join(root, "symlink-database"))
-  const externalDatabase = path.join(root, "external-database")
-  fs.mkdirSync(externalDatabase)
-  fs.symlinkSync(externalDatabase, path.join(symlinkDatabaseDir, ".herder"))
-  expectFailure(() => migrateUsage(symlinkDatabaseDir), /Execution runtime path must be a real directory/)
 
   expectFailure(
     () => buildGraph(writeFixture(path.join(root, "mismatch"), { mismatch: true })),

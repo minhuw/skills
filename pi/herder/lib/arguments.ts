@@ -2,13 +2,12 @@ export interface FireOptions {
 	mode: "fire" | "resume";
 	planDir: string;
 	profile?: string;
-	maxParallel: number;
-	dashboard: boolean;
+	maxParallel?: number;
 	dashboardPort: number;
 }
 
 export interface PlanDirOptions {
-	planDir: string;
+	planDir?: string;
 }
 
 export function tokenizeArguments(input: string): string[] {
@@ -85,15 +84,13 @@ export function parseFireArguments(input: string, mode: "fire" | "resume"): Fire
 	const tokens = tokenizeArguments(input);
 	let planDir = "herder-plans";
 	let profile: string | undefined;
-	let maxParallel = 5;
-	let dashboard = true;
+	let maxParallel: number | undefined;
 	let dashboardPort = 0;
 	let positional = false;
 
 	for (let index = 0; index < tokens.length; index += 1) {
 		const argument = tokens[index]!;
-		if (argument === "--no-dashboard") dashboard = false;
-		else if (["--profile", "--max-parallel", "--dashboard-port"].includes(argument)) {
+		if (["--profile", "--max-parallel", "--dashboard-port"].includes(argument)) {
 			const value = valueAfter(tokens, index, argument);
 			index += 1;
 			if (argument === "--profile") {
@@ -109,12 +106,12 @@ export function parseFireArguments(input: string, mode: "fire" | "resume"): Fire
 		}
 	}
 
-	return { mode, planDir, ...(profile ? { profile } : {}), maxParallel, dashboard, dashboardPort };
+	return { mode, planDir, ...(profile ? { profile } : {}), ...(maxParallel === undefined && mode === "resume" ? {} : { maxParallel: maxParallel ?? 5 }), dashboardPort };
 }
 
 export function parsePlanDirArguments(input: string): PlanDirOptions {
 	const tokens = tokenizeArguments(input);
 	if (tokens.length > 1) throw new Error("Expected at most one plan directory.");
 	if (tokens[0]?.startsWith("--")) throw new Error(`Unknown option: ${tokens[0]}`);
-	return { planDir: tokens[0] || "herder-plans" };
+	return tokens[0] ? { planDir: tokens[0] } : {};
 }

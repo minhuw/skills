@@ -17,15 +17,18 @@ test("fire defaults to a five-worker pool and an ephemeral dashboard port", () =
 		mode: "fire",
 		planDir: "herder-plans",
 		maxParallel: 5,
-		dashboard: true,
 		dashboardPort: 0,
 	});
-	assert.deepEqual(parseFireArguments("custom --profile offcut --max-parallel 7 --dashboard-port 4312 --no-dashboard", "resume"), {
+	assert.deepEqual(parseFireArguments("", "resume"), {
+		mode: "resume",
+		planDir: "herder-plans",
+		dashboardPort: 0,
+	});
+	assert.deepEqual(parseFireArguments("custom --profile offcut --max-parallel 7 --dashboard-port 4312", "resume"), {
 		mode: "resume",
 		planDir: "custom",
 		profile: "offcut",
 		maxParallel: 7,
-		dashboard: false,
 		dashboardPort: 4312,
 	});
 });
@@ -35,7 +38,7 @@ test("argument validation is fail-closed", () => {
 	assert.throws(() => parseFireArguments("--dashboard-port 65536", "fire"), /0 through 65535/);
 	assert.throws(() => parseFireArguments("--unknown", "fire"), /Unknown option/);
 	assert.throws(() => parseFireArguments("one two", "fire"), /Unexpected argument/);
-	assert.deepEqual(parsePlanDirArguments(""), { planDir: "herder-plans" });
+	assert.deepEqual(parsePlanDirArguments(""), {});
 });
 
 test("plan paths cannot escape the repository lexically or through symlinks", () => {

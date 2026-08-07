@@ -109,8 +109,8 @@ function parseManifest(bytes) {
 function validateFiles(manifest, host) {
   const entry = manifest.hosts?.[host];
   const expectedMode = host === "codex" ? "copy" : "bundled";
-  if (entry?.mode !== expectedMode || !Array.isArray(entry.files) || entry.files.length < 5) {
-    throw new Error(`Manifest must define at least five ${host} profiles in ${expectedMode} mode.`);
+  if (entry?.mode !== expectedMode || !Array.isArray(entry.files) || entry.files.length < 3) {
+    throw new Error(`Manifest must define at least three ${host} profiles in ${expectedMode} mode.`);
   }
 
   const seen = new Set();
@@ -232,25 +232,9 @@ function codexBackupRoot(target) {
   return path.join(path.dirname(agentsDir), ".plan-herder-backups");
 }
 
-async function migrateLegacyCodexBackups(profiles, { dryRun, stamp }) {
-  const profile = profiles.find((item) => item.host === "codex");
-  if (!profile) return;
-  const legacyRoot = path.join(path.dirname(profile.target), ".herder-backups");
-  if (!(await exists(legacyRoot))) return;
-  const destination = path.join(codexBackupRoot(profile.target), `legacy-${stamp}`);
-  if (dryRun) {
-    console.log(`Would migrate legacy Codex backups: ${legacyRoot} -> ${destination}`);
-    return;
-  }
-  await mkdir(path.dirname(destination), { recursive: true });
-  await rename(legacyRoot, destination);
-  console.log(`Migrated legacy Codex backups: ${legacyRoot} -> ${destination}`);
-}
-
 async function installCodex(profiles, { force, dryRun }) {
   const classified = await classifyCodex(profiles);
   const stamp = backupStamp();
-  await migrateLegacyCodexBackups(profiles, { dryRun, stamp });
   if (dryRun) return classified;
   if (classified.conflicts.length > 0 && !force) {
     throw new ConflictError(classified.conflicts);
@@ -314,8 +298,8 @@ function printCodexRequirement(feature) {
   console.log("enabled = true");
   console.log("hide_spawn_agent_metadata = false");
   console.log('tool_namespace = "herder_agents"');
-  console.log("max_concurrent_threads_per_session = 6");
-  console.log("Reserve one child thread for the selected profile's plan-accountant; use at least --max-parallel + 1.");
+  console.log("max_concurrent_threads_per_session = 5");
+  console.log("The deterministic Run Manager uses no child thread; configure at least --max-parallel native child threads.");
   console.log("Then start a new Codex session before using $herder:fire.");
 }
 

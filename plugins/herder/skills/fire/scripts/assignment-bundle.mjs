@@ -6,7 +6,7 @@ import fs from "node:fs"
 import path from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
-import { buildGraph, snapshotPlan } from "../../plans/scripts/herder-plans.mjs"
+import { buildGraph, snapshotPlan, snapshotPlanFromGraph } from "../../plans/scripts/herder-plans.mjs"
 import { parseCheckpointRefRelative } from "./coordination-ref.mjs"
 
 export const ASSIGNMENT_SCHEMA_VERSION = 1
@@ -294,7 +294,7 @@ function assertBundleEnvelope(bundle) {
   }
 }
 
-function snapshotEntry(snapshot) {
+export function compiledAssignmentEntry(snapshot) {
   return {
     snapshotSha256: snapshot.snapshotSha256,
     snapshotInputs: snapshot.snapshotInputs.map((input) => ({
@@ -314,7 +314,12 @@ function snapshotEntry(snapshot) {
   }
 }
 
-function materialize(options, { run = false } = {}) {
+/**
+ * @param {Record<string, any>} options
+ * @param {{run?: boolean, entries?: any[] | null}} configuration
+ */
+export function materializeAssignment(options, configuration = {}) {
+  const { run = false, entries: compiledEntries = null } = configuration
   const allowed = new Set([
     "pretty",
     "planDir",
@@ -353,17 +358,22 @@ function materialize(options, { run = false } = {}) {
   const beforeStatus = gitValue(execution.root, "status", "--porcelain=v1", "--untracked-files=all")
   if (beforeStatus) throw new Error("execution worktree must be clean before assignment materialization")
 
-  let snapshots
-  if (run) {
-    const graph = buildGraph(planDir)
-    if (graph.plans.length === 0) throw new Error("cannot materialize a run assignment for an empty plan set")
-    snapshots = graph.plans.map((plan) => snapshotPlan(planDir, plan.id))
-  } else {
-    const snapshot = snapshotPlan(planDir, planId)
-    if (snapshot.snapshotSha256 !== expectedSnapshotSha256) {
-      throw new Error(`plan snapshot mismatch: expected ${expectedSnapshotSha256}, found ${snapshot.snapshotSha256}`)
+  let entries = compiledEntries
+  if (entries === null) {
+    if (run) {
+      const graph = buildGraph(planDir)
+      if (graph.plans.length === 0) throw new Error("cannot materialize a run assignment for an empty plan set")
+      entries = graph.plans.map((plan) => compiledAssignmentEntry(snapshotPlanFromGraph(graph, plan.id)))
+    } else {
+      entries = [compiledAssignmentEntry(snapshotPlan(planDir, planId))]
     }
-    snapshots = [snapshot]
+  }
+  if (!Array.isArray(entries) || entries.length === 0) throw new Error("compiled assignment entries are required")
+  for (const entry of entries) assertSnapshotEntry(entry)
+  if (!run && entries.length !== 1) throw new Error("a plan assignment requires exactly one compiled entry")
+  if (!run && entries[0].plan.id !== planId) throw new Error(`compiled assignment plan mismatch: expected ${planId}, found ${entries[0].plan.id}`)
+  if (!run && entries[0].snapshotSha256 !== expectedSnapshotSha256) {
+    throw new Error(`plan snapshot mismatch: expected ${expectedSnapshotSha256}, found ${entries[0].snapshotSha256}`)
   }
 
   const relativePlanDir = path.relative(coordination.root, planDir)
@@ -374,9 +384,7 @@ function materialize(options, { run = false } = {}) {
   )
   assertNoSymlinkComponents(execution.root, bundlePath)
   const relativePath = assertIgnored(execution.root, bundlePath)
-  if (fs.existsSync(bundlePath)) throw new Error(`assignment bundle already exists: ${bundlePath}`)
 
-  const entries = snapshots.map(snapshotEntry)
   const bundle = run
     ? {
         schemaVersion: ASSIGNMENT_SCHEMA_VERSION,
@@ -401,6 +409,24 @@ function materialize(options, { run = false } = {}) {
   const bytes = `${JSON.stringify(bundle, null, 2)}\n`
   const bundleSha256 = sha256(bytes)
 
+  if (fs.existsSync(bundlePath)) {
+    readVerifiedBundle(execution.root, {
+      bundle: bundlePath,
+      expectedBundleSha256: bundleSha256,
+    })
+    return {
+      ok: true,
+      command: run ? "materialize-run" : "materialize",
+      scope: run ? "RUN" : entries[0].plan.id,
+      branch,
+      generationBase: head,
+      bundlePath,
+      relativePath,
+      bundleSha256,
+      snapshotSha256: bundle.snapshotSha256,
+    }
+  }
+
   fs.mkdirSync(path.dirname(bundlePath), { recursive: true })
   assertNoSymlinkComponents(execution.root, bundlePath)
   const temporary = `${bundlePath}.tmp-${process.pid}-${randomUUID()}`
@@ -420,7 +446,7 @@ function materialize(options, { run = false } = {}) {
   return {
     ok: true,
     command: run ? "materialize-run" : "materialize",
-    scope: run ? "RUN" : snapshots[0].plan.id,
+    scope: run ? "RUN" : entries[0].plan.id,
     branch,
     generationBase: head,
     bundlePath,
@@ -430,7 +456,7 @@ function materialize(options, { run = false } = {}) {
   }
 }
 
-function verify(options) {
+export function verifyAssignment(options) {
   const verificationMode = options.verificationMode || "branch"
   if (verificationMode === "active-rebase") return verifyActiveRebase(options)
   if (verificationMode !== "branch") throw new Error(`unknown verification mode: ${verificationMode}`)
@@ -671,7 +697,7 @@ function activeRebaseEvidence(options, { includeStateHash }) {
   }
 }
 
-function inspectActiveRebase(options) {
+export function inspectActiveRebase(options) {
   const evidence = activeRebaseEvidence(options, { includeStateHash: false })
   return {
     ok: true,
@@ -696,7 +722,7 @@ function inspectActiveRebase(options) {
   }
 }
 
-function verifyActiveRebase(options) {
+export function verifyActiveRebase(options) {
   if (options.verificationMode !== "active-rebase") {
     throw new Error("active-rebase verification must be explicitly requested")
   }
@@ -735,10 +761,10 @@ function main() {
   try {
     parsed = parseArguments(process.argv.slice(2))
     const result = parsed.command === "verify"
-      ? verify(parsed.options)
+      ? verifyAssignment(parsed.options)
       : parsed.command === "inspect-active-rebase"
         ? inspectActiveRebase(parsed.options)
-        : materialize(parsed.options, { run: parsed.command === "materialize-run" })
+        : materializeAssignment(parsed.options, { run: parsed.command === "materialize-run" })
     print(result, parsed.options.pretty)
   } catch (error) {
     print({ ok: false, error: error.message }, parsed?.options?.pretty)

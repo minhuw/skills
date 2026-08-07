@@ -45,7 +45,7 @@ test("Herder rejects malformed package-owned agent metadata", async () => {
 	const profile = await loadPiProfile(catalog, "offcut");
 	const root = await mkdtemp(path.join(os.tmpdir(), "herder-agent-preflight-"));
 	try {
-		for (const role of ["plan-accountant", "plan-implementer", "plan-reviewer", "plan-judge", "plan-saver"]) {
+		for (const role of ["plan-implementer", "plan-reviewer", "plan-judge"]) {
 			await writeFile(path.join(root, `${role}.md`), `---\nname: ${role}\npackage: herder\n---\n`);
 		}
 		await writeFile(path.join(root, "plan-reviewer.md"), "---\nname: wrong\npackage: herder\n---\n");

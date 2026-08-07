@@ -16,14 +16,16 @@ test("Pi package registers Herder without double-loading pi-subagents", async ()
 	assert.equal(Object.hasOwn(manifest.peerDependencies, "pi-subagents"), false);
 });
 
-test("controller owns nested dispatch while workers cannot recurse", async () => {
+test("deterministic manager owns scheduling while workers cannot recurse", async () => {
 	const agentDir = path.join(packageRoot, "pi/herder/agents");
-	const controller = await readFile(path.join(agentDir, "plan-accountant.md"), "utf8");
-	assert.match(controller, /^package: herder$/m);
-	assert.match(controller, /^tools: .*subagent, subagent_wait$/m);
-	assert.match(controller, /^maxSubagentDepth: 2$/m);
+	const extension = await readFile(path.join(packageRoot, "pi/herder/index.ts"), "utf8");
+	assert.match(extension, /runtime\/client\.ts/);
+	assert.match(extension, /rpc\.call\("spawn", \{\s*agent: action\.agentType,/);
+	assert.match(extension, /updateFromReply\(reply\);\s*await dispatchReply\(reply\);/);
+	assert.match(extension, /artifacts: false,\s*mission: false,/);
+	assert.doesNotMatch(extension, /buildControllerTask|controllerWorkflowScript|workflowScript:/);
 
-	for (const role of ["plan-implementer", "plan-reviewer", "plan-judge", "plan-saver"]) {
+	for (const role of ["plan-implementer", "plan-reviewer", "plan-judge"]) {
 		const contents = await readFile(path.join(agentDir, `${role}.md`), "utf8");
 		assert.match(contents, /^package: herder$/m);
 		assert.doesNotMatch(contents, /^tools: .*subagent/m);
@@ -31,13 +33,11 @@ test("controller owns nested dispatch while workers cannot recurse", async () =>
 	}
 });
 
-test("Pi overlay specifies rolling first-completion scheduling and stable worktrees", async () => {
+test("Pi overlay specifies manager-owned scheduling and stable worktrees", async () => {
 	const protocol = await readFile(path.join(packageRoot, "pi/herder/pi-orchestration.md"), "utf8");
-	assert.match(protocol, /rolling, role-agnostic pool/);
-	assert.match(protocol, /subagent_wait` without `all:true`/);
-	assert.match(protocol, /Never use `pi-subagents` managed temporary worktrees/);
-	assert.match(protocol, /async run ID is opaque/);
-	assert.match(protocol, /including separators such as `\|`/);
-	assert.match(protocol, /Integration is still the only cross-plan lock/);
-	assert.match(protocol, /never returns `ACTIONS` for the outer Pi session to execute/);
+	assert.match(protocol, /same deterministic Herder Run Manager/);
+	assert.match(protocol, /no managed temporary worktree/);
+	assert.match(protocol, /opaque `pi-subagents` run IDs/);
+	assert.match(protocol, /No control slot is reserved/);
+	assert.match(protocol, /only integration is serialized/);
 });

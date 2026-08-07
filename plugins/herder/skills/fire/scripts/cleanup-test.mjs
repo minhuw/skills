@@ -119,7 +119,6 @@ function cleanupResult(repo, planDir, extra = [], { allowFailure = false, env = 
     cleanup,
     "--repo", repo,
     "--plan-dir", planDir,
-    "--runtime", "native",
     "--pretty",
     ...extra,
   ], { cwd: repo, allowFailure, env })
@@ -128,13 +127,14 @@ function cleanupResult(repo, planDir, extra = [], { allowFailure = false, env = 
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "herder-cleanup-test-"))
 try {
-  const missingRuntime = run(process.execPath, [
+  const removedRuntime = run(process.execPath, [
     cleanup,
     "--repo", root,
     "--plan-dir", root,
+    "--runtime", "native",
   ], { allowFailure: true })
-  assert.notEqual(missingRuntime.status, 0)
-  assert.match(missingRuntime.stderr, /--runtime is required/)
+  assert.notEqual(removedRuntime.status, 0)
+  assert.match(removedRuntime.stderr, /Unknown argument: --runtime/)
 
   const expectedWorktrees = [
     { path: "/tmp/one", branch: "main", locked: false },
@@ -335,79 +335,6 @@ try {
   assert.equal(handoffCleanup.preserved.integrationBranch, null)
   assert.equal(git(finalRepo, "branch", "--list", finalIntegrationBranch), "")
   assert.equal(fs.existsSync(finalIntegration), false)
-
-  const orcaRepo = path.join(root, "orca-repo")
-  const orcaWorktrees = path.join(root, "orca-worktrees")
-  fs.mkdirSync(orcaRepo)
-  fs.mkdirSync(orcaWorktrees)
-  git(orcaRepo, "init", "-q", "-b", "main")
-  git(orcaRepo, "config", "user.name", "Herder Orca Cleanup Test")
-  git(orcaRepo, "config", "user.email", "herder-orca-cleanup@example.invalid")
-  fs.writeFileSync(path.join(orcaRepo, "base.txt"), "base\n")
-  git(orcaRepo, "add", "base.txt")
-  git(orcaRepo, "commit", "-q", "-m", "test: base")
-  const orcaInitial = git(orcaRepo, "rev-parse", "HEAD")
-  const orcaPlanDir = writePlans(orcaRepo, [{ id: "001", title: "Done", status: "DONE" }])
-  const orcaIntegrationBranch = "herder/plans/integration"
-  const orcaIntegration = addWorktree(orcaRepo, orcaWorktrees, orcaIntegrationBranch, orcaInitial)
-  git(orcaRepo, "update-ref", "refs/plan-herder/plans/base", orcaInitial, "")
-  const orcaDoneBranch = "herder/plans/001"
-  const orcaDone = addWorktree(orcaRepo, orcaWorktrees, orcaDoneBranch, orcaIntegrationBranch)
-  commitFile(orcaDone, "done.txt", "done\n", "feat: add Orca-owned behavior")
-  const orcaDoneHead = git(orcaDone, "rev-parse", "HEAD")
-  git(orcaIntegration, "merge", "-q", "--ff-only", orcaDoneBranch)
-  git(orcaRepo, "update-ref", "refs/plan-herder/plans/completed/001", orcaDoneHead, "")
-
-  const fakeOrca = path.join(root, "fake-orca-cleanup")
-  const fakeOrcaLog = path.join(root, "fake-orca-cleanup.log")
-  fs.writeFileSync(fakeOrca, `#!/usr/bin/env node
-const fs = require("node:fs")
-const { spawnSync } = require("node:child_process")
-const args = process.argv.slice(2).filter((arg) => arg !== "--json")
-fs.appendFileSync(process.env.FAKE_ORCA_LOG, JSON.stringify(args) + "\\n")
-const selectorIndex = args.indexOf("--worktree")
-const selector = selectorIndex === -1 ? "" : args[selectorIndex + 1]
-const worktree = selector.startsWith("path:") ? selector.slice(5) : ""
-if (args[0] === "worktree" && args[1] === "show" && worktree) {
-  process.stdout.write(JSON.stringify({ ok: true, result: { id: "repo::" + worktree, path: worktree } }) + "\\n")
-} else if (args[0] === "terminal" && args[1] === "list" && worktree) {
-  const terminals = process.env.FAKE_ORCA_LIVE === "1" ? [{ handle: "terminal:live", worktreePath: worktree }] : []
-  process.stdout.write(JSON.stringify({ ok: true, result: { terminals, totalCount: terminals.length, truncated: false } }) + "\\n")
-} else if (args[0] === "worktree" && args[1] === "rm" && worktree) {
-  const result = spawnSync("git", ["-C", process.env.FAKE_ORCA_REPO, "worktree", "remove", "--", worktree], { encoding: "utf8" })
-  if (result.status !== 0) {
-    process.stderr.write(result.stderr || result.stdout)
-    process.exit(result.status || 1)
-  }
-  process.stdout.write(JSON.stringify({ ok: true, result: { removed: true, path: worktree } }) + "\\n")
-} else {
-  process.stderr.write("unexpected fake Orca command: " + args.join(" ") + "\\n")
-  process.exit(2)
-}
-`)
-  fs.chmodSync(fakeOrca, 0o755)
-  const orcaEnv = {
-    ...process.env,
-    HERDER_ORCA_BIN: fakeOrca,
-    FAKE_ORCA_LOG: fakeOrcaLog,
-    FAKE_ORCA_REPO: orcaRepo,
-  }
-  const orcaBlocked = cleanupResult(orcaRepo, orcaPlanDir, ["--runtime", "orca", "--dry-run"], {
-    env: { ...orcaEnv, FAKE_ORCA_LIVE: "1" },
-  }).json
-  assert.equal(orcaBlocked.actions.length, 0)
-  assert.equal(orcaBlocked.skipped.some((item) => item.reason === "orca-live-terminals"), true)
-  const orcaPreview = cleanupResult(orcaRepo, orcaPlanDir, ["--runtime", "orca", "--dry-run"], { env: orcaEnv }).json
-  assert.equal(orcaPreview.runtime, "orca")
-  assert.deepEqual(orcaPreview.actions[0].operations, ["remove-orca-worktree", "delete-completed-plan-branch"])
-  const orcaCleaned = cleanupResult(orcaRepo, orcaPlanDir, ["--runtime", "orca"], { env: orcaEnv }).json
-  assert.deepEqual(orcaCleaned.removed.map((item) => item.branch), [orcaDoneBranch])
-  assert.equal(fs.existsSync(orcaDone), false)
-  assert.equal(git(orcaRepo, "branch", "--list", orcaDoneBranch), "")
-  const orcaCalls = fs.readFileSync(fakeOrcaLog, "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line))
-  assert.equal(orcaCalls.some((args) => args[0] === "worktree" && args[1] === "show"), true)
-  assert.equal(orcaCalls.some((args) => args[0] === "terminal" && args[1] === "list"), true)
-  assert.equal(orcaCalls.some((args) => args[0] === "worktree" && args[1] === "rm"), true)
 
   console.log("herder Fire cleanup tests passed")
 } finally {

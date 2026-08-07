@@ -10,7 +10,7 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = path.resolve(SCRIPT_DIR, "../..");
 const CATALOG_PATH = path.join(PLUGIN_ROOT, "agent-profiles/profiles.json");
 const MANIFEST_PATH = path.join(PLUGIN_ROOT, "agent-profiles/manifest.json");
-const ROLES = ["plan-accountant", "plan-implementer", "plan-reviewer", "plan-judge", "plan-saver"];
+const ROLES = ["plan-implementer", "plan-reviewer", "plan-judge"];
 const HOSTS = ["codex", "claude", "pi"];
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:+/-]*$/;
 const EFFORTS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -140,14 +140,9 @@ function piIdentity(role) {
 }
 
 function roleTemplate(host, role) {
-  if (role === "plan-accountant") {
-    return host === "codex"
-      ? "agent-profiles/templates/codex/plan_accountant.toml"
-      : "agent-profiles/templates/claude/plan-accountant.md";
-  }
   return host === "codex"
     ? `agent-profiles/codex/${role.replaceAll("-", "_")}.toml`
-    : `agents/${role}.md`;
+    : `agent-profiles/templates/claude/${role}.md`;
 }
 
 function replaceSingle(text, expression, replacement, label) {
@@ -192,12 +187,6 @@ async function generatedState(catalog) {
   };
   const files = new Map();
   for (const role of ROLES) {
-    const codexSource = `agent-profiles/codex/${role.replaceAll("-", "_")}.toml`;
-    const claudeSource = `agents/${role}.md`;
-    const codexBytes = await readFile(path.join(PLUGIN_ROOT, codexSource));
-    const claudeBytes = await readFile(path.join(PLUGIN_ROOT, claudeSource));
-    manifest.hosts.codex.files.push({ source: codexSource, target: path.basename(codexSource), legacy: true, sha256: sha256(codexBytes) });
-    manifest.hosts.claude.files.push({ source: claudeSource, identifier: `herder:${role}`, legacy: true, sha256: sha256(claudeBytes) });
     const piSource = `../../pi/herder/agents/${role}.md`;
     const piBytes = await readFile(path.resolve(PLUGIN_ROOT, piSource));
     manifest.hosts.pi.files.push({ source: piSource, identifier: piIdentity(role), role, generic: true, sha256: sha256(piBytes) });

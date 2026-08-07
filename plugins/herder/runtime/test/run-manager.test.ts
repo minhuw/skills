@@ -1,0 +1,413 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { ensureService, requestService, stopService } from "../client.ts";
+import { initPlanDir } from "../../skills/plans/scripts/herder-plans.mjs";
+import { GitDriver, git, runCommand } from "../git-driver.ts";
+
+function writeFixture(root: string): { repo: string; planDirectory: string; originalHead: string } {
+	const repo = path.join(root, "repo");
+	fs.mkdirSync(repo, { recursive: true });
+	runCommand("git", ["init", "-q", repo]);
+	git(repo, ["config", "user.name", "Herder Runtime Test"]);
+	git(repo, ["config", "user.email", "herder-runtime@example.invalid"]);
+	fs.mkdirSync(path.join(repo, "src"));
+	fs.mkdirSync(path.join(repo, "test"));
+	fs.writeFileSync(path.join(repo, "package.json"), `${JSON.stringify({ name: "herder-runtime-fixture", private: true, type: "module", scripts: { test: "node --test" } }, null, 2)}\n`);
+	fs.writeFileSync(path.join(repo, "src/value.mjs"), "export const value = 1\n");
+	fs.writeFileSync(path.join(repo, "src/other.mjs"), "export const other = 1\n");
+	fs.writeFileSync(path.join(repo, "test/value.test.mjs"), `import assert from "node:assert/strict"\nimport test from "node:test"\nimport { value } from "../src/value.mjs"\ntest("value", () => assert.equal(value, 2))\n`);
+	git(repo, ["add", "."]);
+	git(repo, ["commit", "-q", "-m", "test: add runtime fixture"]);
+	const originalHead = git(repo, ["rev-parse", "HEAD"]).stdout.trim();
+	const planDirectory = path.join(repo, "herder-plans");
+	initPlanDir(planDirectory);
+	fs.writeFileSync(path.join(planDirectory, "README.md"), `# Herder Plans
+
+## Execution order & status
+
+| Plan | Title | Priority | Effort | Depends on | Status |
+|---|---|---|---|---|---|
+| [001](001-update-value.md) | Update the fixture value | P1 | S | — | TODO |
+
+## Dependency notes
+
+None.
+
+## Considered and rejected
+
+None.
+`);
+	fs.writeFileSync(path.join(planDirectory, "001-update-value.md"), `# Plan 001: Update the fixture value
+
+## Status
+
+- **Priority**: P1
+- **Effort**: S
+- **Risk**: LOW
+- **Depends on**: none
+- **Category**: tests
+- **Planned at**: commit \`${originalHead.slice(0, 8)}\`, 2026-08-07
+- **Kind**: behavioral
+- **Parent objective**: Prove the deterministic Herder manager executes and integrates one reviewed plan.
+
+## Why this matters
+
+This fixture proves that process discovery, durable action accounting, worker backfilling, independent review, integration, and final audit all advance through the deterministic manager.
+
+## Current state
+
+- \`src/value.mjs\` exports the number one.
+- \`test/value.test.mjs\` expects the number two and therefore becomes the focused verification proof after implementation.
+- The repository uses dependency-free ESM and Node's built-in test runner.
+
+## Commands you will need
+
+| Purpose | Command | Expected on success |
+|---|---|---|
+| Tests | \`npm test\` | exits 0 with one passing test |
+
+## Dependency contract
+
+- **Consumes**: none.
+- **Provides**: the exported fixture value is two and its focused test passes.
+- **Safe intermediate state**: this is the only source transition and the repository test command passes after integration.
+
+## Scope
+
+**In scope** (declared write paths):
+- \`src/value.mjs\`
+
+**Out of scope**:
+- Package metadata, dependencies, and the test contract.
+
+## Git workflow
+
+- Branch: use the exact branch/worktree assigned by Herder Fire; never create or switch branches.
+- Create one focused conventional commit.
+- Do not push or open a pull request.
+
+## Steps
+
+### Step 1: Update the exported value
+
+Change the exported numeric value from one to two without changing the module interface.
+
+**Verify**: \`npm test\` → one passing test.
+
+## Test plan
+
+- Run \`npm test\` and require the existing focused value assertion to pass.
+- Keep the \`node:test\` and \`node:assert/strict\` module specifiers; they are not shell commands.
+- Do not add dependencies or broaden the test surface.
+
+## Review map
+
+- **Outcome**: the exported value is two.
+- **Modified symbols**: \`value\` in \`src/value.mjs\`.
+- **Direct contracts**: the existing import and strict equality assertion.
+- **Expected unchanged behavior**: module format and export name remain unchanged.
+- **Proof**: \`npm test\`.
+- **Expected diff**: one numeric literal in \`src/value.mjs\`.
+
+## Done criteria
+
+- [ ] \`npm test\` exits 0.
+- [ ] \`src/value.mjs\` continues exporting \`value\` with the number two.
+- [ ] No dependency or test contract changes are introduced.
+
+## STOP conditions
+
+Stop if the module no longer matches the stated ESM shape, if the test requires another behavior, or if a dependency would be required.
+
+## Maintenance notes
+
+Keep this fixture deliberately small so control-plane failures remain distinguishable from implementation complexity.
+`);
+	return { repo, planDirectory, originalHead };
+}
+
+function addIndependentPlan(fixture: { planDirectory: string }): void {
+	const readmePath = path.join(fixture.planDirectory, "README.md");
+	const readme = fs.readFileSync(readmePath, "utf8").replace(
+		"| [001](001-update-value.md) | Update the fixture value | P1 | S | — | TODO |",
+		"| [001](001-update-value.md) | Update the fixture value | P1 | S | — | TODO |\n| [002](002-update-other.md) | Update the other fixture value | P1 | S | — | TODO |",
+	);
+	fs.writeFileSync(readmePath, readme);
+	const second = fs.readFileSync(path.join(fixture.planDirectory, "001-update-value.md"), "utf8")
+		.replaceAll("Plan 001", "Plan 002")
+		.replaceAll("fixture value", "other fixture value")
+		.replaceAll("src/value.mjs", "src/other.mjs")
+		.replaceAll("`value`", "`other`");
+	fs.writeFileSync(path.join(fixture.planDirectory, "002-update-other.md"), second);
+}
+
+function payload(value: unknown): Record<string, unknown> {
+	return value as Record<string, unknown>;
+}
+
+test("fresh runs reject lifecycle state without manager-owned execution proof", { timeout: 10_000 }, async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "herder-manager-adoption-test-"));
+	const fixture = writeFixture(root);
+	fs.writeFileSync(
+		path.join(fixture.planDirectory, "README.md"),
+		fs.readFileSync(path.join(fixture.planDirectory, "README.md"), "utf8").replace("| TODO |", "| DONE |"),
+	);
+	try {
+		const service = await ensureService(fixture.planDirectory);
+		await assert.rejects(() => requestService(service, "/v1/start", {
+			mode: "fire",
+			repositoryRoot: fixture.repo,
+			planDirectory: fixture.planDirectory,
+			host: "codex",
+			profile: "eclipse",
+		}), /cannot adopt prior execution state: 001=DONE/);
+	} finally {
+		await stopService(fixture.planDirectory).catch(() => {});
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("malformed clean worker envelopes pause after three bounded transport retries", { timeout: 20_000 }, async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "herder-manager-malformed-test-"));
+	const fixture = writeFixture(root);
+	try {
+		const service = await ensureService(fixture.planDirectory);
+		let reply = payload(payload(await requestService(service, "/v1/start", {
+			mode: "fire",
+			repositoryRoot: fixture.repo,
+			planDirectory: fixture.planDirectory,
+			host: "codex",
+			profile: "eclipse",
+			maxParallel: 1,
+			dashboardUrl: service.dashboardUrl,
+		})).reply);
+		for (let attempt = 1; attempt <= 3; attempt += 1) {
+			const action = payload((reply.actions as unknown[])[0]);
+			assert.equal(action.role, "plan-implementer");
+			assert.equal(action.round, 1, "clean transport retry consumed a substantive round");
+			await requestService(service, "/v1/event", {
+				eventId: `malformed-dispatch-${attempt}`,
+				kind: "dispatch_results",
+				dispatchResults: [{ actionId: action.actionId, accepted: true, hostHandle: `malformed-worker-${attempt}` }],
+			});
+			reply = payload(payload(await requestService(service, "/v1/event", {
+				eventId: `malformed-terminal-${attempt}`,
+				kind: "terminals",
+				terminals: [{ actionId: action.actionId, hostHandle: `malformed-worker-${attempt}`, response: "not a role envelope" }],
+			})).reply);
+		}
+		assert.equal(reply.status, "needs_input");
+		assert.equal((reply.actions as unknown[]).length, 0);
+		assert.match(String(reply.message), /transport failed 3 times/);
+	} finally {
+		await stopService(fixture.planDirectory).catch(() => {});
+		fs.rmSync(root, { recursive: true, force: true });
+		fs.rmSync(`${fixture.repo}-herder-worktrees`, { recursive: true, force: true });
+	}
+});
+
+test("persistent service drives a complete deterministic run and reuses its process", { timeout: 30_000 }, async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "herder-manager-test-"));
+	const fixture = writeFixture(root);
+	try {
+		const gateReader = new GitDriver({
+			repoRoot: fixture.repo,
+			planDirectory: fixture.planDirectory,
+			planName: "herder-plans",
+			helperRoot: root,
+			host: "codex",
+		});
+		assert.deepEqual(gateReader.extractGateCommands(fs.readFileSync(path.join(fixture.planDirectory, "001-update-value.md"), "utf8")), ["npm test"]);
+		assert.throws(() => new GitDriver({
+			repoRoot: fixture.repo,
+			planDirectory: fixture.planDirectory,
+			planName: "herder-plans",
+			helperRoot: root,
+			worktreeRoot: fixture.repo,
+		}), /outside Herder's allowed locations/);
+		const [first, second, third] = await Promise.all([
+			ensureService(fixture.planDirectory),
+			ensureService(fixture.planDirectory),
+			ensureService(fixture.planDirectory),
+		]);
+		assert.equal(second.instanceId, first.instanceId);
+		assert.equal(second.pid, first.pid);
+		assert.equal(third.instanceId, first.instanceId);
+		assert.match(first.dashboardUrl, /^http:\/\/127\.0\.0\.1:\d+\/$/);
+		assert.equal((await fetch(`${first.dashboardUrl}api/health`)).status, 200);
+
+		const started = payload(await requestService(first, "/v1/start", {
+			mode: "fire",
+			repositoryRoot: fixture.repo,
+			planDirectory: fixture.planDirectory,
+			host: "codex",
+			profile: "eclipse",
+			maxParallel: 2,
+			dashboardUrl: first.dashboardUrl,
+		}));
+		const startReply = payload(started.reply);
+		assert.equal(startReply.status, "running");
+		await assert.rejects(() => requestService(first, "/v1/event", {
+			eventId: "invalid-kind",
+			kind: "unexpected",
+		}), /Unknown manager event kind/);
+		const initialImplementer = payload((startReply.actions as unknown[])[0]);
+		assert.match(String(initialImplementer.taskName), /^[a-z0-9_]+$/, "task name is not portable across native host adapters");
+		assert.equal(
+			String(initialImplementer.worktree),
+			path.join(fs.realpathSync(fixture.planDirectory), ".herder", "worktrees", "herder-plans", "001"),
+			"Codex worktree is not contained by its coordinator project",
+		);
+		assert.match(String(initialImplementer.prompt), /give apply_patch an absolute path beneath REPOSITORY_WORKTREE/);
+		await stopService(fixture.planDirectory);
+		let service = await ensureService(fixture.planDirectory);
+		assert.notEqual(service.instanceId, first.instanceId);
+		const midRun = payload(await requestService(service, "/v1/status"));
+		assert.equal(payload(midRun.reply).dashboardUrl, service.forwardedUrl || service.dashboardUrl);
+		const implementer = payload((payload(midRun.reply).actions as unknown[])[0]);
+		assert.equal(implementer.actionId, initialImplementer.actionId, "proposed action changed across service restart");
+		assert.equal(implementer.role, "plan-implementer");
+		assert.match(String(implementer.prompt), /deterministic Herder Run Manager owns/);
+
+		await requestService(service, "/v1/event", {
+			eventId: "dispatch-implementer",
+			kind: "dispatch_results",
+			dispatchResults: [{ actionId: implementer.actionId, accepted: true, hostHandle: "worker-implementer" }],
+		});
+		await stopService(fixture.planDirectory);
+		service = await ensureService(fixture.planDirectory);
+		const dispatchedRecovery = payload(await requestService(service, "/v1/status"));
+		const recoveredReply = payload(dispatchedRecovery.reply);
+		assert.equal((recoveredReply.actions as unknown[]).length, 0);
+		assert.equal(payload((recoveredReply.active as unknown[])[0]).hostHandle, "worker-implementer");
+		const worktree = String(implementer.worktree);
+		fs.writeFileSync(path.join(worktree, "src/value.mjs"), "export const value = 2\n");
+		git(worktree, ["add", "src/value.mjs"]);
+		git(worktree, ["commit", "-q", "-m", "fix: update fixture value"]);
+		const implementerTerminal = payload(await requestService(service, "/v1/event", {
+			eventId: "terminal-implementer",
+			kind: "terminals",
+			terminals: [{
+				actionId: implementer.actionId,
+				hostHandle: "worker-implementer",
+				response: `STATUS: COMPLETE\nCOMMITS: ${git(worktree, ["rev-parse", "HEAD"]).stdout.trim()}\nADDRESSED: none\nCHECKS: npm test — passed\nFILES CHANGED: src/value.mjs\nDISCOVERED_PATHS: none\nNOTES: value updated\nUSAGE: input_tokens=100; cached_input_tokens=20; output_tokens=30; reasoning_tokens=10; source=test-host`,
+			}],
+		}));
+		const reviewer = payload((payload(implementerTerminal.reply).actions as unknown[])[0]);
+		assert.equal(reviewer.role, "plan-reviewer");
+
+		await requestService(service, "/v1/event", {
+			eventId: "dispatch-reviewer",
+			kind: "dispatch_results",
+			dispatchResults: [{ actionId: reviewer.actionId, accepted: true, hostHandle: "worker-reviewer" }],
+		});
+		const reviewerTerminal = payload(await requestService(service, "/v1/event", {
+			eventId: "terminal-reviewer",
+			kind: "terminals",
+			terminals: [{
+				actionId: reviewer.actionId,
+				hostHandle: "worker-reviewer",
+				response: "VERDICT: APPROVE\nFINDINGS: none\nFIX_GUIDANCE: none\nDISCOVERED_PATHS: none\nSCOPE: PASS\nCHECKS: npm test — passed\nRATIONALE: focused outcome and gates pass\nUSAGE: input_tokens=80; cached_input_tokens=10; output_tokens=20; reasoning_tokens=5; source=test-host",
+			}],
+		}));
+		const finalReviewer = payload((payload(reviewerTerminal.reply).actions as unknown[])[0]);
+		assert.equal(finalReviewer.planId, "RUN");
+		assert.equal(finalReviewer.workerMode, "FINAL_AUDIT");
+
+		await requestService(service, "/v1/event", {
+			eventId: "dispatch-final",
+			kind: "dispatch_results",
+			dispatchResults: [{ actionId: finalReviewer.actionId, accepted: true, hostHandle: "worker-final" }],
+		});
+		const complete = payload(await requestService(service, "/v1/event", {
+			eventId: "terminal-final",
+			kind: "terminals",
+			terminals: [{
+				actionId: finalReviewer.actionId,
+				hostHandle: "worker-final",
+				response: "VERDICT: APPROVE\nFINDINGS: none\nFIX_GUIDANCE: none\nDISCOVERED_PATHS: none\nSCOPE: PASS\nCHECKS: npm test — passed\nRATIONALE: aggregate plan set is coherent\nUSAGE: input_tokens=60; cached_input_tokens=10; output_tokens=15; reasoning_tokens=5; source=test-host",
+			}],
+		}));
+		const finalReply = payload(complete.reply);
+		assert.equal(finalReply.status, "complete");
+		assert.equal(payload(finalReply.summary).done, 1);
+		assert.equal(git(fixture.repo, ["rev-parse", "HEAD"]).stdout.trim(), fixture.originalHead, "user checkout HEAD changed");
+		assert.equal(fs.readFileSync(path.join(fixture.repo, "src/value.mjs"), "utf8"), "export const value = 1\n", "user checkout source changed");
+		assert.equal(git(fixture.repo, ["show", "herder/herder-plans/integration:src/value.mjs"]).stdout, "export const value = 2\n");
+
+		const replay = payload(await requestService(service, "/v1/event", {
+			eventId: "terminal-final",
+			kind: "terminals",
+			terminals: [{
+				actionId: finalReviewer.actionId,
+				hostHandle: "worker-final",
+				response: "VERDICT: APPROVE\nFINDINGS: none\nFIX_GUIDANCE: none\nDISCOVERED_PATHS: none\nSCOPE: PASS\nCHECKS: npm test — passed\nRATIONALE: aggregate plan set is coherent\nUSAGE: input_tokens=60; cached_input_tokens=10; output_tokens=15; reasoning_tokens=5; source=test-host",
+			}],
+		}));
+		assert.equal(payload(replay.reply).status, "complete");
+		await assert.rejects(() => requestService(service, "/v1/event", {
+			eventId: "terminal-final",
+			kind: "terminals",
+			terminals: [{ actionId: finalReviewer.actionId, hostHandle: "worker-final", interrupted: true }],
+		}), /replayed with different payload/);
+
+		await stopService(fixture.planDirectory);
+		const restarted = await ensureService(fixture.planDirectory);
+		assert.notEqual(restarted.instanceId, service.instanceId);
+		assert.notEqual(restarted.pid, service.pid);
+		const recovered = payload(await requestService(restarted, "/v1/status"));
+		assert.equal(payload(recovered.reply).status, "complete");
+		await assert.rejects(() => requestService(restarted, "/v1/start", {
+			mode: "resume",
+			repositoryRoot: fixture.repo,
+			planDirectory: fixture.planDirectory,
+			host: "claude",
+			profile: "eclipse",
+		}), /Resume host must remain codex/);
+	} finally {
+		await stopService(fixture.planDirectory).catch(() => {});
+		fs.rmSync(root, { recursive: true, force: true });
+		fs.rmSync(`${fixture.repo}-herder-worktrees`, { recursive: true, force: true });
+	}
+});
+
+test("one manager fills the role-agnostic worker pool across independent plans", { timeout: 20_000 }, async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "herder-manager-pool-test-"));
+	const fixture = writeFixture(root);
+	addIndependentPlan(fixture);
+	try {
+		const service = await ensureService(fixture.planDirectory);
+		const started = payload(await requestService(service, "/v1/start", {
+			mode: "fire",
+			repositoryRoot: fixture.repo,
+			planDirectory: fixture.planDirectory,
+			host: "codex",
+			profile: "eclipse",
+			maxParallel: 2,
+			dashboardUrl: service.dashboardUrl,
+		}));
+		const reply = payload(started.reply);
+		const actions = (reply.actions as unknown[]).map(payload);
+		assert.equal(actions.length, 2);
+		assert.deepEqual(actions.map((action) => action.planId), ["001", "002"]);
+		assert.equal(actions.every((action) => action.role === "plan-implementer"), true);
+		assert.equal(payload(reply.summary).available, 0);
+		const constrained = payload(payload(await requestService(service, "/v1/event", {
+			eventId: "capacity-limited-dispatch",
+			kind: "dispatch_results",
+			dispatchResults: [
+				{ actionId: actions[0].actionId, accepted: true, hostHandle: "only-worker-slot" },
+				{ actionId: actions[1].actionId, accepted: false, error: "host concurrency limit reached" },
+			],
+		})).reply);
+		assert.equal((constrained.actions as unknown[]).length, 0, "capacity rejection was retried before a worker completed");
+		assert.equal((constrained.active as unknown[]).length, 1);
+		assert.equal(git(fixture.repo, ["rev-parse", "HEAD"]).stdout.trim(), fixture.originalHead);
+	} finally {
+		await stopService(fixture.planDirectory).catch(() => {});
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});

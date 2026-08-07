@@ -118,16 +118,15 @@ function readAssets() {
   }))
 }
 
-export async function createDashboardServer(input = {}) {
+export function createDashboardHandler(input = {}) {
   const planDir = path.resolve(input.planDir ?? "herder-plans")
   const planName = input.planName ?? null
-  const port = input.port ?? DEFAULT_PORT
   const stateProvider = input.stateProvider ?? (() => buildDashboardState({ planDir, planName }))
   const allowedHosts = new Set()
   const assets = readAssets()
   stateProvider()
 
-  const server = http.createServer((request, response) => {
+  const handle = (request, response) => {
     const method = request.method ?? "GET"
     if (!acceptsLoopbackHost(request.headers.host, allowedHosts)) {
       send(response, 421, JSON.stringify({ error: "invalid-host" }), "application/json; charset=utf-8", method)
@@ -163,7 +162,19 @@ export async function createDashboardServer(input = {}) {
       return
     }
     send(response, 404, JSON.stringify({ error: "not-found" }), "application/json; charset=utf-8", method)
-  })
+  }
+
+  const allowHost = (value) => {
+    const host = canonicalHost(value)
+    if (host) allowedHosts.add(host)
+  }
+  return { handle, allowHost }
+}
+
+export async function createDashboardServer(input = {}) {
+  const port = input.port ?? DEFAULT_PORT
+  const dashboard = createDashboardHandler(input)
+  const server = http.createServer(dashboard.handle)
 
   server.on("clientError", (_error, socket) => {
     socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
@@ -179,16 +190,12 @@ export async function createDashboardServer(input = {}) {
     fail("Dashboard server did not receive a TCP address")
   }
   const url = `http://${LOOPBACK_HOST}:${address.port}/`
-  const allowHost = (value) => {
-    const host = canonicalHost(value)
-    if (host) allowedHosts.add(host)
-  }
   return {
     host: LOOPBACK_HOST,
     port: address.port,
     url,
     server,
-    allowHost,
+    allowHost: dashboard.allowHost,
     close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
   }
 }

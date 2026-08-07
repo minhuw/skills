@@ -3,7 +3,7 @@ export const HERDER_STATE_ENTRY = "herder-pi-run-v1";
 export interface HerderRunState {
 	version: 1;
 	mode: "fire" | "resume";
-	status: "running" | "complete" | "failed" | "stopped";
+	status: "initializing" | "running" | "paused" | "needs_input" | "complete" | "failed" | "stopped";
 	runId: string;
 	asyncDir?: string;
 	repoRoot: string;
@@ -29,7 +29,7 @@ function isRunState(value: unknown): value is HerderRunState {
 		&& typeof state.startedAt === "number"
 		&& typeof state.updatedAt === "number"
 		&& ["fire", "resume"].includes(state.mode || "")
-		&& ["running", "complete", "failed", "stopped"].includes(state.status || "");
+		&& ["initializing", "running", "paused", "needs_input", "complete", "failed", "stopped"].includes(state.status || "");
 }
 
 export function restoreLastRun(entries: readonly unknown[]): HerderRunState | undefined {

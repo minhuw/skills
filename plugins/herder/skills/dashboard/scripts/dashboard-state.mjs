@@ -2,7 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { buildGraph } from "../../plans/scripts/herder-plans.mjs"
-import { executionReport, readUsageState } from "../../plans/scripts/execution-store.mjs"
+import { executionReport, readManagerState, readUsageState } from "../../plans/scripts/execution-store.mjs"
 import { validatePlanName } from "../../fire/scripts/namespace-run.mjs"
 
 export const DASHBOARD_STATE_VERSION = 1
@@ -94,7 +94,6 @@ function rolePhase(role) {
   if (normalized.includes("implementer")) return "implementation"
   if (normalized.includes("reviewer")) return "review"
   if (normalized.includes("judge")) return "judge"
-  if (normalized.includes("saver")) return "recovery"
   return "coordination"
 }
 
@@ -129,6 +128,25 @@ export function derivePlanPhase(plan, attempts, lease, completion) {
   }
   if (role.includes("judge")) {
     return outcomeContains(latest, ["DONE", "APPROVE"]) ? "integration" : "repair"
+  }
+  return "coordination"
+}
+
+export function managerPlanPhase(spec, runtime, activeAction, unsatisfied) {
+  if (!runtime) {
+    if (spec.initialStatus === "DONE") return "complete"
+    if (spec.initialStatus === "REJECTED") return "rejected"
+    if (spec.initialStatus === "BLOCKED") return "blocked"
+    return unsatisfied.length > 0 ? "waiting" : "ready"
+  }
+  if (runtime.phase === "DONE" || runtime.phase === "FINAL_APPROVED") return "complete"
+  if (runtime.phase === "BLOCKED" || runtime.phase === "NEEDS_INPUT") return "blocked"
+  if (runtime.phase === "READY_TO_INTEGRATE") return "integration"
+  if (["READY_JUDGE", "JUDGING"].includes(runtime.phase)) return activeAction ? "judge" : "judge-queued"
+  if (["READY_REVIEWER", "REVIEWING"].includes(runtime.phase)) return "review"
+  if (["READY_IMPLEMENTER", "IMPLEMENTING"].includes(runtime.phase)) {
+    if (runtime.round > 1 && !activeAction) return "repair"
+    return activeAction ? "implementation" : "ready"
   }
   return "coordination"
 }
@@ -205,7 +223,7 @@ function planReport(records, id) {
     byRole: report.byRole,
     byOutcome: report.byOutcome,
     byModel: report.byModel,
-    byRuntime: report.byRuntime,
+    byHarness: report.byHarness,
     byGeneration: report.byGeneration,
     byServiceTier: report.byServiceTier,
   }
@@ -223,10 +241,40 @@ function resolveContext(inputDir, inputPlanName) {
   return { planDir, planName, repoRoot }
 }
 
+function dependencyWaves(plans) {
+  const remaining = new Map(plans.map((plan) => [plan.id, new Set(plan.dependencies)]))
+  const waves = []
+  while (remaining.size > 0) {
+    const wave = [...remaining].filter(([, dependencies]) => [...dependencies].every((id) => !remaining.has(id))).map(([id]) => id).sort()
+    if (wave.length === 0) fail("Compiled plan specification contains a dependency cycle")
+    waves.push(wave)
+    for (const id of wave) remaining.delete(id)
+  }
+  return waves
+}
+
 export function buildDashboardState(input = {}) {
   const context = resolveContext(input.planDir ?? "herder-plans", input.planName)
-  const graph = buildGraph(context.planDir)
-  const usage = readUsageState(context.planDir, graph.readme)
+  const manager = readManagerState(context.planDir)
+  if (manager.run && manager.specs.length === 0) fail("Manager run has no compiled plan specification")
+  const graph = manager.run ? {
+    plans: manager.specs.map((spec) => ({
+      id: spec.planId,
+      title: spec.title,
+      priority: spec.priority,
+      effort: spec.effort,
+      kind: spec.kind,
+      dependencies: spec.dependencies,
+      status: spec.initialStatus,
+      statusDetail: spec.initialStatusDetail,
+      shapeReady: true,
+    })),
+    ready: [],
+    shapeReady: true,
+    waves: dependencyWaves(manager.specs.map((spec) => ({ id: spec.planId, dependencies: spec.dependencies }))),
+    warnings: [],
+  } : buildGraph(context.planDir)
+  const usage = readUsageState(context.planDir)
   const records = usage.records
   const branchPrefix = `refs/heads/herder/${context.planName}/`
   const coordinationPrefix = `refs/plan-herder/${context.planName}/`
@@ -238,14 +286,24 @@ export function buildDashboardState(input = {}) {
   const completionByPlan = new Map(coordinationRefs
     .filter((item) => /^completed\/\d{3,}$/.test(item.relative))
     .map((item) => [item.relative.slice("completed/".length), item]))
-  const plansById = new Map(graph.plans.map((plan) => [plan.id, plan]))
-  const plans = graph.plans.map((plan) => {
+  const runtimeById = new Map(manager.plans.map((plan) => [plan.planId, plan]))
+  const activeActionById = new Map(manager.actions.filter((action) => ["proposed", "dispatched"].includes(action.state)).map((action) => [action.planId, action]))
+  const sourcePlans = graph.plans
+  const canonicalStatus = (plan) => {
+    const runtime = runtimeById.get(plan.id)
+    if (!runtime) return plan.status
+    if (["DONE", "FINAL_APPROVED"].includes(runtime.phase)) return "DONE"
+    if (["BLOCKED", "NEEDS_INPUT"].includes(runtime.phase)) return "BLOCKED"
+    return "IN PROGRESS"
+  }
+  const statusById = new Map(sourcePlans.map((plan) => [plan.id, canonicalStatus(plan)]))
+  const plans = sourcePlans.map((plan) => {
     const branch = branchByRelative.get(plan.id) ?? null
     const branchName = `herder/${context.planName}/${plan.id}`
     const worktree = worktreeByBranch.get(branchName) ?? null
     const completion = completionByPlan.get(plan.id) ?? null
     const attempts = records.filter((record) => record.plan === plan.id)
-    const unsatisfied = plan.dependencies.filter((id) => plansById.get(id)?.status !== "DONE")
+    const unsatisfied = plan.dependencies.filter((id) => statusById.get(id) !== "DONE")
     const lease = worktree?.locked ? parseLease(worktree.lockReason, context.planName, plan.id) : null
     const planView = {
       id: plan.id,
@@ -253,8 +311,8 @@ export function buildDashboardState(input = {}) {
       priority: plan.priority,
       effort: plan.effort,
       kind: plan.kind,
-      status: plan.status,
-      statusDetail: plan.statusDetail,
+      status: statusById.get(plan.id),
+      statusDetail: runtimeById.get(plan.id)?.repair?.[0] ?? plan.statusDetail,
       dependencies: plan.dependencies,
       unsatisfied,
       ready: graph.ready.includes(plan.id),
@@ -271,7 +329,10 @@ export function buildDashboardState(input = {}) {
       rounds: attemptsByRound(attempts),
       report: planReport(records, plan.id),
     }
-    planView.phase = derivePlanPhase(planView, attempts, lease, completion)
+    const runtime = runtimeById.get(plan.id) ?? null
+    planView.phase = manager.run
+      ? managerPlanPhase(plan, runtime, activeActionById.get(plan.id) ?? null, unsatisfied)
+      : derivePlanPhase(planView, attempts, lease, completion)
     return planView
   })
   const integrationBranch = branchByRelative.get("integration") ?? null
@@ -279,6 +340,15 @@ export function buildDashboardState(input = {}) {
   const integrationWorktree = worktreeByBranch.get(integrationName) ?? null
   const runReport = executionReport(records, "RUN")
   const forecast = buildForecast(plans, runReport)
+  const counts = {
+    total: plans.length,
+    todo: plans.filter((plan) => plan.status === "TODO").length,
+    inProgress: plans.filter((plan) => plan.status === "IN PROGRESS").length,
+    done: plans.filter((plan) => plan.status === "DONE").length,
+    blocked: plans.filter((plan) => plan.status === "BLOCKED").length,
+    rejected: plans.filter((plan) => plan.status === "REJECTED").length,
+  }
+  counts.actionable = counts.todo + counts.inProgress + counts.blocked
 
   return {
     version: DASHBOARD_STATE_VERSION,
@@ -288,13 +358,13 @@ export function buildDashboardState(input = {}) {
       name: context.planName,
       directory: context.planDir,
       repository: context.repoRoot,
-      complete: graph.complete,
+      complete: counts.done + counts.rejected === counts.total,
       shapeReady: graph.shapeReady,
-      counts: graph.counts,
-      ready: graph.ready,
-      inProgress: graph.inProgress,
-      blocked: graph.blocked,
-      waiting: graph.waiting,
+      counts,
+      ready: plans.filter((plan) => plan.phase === "ready").map((plan) => plan.id),
+      inProgress: plans.filter((plan) => plan.status === "IN PROGRESS").map((plan) => plan.id),
+      blocked: plans.filter((plan) => plan.status === "BLOCKED").map((plan) => plan.id),
+      waiting: plans.filter((plan) => plan.phase === "waiting").map((plan) => plan.id),
       waves: graph.waves,
       warnings: graph.warnings,
     },
@@ -313,8 +383,9 @@ export function buildDashboardState(input = {}) {
       byRole: runReport.byRole,
       byOutcome: runReport.byOutcome,
       byModel: runReport.byModel,
-      byRuntime: runReport.byRuntime,
+      byHarness: runReport.byHarness,
     },
+    manager,
     forecast,
     integration: {
       branch: integrationBranch ? {

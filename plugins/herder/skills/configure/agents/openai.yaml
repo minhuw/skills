@@ -1,4 +1,0 @@
-interface:
-  display_name: "Herder Configure"
-  short_description: "Configure and verify Herder role routing"
-  default_prompt: "Use $herder:configure to interactively map Herder roles to supported harnesses and models, then validate every route."

@@ -20,28 +20,26 @@ pi --model <provider>/kimi-k3 --thinking max
 
 Available commands:
 
-- `/herder-fire [plan-dir] [--profile name] [--max-parallel n] [--no-dashboard]`
-- `/herder-resume [plan-dir] [--profile name] [--max-parallel n] [--no-dashboard]`
+- `/herder-fire [plan-dir] [--profile name] [--max-parallel n] [--dashboard-port n]`
+- `/herder-resume [plan-dir] [--profile name] [--max-parallel n] [--dashboard-port n]`
 - `/herder-status [plan-dir]`
 - `/herder-dashboard [plan-dir]`
 - `/herder-stop`
 
-The `herder` tool exposes fire, resume, status, and dashboard actions to the active Pi model. Fire and resume return after the background controller starts. A compact Pi widget and the dashboard report progress.
+The `herder` tool exposes fire, resume, status, and dashboard actions to the active Pi model. Fire and resume start or reuse the persistent local Run Manager and its dashboard, dispatch the first available worker batch, then return. A compact Pi widget and the dashboard report progress.
 
 ## Responsibility boundary
 
-Herder retains ownership of plan state, SQLite accounting, stable branches/worktrees, immutable assignments, review rounds, recovery, gates, and serialized integration. `pi-subagents` supplies package-agent discovery, child Pi processes, async lifecycle/control, nested dispatch, and first-completion waits.
+The shared deterministic Run Manager retains ownership of plan state, SQLite accounting, stable branches/worktrees, immutable assignments, review rounds, recovery, gates, and serialized integration. `pi-subagents` supplies package-agent discovery, child Pi processes, and async lifecycle/control.
 
-The single `herder.plan-accountant` child is the run controller. It uses a rolling pool of nested role workers and backfills a slot as soon as any Implementer, Reviewer, Judge, or legacy Saver finishes. Each plan keeps one Herder-owned branch/worktree; `pi-subagents` temporary worktrees are not used. Only integration is globally serialized.
+The extension translates manager actions directly into Implementer, Reviewer, and Judge child runs and sends their terminal evidence back to the service. The manager backfills the global pool as soon as any role finishes. Each plan keeps one Herder-owned branch/worktree; `pi-subagents` temporary worktrees are not used. Only integration is globally serialized.
 
-Five generic package agents serve every profile:
+Three generic package agents are available for every profile:
 
 ```text
-herder.plan-accountant
 herder.plan-implementer
 herder.plan-reviewer
 herder.plan-judge
-herder.plan-saver
 ```
 
-The profile supplies the exact model and Pi thinking level at launch. Before any repository mutation, Herder validates the root model, every requested child-model effort, and all five package-owned agent definitions; the separately installed runtime must answer the required async spawn/resume RPC contract. It never substitutes another model after failure.
+The profile supplies each exact model and Pi thinking level at launch. Before repository mutation, Herder validates the root model, requested child-model efforts, package-owned definitions, and the separately installed runtime's async RPC contract. It never substitutes another model after failure.

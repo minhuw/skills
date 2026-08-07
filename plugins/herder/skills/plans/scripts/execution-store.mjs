@@ -5,23 +5,8 @@ import path from "node:path"
 const require = createRequire(import.meta.url)
 
 export const EXECUTION_DATABASE_RELATIVE = ".herder/execution.sqlite3"
-export const EXECUTION_SCHEMA_VERSION = 2
+export const EXECUTION_SCHEMA_VERSION = 5
 
-const LEGACY_SECTION_START = "<!-- herder-usage:start -->"
-const LEGACY_SECTION_END = "<!-- herder-usage:end -->"
-const LEGACY_HEADERS = [
-  "attempt",
-  "plan",
-  "role",
-  "model",
-  "effort",
-  "outcome",
-  "input tokens",
-  "cached input",
-  "output tokens",
-  "reasoning tokens",
-  "source",
-]
 const IDENTITY_FIELDS = [
   "attempt",
   "plan",
@@ -36,7 +21,6 @@ const IDENTITY_FIELDS = [
   "source",
   "round",
   "generation",
-  "runtime",
   "harness",
   "serviceTier",
   "startedAt",
@@ -74,13 +58,11 @@ function configureDatabase(database, { readOnly = false } = {}) {
 function initializeSchema(database, { allowInitialize = true } = {}) {
   const row = database.prepare("PRAGMA user_version").get()
   const version = Number(row.user_version)
-  if (version > EXECUTION_SCHEMA_VERSION) {
-    fail(`Execution database schema ${version} is newer than supported schema ${EXECUTION_SCHEMA_VERSION}`)
-  }
-  if (version === 0) {
-    if (!allowInitialize) fail("Execution database has no initialized schema")
-    database.exec(`
-      CREATE TABLE IF NOT EXISTS attempts (
+  if (version === EXECUTION_SCHEMA_VERSION) return
+  if (version !== 0) fail(`Execution database schema ${version} is unsupported; Herder ${EXECUTION_SCHEMA_VERSION} requires a fresh run database`)
+  if (!allowInitialize) fail("Execution database has no initialized schema")
+  database.exec(`
+      CREATE TABLE attempts (
         attempt_id TEXT PRIMARY KEY NOT NULL,
         plan_id TEXT NOT NULL,
         role TEXT NOT NULL,
@@ -94,7 +76,6 @@ function initializeSchema(database, { allowInitialize = true } = {}) {
         source TEXT NOT NULL,
         round_number INTEGER CHECK (round_number IS NULL OR round_number BETWEEN 1 AND 6),
         generation TEXT,
-        runtime TEXT,
         harness TEXT,
         service_tier TEXT,
         started_at TEXT,
@@ -102,16 +83,9 @@ function initializeSchema(database, { allowInitialize = true } = {}) {
         duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
         recorded_at TEXT NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS attempts_plan_id ON attempts(plan_id);
-      CREATE INDEX IF NOT EXISTS attempts_role ON attempts(role);
-      CREATE INDEX IF NOT EXISTS attempts_model_effort ON attempts(model, effort);
-      PRAGMA user_version = 1;
-    `)
-  }
-  if (version < 2) {
-    if (!allowInitialize) return
-    database.exec(`
-      CREATE TABLE IF NOT EXISTS run_configuration (
+      CREATE INDEX attempts_plan_id ON attempts(plan_id);
+
+      CREATE TABLE run_configuration (
         singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
         profile_name TEXT NOT NULL,
         profile_sha256 TEXT NOT NULL,
@@ -119,9 +93,115 @@ function initializeSchema(database, { allowInitialize = true } = {}) {
         roles_json TEXT NOT NULL,
         recorded_at TEXT NOT NULL
       );
-      PRAGMA user_version = 2;
-    `)
-  }
+
+      CREATE TABLE manager_runs (
+        run_id TEXT PRIMARY KEY NOT NULL,
+        repository_root TEXT NOT NULL,
+        plan_directory TEXT NOT NULL,
+        plan_name TEXT NOT NULL,
+        host TEXT NOT NULL CHECK (host IN ('codex', 'claude', 'pi')),
+        profile_name TEXT NOT NULL,
+        profile_sha256 TEXT NOT NULL,
+        max_parallel INTEGER NOT NULL CHECK (max_parallel > 0),
+        status TEXT NOT NULL CHECK (status IN ('initializing', 'running', 'paused', 'needs_input', 'complete', 'failed', 'stopped')),
+        checkout_state_token TEXT NOT NULL,
+        base_commit TEXT NOT NULL,
+        integration_branch TEXT NOT NULL,
+        integration_worktree TEXT NOT NULL,
+        dashboard_url TEXT,
+        terminal_detail TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX manager_runs_plan_directory ON manager_runs(plan_directory);
+
+      CREATE TABLE manager_plans (
+        run_id TEXT NOT NULL REFERENCES manager_runs(run_id) ON DELETE CASCADE,
+        plan_id TEXT NOT NULL,
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        round_number INTEGER NOT NULL CHECK (round_number BETWEEN 1 AND 6),
+        phase TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        worktree TEXT NOT NULL,
+        assignment_path TEXT NOT NULL,
+        assignment_sha256 TEXT NOT NULL,
+        snapshot_sha256 TEXT NOT NULL,
+        generation_base TEXT NOT NULL,
+        review_pass INTEGER NOT NULL DEFAULT 0 CHECK (review_pass >= 0),
+        findings_json TEXT NOT NULL DEFAULT '[]',
+        repair_json TEXT NOT NULL DEFAULT '[]',
+        gate_json TEXT NOT NULL DEFAULT '[]',
+        approved_base TEXT,
+        approved_head TEXT,
+        approved_tree TEXT,
+        rebase_json TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (run_id, plan_id)
+      );
+      CREATE INDEX manager_plans_phase ON manager_plans(run_id, phase, plan_id);
+
+      CREATE TABLE manager_events (
+        event_id TEXT PRIMARY KEY NOT NULL,
+        run_id TEXT NOT NULL REFERENCES manager_runs(run_id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        payload_sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX manager_events_run ON manager_events(run_id, created_at, event_id);
+
+      CREATE TABLE manager_actions (
+        action_id TEXT PRIMARY KEY NOT NULL,
+        run_id TEXT NOT NULL REFERENCES manager_runs(run_id) ON DELETE CASCADE,
+        plan_id TEXT NOT NULL,
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        round_number INTEGER NOT NULL CHECK (round_number BETWEEN 1 AND 6),
+        role TEXT NOT NULL,
+        attempt_id TEXT NOT NULL UNIQUE,
+        state TEXT NOT NULL CHECK (state IN ('proposed', 'dispatched', 'terminal', 'cancelled')),
+        agent_type TEXT NOT NULL,
+        model TEXT NOT NULL,
+        effort TEXT NOT NULL,
+        service_tier TEXT,
+        worker_mode TEXT NOT NULL,
+        task_name TEXT NOT NULL,
+        lease_reason TEXT NOT NULL,
+        host_handle TEXT,
+        result_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX manager_actions_run_state ON manager_actions(run_id, state, plan_id);
+
+      CREATE TABLE manager_service (
+        singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+        instance_id TEXT NOT NULL,
+        pid INTEGER NOT NULL CHECK (pid > 0),
+        port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+        auth_token TEXT NOT NULL,
+        dashboard_url TEXT NOT NULL,
+        forwarded_url TEXT,
+        started_at TEXT NOT NULL
+      );
+
+      CREATE TABLE manager_plan_specs (
+        run_id TEXT NOT NULL REFERENCES manager_runs(run_id) ON DELETE CASCADE,
+        plan_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+        title TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        effort TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL,
+        initial_status TEXT NOT NULL CHECK (initial_status IN ('TODO', 'DONE', 'BLOCKED', 'REJECTED')),
+        initial_status_detail TEXT NOT NULL,
+        gate_commands_json TEXT NOT NULL,
+        plan_file TEXT NOT NULL,
+        assignment_json TEXT NOT NULL,
+        PRIMARY KEY (run_id, plan_id)
+      );
+      CREATE UNIQUE INDEX manager_plan_specs_ordinal ON manager_plan_specs(run_id, ordinal);
+      PRAGMA user_version = 5;
+  `)
 }
 
 function assertHealthy(database, databasePath) {
@@ -130,7 +210,7 @@ function assertHealthy(database, databasePath) {
   if (result !== "ok") fail(`Execution database failed quick_check at ${databasePath}: ${result || "unknown error"}`)
 }
 
-function openDatabase(planDir, { create = false, readOnly = false } = {}) {
+export function openExecutionDatabase(planDir, { create = false, readOnly = false } = {}) {
   const databasePath = executionDatabasePath(planDir)
   const runtimeDirectory = path.dirname(databasePath)
   const existed = fs.existsSync(databasePath)
@@ -166,6 +246,8 @@ function openDatabase(planDir, { create = false, readOnly = false } = {}) {
     throw error
   }
 }
+
+const openDatabase = openExecutionDatabase
 
 function requiredText(value, label) {
   const normalized = String(value ?? "").trim()
@@ -218,7 +300,6 @@ export function normalizeUsageRecord(input = {}) {
     source: requiredText(input.source ?? "unknown", "Source"),
     round: optionalRound(input.round),
     generation: optionalText(input.generation, "Generation"),
-    runtime: optionalText(input.runtime, "Runtime"),
     harness: optionalText(input.harness, "Harness"),
     serviceTier: optionalText(input.serviceTier, "Service tier"),
     startedAt: optionalTimestamp(input.startedAt, "Started at"),
@@ -233,90 +314,6 @@ export function normalizeUsageRecord(input = {}) {
     fail(`Usage attempt ${record.attempt} finishes before it starts`)
   }
   return record
-}
-
-function parseTableRow(line) {
-  const trimmed = line.trim()
-  if (!trimmed.includes("|")) return null
-  const body = trimmed.replace(/^\|/, "").replace(/\|$/, "")
-  return body.split("|").map((cell) => cell.trim())
-}
-
-function normalizeHeader(value) {
-  return value.toLowerCase().replace(/[`*_]/g, "").replace(/\s+/g, " ").trim()
-}
-
-function isSeparatorRow(cells) {
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s/g, "")))
-}
-
-function findLegacyTable(section, readme) {
-  const lines = section.split(/\r?\n/)
-  for (let index = 0; index < lines.length - 1; index += 1) {
-    const header = parseTableRow(lines[index])
-    const separator = parseTableRow(lines[index + 1])
-    if (!header || !separator || !isSeparatorRow(separator)) continue
-    const normalized = header.map(normalizeHeader)
-    if (!LEGACY_HEADERS.every((name) => normalized.includes(name))) continue
-    const rows = []
-    for (let rowIndex = index + 2; rowIndex < lines.length; rowIndex += 1) {
-      const cells = parseTableRow(lines[rowIndex])
-      if (!cells || cells.length < header.length) break
-      rows.push(cells.slice(0, header.length))
-    }
-    return { normalized, rows }
-  }
-  fail(`${readme} has a legacy Herder usage section without its attempt ledger table`)
-}
-
-export function parseLegacyUsageRecords(markdown, readme) {
-  const start = markdown.indexOf(LEGACY_SECTION_START)
-  const end = markdown.indexOf(LEGACY_SECTION_END)
-  if (start === -1 && end === -1) return { present: false, records: [] }
-  if (start === -1 || end === -1 || end < start) fail(`${readme} has malformed legacy Herder usage section markers`)
-  if (markdown.indexOf(LEGACY_SECTION_START, start + LEGACY_SECTION_START.length) !== -1
-    || markdown.indexOf(LEGACY_SECTION_END, end + LEGACY_SECTION_END.length) !== -1) {
-    fail(`${readme} has duplicate legacy Herder usage section markers`)
-  }
-  const section = markdown.slice(start, end + LEGACY_SECTION_END.length)
-  const table = findLegacyTable(section, readme)
-  const column = Object.fromEntries(table.normalized.map((name, index) => [name, index]))
-  const records = table.rows.map((cells) => normalizeUsageRecord({
-    attempt: cells[column.attempt],
-    plan: cells[column.plan],
-    role: cells[column.role],
-    model: cells[column.model],
-    effort: cells[column.effort],
-    outcome: cells[column.outcome],
-    inputTokens: cells[column["input tokens"]],
-    cachedInputTokens: cells[column["cached input"]],
-    outputTokens: cells[column["output tokens"]],
-    reasoningTokens: cells[column["reasoning tokens"]],
-    source: cells[column.source],
-  }))
-  const attempts = new Set()
-  for (const record of records) {
-    if (attempts.has(record.attempt)) fail(`Usage attempt ${record.attempt} is recorded more than once in legacy README metadata`)
-    attempts.add(record.attempt)
-  }
-  return { present: true, records, start, end: end + LEGACY_SECTION_END.length }
-}
-
-function stripLegacyUsageSection(markdown, legacy) {
-  const prefix = markdown.slice(0, legacy.start).replace(/\s*$/, "")
-  const suffix = markdown.slice(legacy.end).replace(/^\s*/, "").replace(/\s*$/, "")
-  return `${[prefix, suffix].filter(Boolean).join("\n\n")}\n`
-}
-
-function atomicWrite(file, content) {
-  const mode = fs.existsSync(file) ? fs.statSync(file).mode & 0o777 : 0o644
-  const temporary = `${file}.herder-tmp-${process.pid}`
-  try {
-    fs.writeFileSync(temporary, content, { mode, flag: "wx" })
-    fs.renameSync(temporary, file)
-  } finally {
-    if (fs.existsSync(temporary)) fs.rmSync(temporary)
-  }
 }
 
 function rowToRecord(row) {
@@ -334,7 +331,6 @@ function rowToRecord(row) {
     source: row.source,
     round: row.round_number,
     generation: row.generation,
-    runtime: row.runtime,
     harness: row.harness,
     serviceTier: row.service_tier,
     startedAt: row.started_at,
@@ -371,7 +367,7 @@ function normalizeRunConfiguration(input = {}) {
   }
   if (!roles || typeof roles !== "object" || Array.isArray(roles)) fail("Roles must be a JSON object")
   const normalizedRoles = {}
-  for (const role of ["plan-accountant", "plan-implementer", "plan-reviewer", "plan-judge", "plan-saver"]) {
+  for (const role of ["plan-implementer", "plan-reviewer", "plan-judge"]) {
     const mapping = roles[role]
     if (!mapping || typeof mapping !== "object" || Array.isArray(mapping)) fail(`Missing run role ${role}`)
     const unknownFields = Object.keys(mapping).filter((field) => !["agent_type", "model", "effort", "service_tier"].includes(field))
@@ -408,9 +404,8 @@ function databaseSchemaVersion(database) {
   return Number(database.prepare("PRAGMA user_version").get().user_version)
 }
 
-export function recordRunConfiguration(planDir, readme, input) {
+export function recordRunConfiguration(planDir, input) {
   const configuration = normalizeRunConfiguration(input)
-  migrateLegacyUsage(planDir, readme)
   const database = openDatabase(planDir, { create: true })
   let recorded = false
   try {
@@ -445,6 +440,100 @@ export function readRunConfiguration(planDir) {
   }
 }
 
+function parseJsonColumn(value, fallback) {
+  if (!value) return fallback
+  try { return JSON.parse(value) } catch { return fallback }
+}
+
+export function readManagerState(planDir) {
+  const database = openDatabase(planDir, { readOnly: true })
+  if (!database) return { run: null, specs: [], plans: [], actions: [], service: null }
+  try {
+    const table = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'manager_runs'").get()
+    if (!table) return { run: null, specs: [], plans: [], actions: [], service: null }
+    const run = database.prepare("SELECT * FROM manager_runs ORDER BY created_at DESC LIMIT 1").get() ?? null
+    const plans = run ? database.prepare("SELECT * FROM manager_plans WHERE run_id = ? ORDER BY plan_id").all(run.run_id) : []
+    const specs = run ? database.prepare("SELECT * FROM manager_plan_specs WHERE run_id = ? ORDER BY ordinal, plan_id").all(run.run_id) : []
+    const actions = run ? database.prepare("SELECT * FROM manager_actions WHERE run_id = ? ORDER BY created_at, action_id").all(run.run_id) : []
+    const service = database.prepare(`
+      SELECT instance_id, pid, port, dashboard_url, forwarded_url, started_at
+      FROM manager_service WHERE singleton = 1
+    `).get() ?? null
+    return {
+      run: run ? {
+        runId: run.run_id,
+        planName: run.plan_name,
+        host: run.host,
+        profile: run.profile_name,
+        profileSha256: run.profile_sha256,
+        maxParallel: run.max_parallel,
+        status: run.status,
+        integrationBranch: run.integration_branch,
+        integrationWorktree: run.integration_worktree,
+        dashboardUrl: run.dashboard_url,
+        terminalDetail: run.terminal_detail,
+        createdAt: run.created_at,
+        updatedAt: run.updated_at,
+      } : null,
+      specs: specs.map((spec) => ({
+        planId: spec.plan_id,
+        ordinal: spec.ordinal,
+        title: spec.title,
+        priority: spec.priority,
+        effort: spec.effort,
+        kind: spec.kind,
+        dependencies: parseJsonColumn(spec.dependencies_json, []),
+        initialStatus: spec.initial_status,
+        initialStatusDetail: spec.initial_status_detail,
+        gateCommands: parseJsonColumn(spec.gate_commands_json, []),
+        planFile: spec.plan_file,
+      })),
+      plans: plans.map((plan) => ({
+        planId: plan.plan_id,
+        generation: plan.generation,
+        round: plan.round_number,
+        phase: plan.phase,
+        branch: plan.branch,
+        worktree: plan.worktree,
+        reviewPass: plan.review_pass,
+        findings: parseJsonColumn(plan.findings_json, []),
+        repair: parseJsonColumn(plan.repair_json, []),
+        gates: parseJsonColumn(plan.gate_json, []),
+        rebase: parseJsonColumn(plan.rebase_json, null),
+        updatedAt: plan.updated_at,
+      })),
+      actions: actions.map((action) => ({
+        actionId: action.action_id,
+        planId: action.plan_id,
+        generation: action.generation,
+        round: action.round_number,
+        role: action.role,
+        attemptId: action.attempt_id,
+        state: action.state,
+        agentType: action.agent_type,
+        model: action.model,
+        effort: action.effort,
+        serviceTier: action.service_tier,
+        workerMode: action.worker_mode,
+        taskName: action.task_name,
+        hostHandle: action.host_handle,
+        createdAt: action.created_at,
+        updatedAt: action.updated_at,
+      })),
+      service: service ? {
+        instanceId: service.instance_id,
+        pid: service.pid,
+        port: service.port,
+        dashboardUrl: service.dashboard_url,
+        forwardedUrl: service.forwarded_url,
+        startedAt: service.started_at,
+      } : null,
+    }
+  } finally {
+    database.close()
+  }
+}
+
 function insertRecord(database, record) {
   const existing = database.prepare("SELECT * FROM attempts WHERE attempt_id = ?").get(record.attempt)
   if (existing) {
@@ -457,9 +546,9 @@ function insertRecord(database, record) {
     INSERT INTO attempts (
       attempt_id, plan_id, role, model, effort, outcome,
       input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, source,
-      round_number, generation, runtime, harness, service_tier,
+      round_number, generation, harness, service_tier,
       started_at, finished_at, duration_ms, recorded_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     record.attempt,
     record.plan,
@@ -474,7 +563,6 @@ function insertRecord(database, record) {
     record.source,
     record.round,
     record.generation,
-    record.runtime,
     record.harness,
     record.serviceTier,
     record.startedAt,
@@ -485,7 +573,7 @@ function insertRecord(database, record) {
   return true
 }
 
-function withTransaction(database, operation) {
+export function withExecutionTransaction(database, operation) {
   database.exec("BEGIN IMMEDIATE")
   try {
     const result = operation()
@@ -497,51 +585,19 @@ function withTransaction(database, operation) {
   }
 }
 
-function mergeRecords(primary, secondary) {
-  const merged = [...primary]
-  const byAttempt = new Map(primary.map((record) => [record.attempt, record]))
-  for (const record of secondary) {
-    const existing = byAttempt.get(record.attempt)
-    if (existing && !sameRecord(existing, record)) {
-      fail(`Usage attempt ${record.attempt} differs between SQLite and legacy README metadata`)
-    }
-    if (!existing) {
-      merged.push(record)
-      byAttempt.set(record.attempt, record)
-    }
-  }
-  return merged
-}
+const withTransaction = withExecutionTransaction
 
-export function migrateLegacyUsage(planDir, readme = path.join(path.resolve(planDir), "README.md")) {
-  const markdown = fs.readFileSync(readme, "utf8")
-  const legacy = parseLegacyUsageRecords(markdown, readme)
+export function initializeExecutionStore(planDir) {
   const database = openDatabase(planDir, { create: true })
-  let migrated = 0
   try {
-    migrated = withTransaction(database, () => legacy.records.reduce(
-      (count, record) => count + (insertRecord(database, record) ? 1 : 0),
-      0,
-    ))
+    return { database: executionDatabasePath(planDir), schemaVersion: databaseSchemaVersion(database) }
   } finally {
     database.close()
   }
-  if (legacy.present) atomicWrite(readme, stripLegacyUsageSection(markdown, legacy))
-  return {
-    database: executionDatabasePath(planDir),
-    schemaVersion: EXECUTION_SCHEMA_VERSION,
-    migrated,
-    removedLegacySection: legacy.present,
-  }
 }
 
-export function initializeExecutionStore(planDir, readme = path.join(path.resolve(planDir), "README.md")) {
-  return migrateLegacyUsage(planDir, readme)
-}
-
-export function recordUsageRecord(planDir, readme, input) {
+export function recordUsageRecord(planDir, input) {
   const record = normalizeUsageRecord(input)
-  const migration = migrateLegacyUsage(planDir, readme)
   const database = openDatabase(planDir, { create: true })
   let recorded
   let records
@@ -551,12 +607,10 @@ export function recordUsageRecord(planDir, readme, input) {
   } finally {
     database.close()
   }
-  return { recorded, record, records, migration }
+  return { recorded, record, records, database: executionDatabasePath(planDir) }
 }
 
-export function readUsageState(planDir, readme = path.join(path.resolve(planDir), "README.md")) {
-  const markdown = fs.readFileSync(readme, "utf8")
-  const legacy = parseLegacyUsageRecords(markdown, readme)
+export function readUsageState(planDir) {
   const databaseExists = fs.existsSync(executionDatabasePath(planDir))
   const database = openDatabase(planDir, { readOnly: true })
   let records = []
@@ -571,13 +625,10 @@ export function readUsageState(planDir, readme = path.join(path.resolve(planDir)
   } finally {
     database?.close()
   }
-  records = mergeRecords(records, legacy.records)
   return {
     database: executionDatabasePath(planDir),
     databaseExists,
-    storage: legacy.present
-      ? (databaseExists ? "sqlite+legacy-pending" : "legacy-readonly")
-      : (databaseExists ? "sqlite" : "uninitialized"),
+    storage: databaseExists ? "sqlite" : "uninitialized",
     schemaVersion,
     runConfiguration,
     records,
@@ -663,7 +714,7 @@ export function executionReport(records, selector = "RUN") {
     byRole: summarizeRecords(selected, (record) => record.role),
     byOutcome: summarizeRecords(selected, (record) => record.outcome),
     byModel: summarizeRecords(selected, (record) => `${record.model} / ${record.effort}`),
-    byRuntime: summarizeRecords(selected, (record) => `${record.runtime ?? "unknown"} / ${record.harness ?? "unknown"}`),
+    byHarness: summarizeRecords(selected, (record) => record.harness ?? "unknown"),
     byGeneration: summarizeRecords(selected, (record) => record.generation ?? "unknown"),
     byServiceTier: summarizeRecords(selected, (record) => record.serviceTier ?? "unknown"),
     records: selected,

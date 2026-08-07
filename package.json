@@ -1,7 +1,7 @@
 {
   "name": "herder-pi",
-  "version": "0.14.0",
-  "description": "Native Pi extension for Herder's durable multi-agent plan execution.",
+  "version": "0.15.0",
+  "description": "Cross-harness deterministic Herder Run Manager with native Pi integration.",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -16,6 +16,7 @@
   },
   "scripts": {
     "test:pi": "node --experimental-strip-types --test pi/herder/test/*.test.ts",
+    "test:runtime": "node --experimental-strip-types --test plugins/herder/runtime/test/*.test.ts",
     "typecheck:pi": "tsc -p tsconfig.json"
   },
   "pi": {

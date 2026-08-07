@@ -447,9 +447,10 @@ function render(state) {
   byId("snapshot-state").textContent = view.paused ? "PAUSED" : "LIVE"
   byId("last-updated").textContent = formatSnapshotTime(state.generatedAt)
   const active = state.plans.filter((plan) => ACTIVE_PHASES.has(plan.phase)).length
-  byId("run-state").textContent = state.planSet.complete
-    ? "Complete"
-    : (active > 0 ? `${active} active` : `${state.planSet.ready.length} ready`)
+  const managerStatus = state.manager?.run?.status
+  byId("run-state").textContent = managerStatus
+    ? `${humanize(managerStatus)}${active > 0 ? ` · ${active} active` : ""}`
+    : (state.planSet.complete ? "Complete" : (active > 0 ? `${active} active` : `${state.planSet.ready.length} ready`))
   renderOverallProgress(state)
   renderGraph(state)
   renderPlanDetail(state)

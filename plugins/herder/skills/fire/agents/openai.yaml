@@ -1,4 +1,4 @@
 interface:
   display_name: "Herder Fire"
   short_description: "Execute bounded plans natively or through Orca"
-  default_prompt: "Use $herder:fire to execute, resume, inspect, or safely clean a validated semantically bounded Herder plan graph with one persistent Accountant control plane, optionally routing plan workers across harnesses through Orca."
+  default_prompt: "Use $herder:fire to execute, resume, inspect, or safely clean a validated semantically bounded Herder plan graph through the deterministic local Run Manager and its native worker transport."

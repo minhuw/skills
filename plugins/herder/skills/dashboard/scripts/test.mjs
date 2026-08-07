@@ -156,7 +156,6 @@ function usage(planDir, input) {
     effort: "xhigh",
     source: "codex-exec",
     generation: "generation-1",
-    runtime: "native",
     harness: "codex",
     serviceTier: "fast",
     inputTokens: "1000",
@@ -219,7 +218,7 @@ function createFixture() {
   usage(planDir, {
     attempt: "demo-004-saver-1",
     plan: "004",
-    role: "plan-saver",
+    role: "plan-judge",
     outcome: "INTERRUPTED",
     round: "1",
     startedAt: "2026-08-03T00:08:00Z",
@@ -378,7 +377,7 @@ async function runTests() {
     assert.equal(state.version, 1)
     assert.equal(state.readOnly, true)
     assert.equal(state.planSet.name, "demo")
-    assert.deepEqual(state.planSet.counts, { total: 6, done: 2, rejected: 0, actionable: 4 })
+    assert.deepEqual(state.planSet.counts, { total: 6, todo: 2, inProgress: 1, done: 2, blocked: 1, rejected: 0, actionable: 4 })
     assert.equal(state.accounting.storage, "sqlite")
     assert.equal(state.accounting.attempts, 7)
     assert.equal(state.accounting.tokens.reportedInputOutput, 8400)

@@ -18,14 +18,14 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const catalog = path.join(packageRoot, "plugins/herder/agent-profiles/profiles.json");
 const registry = path.join(packageRoot, "plugins/herder/agent-profiles/scripts/profile-registry.mjs");
 
-test("Pi resolves profile models into five generic package agents", async () => {
+test("Pi resolves profile models into three generic package agents", async () => {
 	const profile = await loadPiProfile(catalog, "offcut");
 	assert.equal(profile.host, "pi");
 	assert.equal(profile.defaulted, false);
 	assert.deepEqual(profile.orchestrator, { model: "kimi-k3", effort: "max" });
-	assert.equal(profile.roles["plan-accountant"].agent_type, "herder.plan-accountant");
-	assert.equal(profile.roles["plan-accountant"].model, "grok-4.5");
-	assert.equal(profile.roles["plan-accountant"].effort, "high");
+	assert.equal(profile.roles["plan-implementer"].agent_type, "herder.plan-implementer");
+	assert.equal(profile.roles["plan-implementer"].model, "grok-4.5");
+	assert.equal(profile.roles["plan-implementer"].effort, "high");
 	assert.equal(profile.roles["plan-reviewer"].agent_type, "herder.plan-reviewer");
 
 	const registryProfile = JSON.parse(execFileSync(process.execPath, [registry, "resolve", "--host", "pi", "--profile", "offcut"], { encoding: "utf8" }));

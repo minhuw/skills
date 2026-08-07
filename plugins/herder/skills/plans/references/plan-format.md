@@ -21,7 +21,7 @@ The zero-context invariant applies to the immutable snapshot Fire dispatches. A 
 
 `leak/` contains non-executable findings that Judge found valid but outside the original task. They are never indexed, scheduled, or treated as accepted intent. Fire deduplicates them by recorded key; Grill or Improve must confirm, promote, number, and validate them before Fire can execute them.
 
-Before manager validation, reread every draft and complete [plan-template.md](plan-template.md)'s semantic Producer self-review. Validation checks structure, graph integrity, and write-scope overlap. It reports legacy shape omissions as warnings rather than making an older backlog unreadable; producers and Validate still own semantic evidence quality.
+Before manager validation, reread every draft and complete [plan-template.md](plan-template.md)'s semantic Producer self-review. Validation checks structure, graph integrity, and write-scope overlap; producers and Validate still own semantic evidence quality.
 
 ## 2. Index
 
@@ -99,18 +99,18 @@ DONE → BLOCKED
 REJECTED → TODO
 ```
 
-Only the persistent Accountant writes status during Fire. Dependencies require both `DONE` and a plan-set-scoped private completion ref naming a reachable commit. `ready` returns dependency-satisfied `TODO` plans; `IN PROGRESS` needs Accountant-led resume reconstruction and `BLOCKED` needs explicit recovery or user direction.
+Only the deterministic Run Manager writes status during Fire runs. It compiles dependencies and initial lifecycle into SQLite once; later README status cells are projections. Dependencies require both canonical `DONE` state and a plan-set-scoped private completion ref naming a reachable commit. `IN PROGRESS` belongs to an active manager run and `BLOCKED` needs explicit user direction.
 
 ## 6. Tracking and Worktrees
 
 Default initialization adds `/herder-plans/` to `.git/info/exclude` without changing project `.gitignore`; tracking is opt-in. When tracked, ignore `.herder/` because runtime artifacts change frequently.
 
-An ignored backlog is absent from new worktrees. Fire uses manager `snapshot` and inlines compiled `planText` in implementer, reviewer, judge, and saver prompts; never copy the whole backlog into execution branches.
+An ignored backlog is absent from new worktrees. Fire compiles every assignment into SQLite once and materializes the relevant immutable bundle in each plan worktree; never copy the whole backlog into execution branches.
 
 ## 7. Execution Accounting
 
-The manager creates `.herder/execution.sqlite3` during initialization or the first accounting mutation. Only the persistent Fire Accountant writes it through `record-usage` or performs the one-time `migrate-usage`; workers return usage envelopes through the root. Read-only `usage` and `report` commands can inspect a legacy README ledger without migrating it.
+The manager creates `.herder/execution.sqlite3` during initialization or the first accounting mutation. Only the deterministic Fire Run Manager writes runtime state and usage; workers return usage envelopes through the root. Read-only `usage` and `report` commands inspect the same database.
 
-Record model, effort, outcome, and an idempotent attempt ID for every implementer, reviewer, judge, saver, and run-wide attempt. When known, also record round, generation, runtime, harness, service tier, timestamps, and duration. Copy only host telemetry; keep unavailable token fields `unknown` and never estimate. Input-plus-output subtotals do not add cached-input or reasoning details again, and incomplete coverage must remain visible.
+Record model, effort, outcome, and an idempotent attempt ID for every Implementer, Reviewer, Judge, and run-wide attempt. When known, also record round, generation, harness, service tier, timestamps, and duration. Copy only host telemetry; keep unavailable token fields `unknown` and never estimate. Input-plus-output subtotals do not add cached-input or reasoning details again, and incomplete coverage must remain visible.
 
-`report <plan-id>` returns convergence, outcome, token-coverage, model/runtime, and timing statistics for one plan; `report RUN` aggregates the plan set. A transition to `DONE` returns that plan's report. The database never stores prompts, responses, repository contents, scheduler queues, or secrets, and it is excluded from assignment bundles and Git tracking.
+`report <plan-id>` returns convergence, outcome, token-coverage, model/harness, and timing statistics for one plan; `report RUN` aggregates the plan set. The database stores compiled assignment text but never worker prompts, responses, transcripts, unrelated repository contents, or secrets. It is excluded from assignment bundles and Git tracking.

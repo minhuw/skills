@@ -61,6 +61,11 @@ function safeTokenUsage(value) {
   }
 }
 
+function isoTimestamp(value) {
+  if (!Number.isFinite(value) || value < 0) return undefined
+  return new Date(value * 1000).toISOString()
+}
+
 function parseSession(text, options, file) {
   let meta = null
   let context = null
@@ -71,6 +76,9 @@ function parseSession(text, options, file) {
   let taskComplete = false
   let turnAborted = false
   let finalEnvelopePresent = false
+  let startedAt
+  let finishedAt
+  let durationMs
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim().startsWith("{")) continue
     let event
@@ -85,8 +93,14 @@ function parseSession(text, options, file) {
     }
     if (event.type === "turn_context") context = event.payload || null
     if (event.type === "event_msg" && event.payload?.type === "user_message") userMessageCount += 1
+    if (event.type === "event_msg" && event.payload?.type === "task_started") {
+      startedAt = isoTimestamp(event.payload.started_at) || startedAt
+    }
     if (event.type === "event_msg" && event.payload?.type === "task_complete") {
       taskComplete = true
+      startedAt = isoTimestamp(event.payload.started_at) || startedAt
+      finishedAt = isoTimestamp(event.payload.completed_at) || finishedAt
+      if (Number.isSafeInteger(event.payload.duration_ms) && event.payload.duration_ms >= 0) durationMs = event.payload.duration_ms
       if (typeof event.payload.last_agent_message === "string" && event.payload.last_agent_message.trim()) {
         finalEnvelopePresent = true
       }
@@ -138,7 +152,12 @@ function parseSession(text, options, file) {
       turnAborted,
       finalEnvelopePresent,
     },
-    usage: tokenUsage,
+    usage: tokenUsage ? {
+      ...tokenUsage,
+      ...(startedAt ? { startedAt } : {}),
+      ...(finishedAt ? { finishedAt } : {}),
+      ...(durationMs === undefined ? {} : { durationMs }),
+    } : null,
   }
 }
 

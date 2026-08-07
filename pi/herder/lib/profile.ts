@@ -2,11 +2,9 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 export const HERDER_ROLES = [
-	"plan-accountant",
 	"plan-implementer",
 	"plan-reviewer",
 	"plan-judge",
-	"plan-saver",
 ] as const;
 
 export type HerderRole = typeof HERDER_ROLES[number];
