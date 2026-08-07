@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "defaults": {
+    "codex": "eclipse",
+    "claude": "shannon"
+  },
+  "profiles": [
+    {
+      "name": "eclipse",
+      "description": "Herder's native Codex role mapping, also available from Claude Code.",
+      "hosts": ["codex", "claude"],
+      "orchestrator": { "model": "gpt-5.6-sol", "effort": "max" },
+      "roles": {
+        "plan-accountant": { "model": "gpt-5.6-luna", "effort": "max", "service_tier": "fast" },
+        "plan-implementer": { "model": "gpt-5.6-luna", "effort": "max", "service_tier": "fast" },
+        "plan-reviewer": { "model": "gpt-5.6-sol", "effort": "xhigh" },
+        "plan-judge": { "model": "gpt-5.6-sol", "effort": "xhigh" },
+        "plan-saver": { "model": "gpt-5.6-sol", "effort": "xhigh" }
+      }
+    },
+    {
+      "name": "shannon",
+      "description": "Herder's native Claude Code role mapping.",
+      "hosts": ["claude"],
+      "orchestrator": { "model": "claude-opus-4-8", "effort": "high" },
+      "roles": {
+        "plan-accountant": { "model": "claude-opus-4-8", "effort": "medium" },
+        "plan-implementer": { "model": "claude-opus-4-8", "effort": "high" },
+        "plan-reviewer": { "model": "claude-opus-4-8", "effort": "xhigh" },
+        "plan-judge": { "model": "claude-opus-4-8", "effort": "xhigh" },
+        "plan-saver": { "model": "claude-opus-4-8", "effort": "xhigh" }
+      }
+    },
+    {
+      "name": "offcut",
+      "description": "Kimi orchestrates, Grok accounts and implements, and Sol reviews, judges, and recovers.",
+      "hosts": ["codex", "claude"],
+      "orchestrator": { "model": "kimi-k3", "effort": "max" },
+      "roles": {
+        "plan-accountant": { "model": "grok-4.5", "effort": "max" },
+        "plan-implementer": { "model": "grok-4.5", "effort": "high" },
+        "plan-reviewer": { "model": "gpt-5.6-sol", "effort": "xhigh" },
+        "plan-judge": { "model": "gpt-5.6-sol", "effort": "xhigh" },
+        "plan-saver": { "model": "gpt-5.6-sol", "effort": "max" }
+      }
+    }
+  ]
+}

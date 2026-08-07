@@ -14,8 +14,8 @@ For `fire` or `resume`, read [references/orchestration-protocol.md](references/o
 Interpret tokens after the skill name as arguments. Codex uses `$herder:fire ...`; Claude Code uses `/herder:fire ...`.
 
 ```text
-herder:fire [<plan-dir>] [--plan-name <name>] [--max-parallel <n>] [--runtime native|orca] [--runtime-profile <json>]
-herder:fire resume [<plan-dir>] [--plan-name <name>] [--max-parallel <n>] [--runtime native|orca] [--runtime-profile <json>]
+herder:fire [<plan-dir>] [--plan-name <name>] [--max-parallel <n>] [--profile <name>] [--runtime native|orca] [--runtime-profile <json>]
+herder:fire resume [<plan-dir>] [--plan-name <name>] [--max-parallel <n>] [--profile <name>] [--runtime native|orca] [--runtime-profile <json>]
 herder:fire status [<plan-dir>] [--plan-name <name>]
 herder:fire cleanup [<plan-dir>] [--plan-name <name>] [--plan <id>] [--dry-run] [--include-failed] [--finalize] [--handoff-target <branch>] --runtime native|orca
 ```
@@ -23,6 +23,7 @@ herder:fire cleanup [<plan-dir>] [--plan-name <name>] [--plan <id>] [--dry-run] 
 - Default command: `fire`.
 - Default runtime for `fire` and `resume`: `native`. Never auto-detect or silently switch runtimes. Cleanup requires the original runtime explicitly because guessing `native` could orphan Orca state.
 - `--runtime-profile` is required with `--runtime orca` and invalid with `native`. Orca cleanup must use the same runtime recorded for the run.
+- `--profile` selects one installed native execution profile. It is valid only with `--runtime native`; Orca continues to select plan-worker routes through its explicit runtime profile. The native defaults are `eclipse` on Codex and `shannon` on Claude. Each profile declares the required root-orchestrator model and effort plus five exact child-role identifiers. A profile never changes an already-running root session. Fresh Fire binds the selected profile name, SHA-256, host, and exact role identifiers in SQLite before repository mutation. Resume uses that binding; an explicit conflicting profile or changed profile hash stops without substitution.
 - Default plan directory: `herder-plans/`. If missing, direct user-defined work to Grill, audits to Improve, or setup to `herder:plans init`.
 - Default plan-worker parallel limit: `5`. `--max-parallel <n>` overrides it and must be a positive integer. Reserve one additional host child slot for the persistent Accountant; when host child capacity is known, the effective worker limit is `min(requested, host_child_capacity - 1)`. The Accountant never counts inside the plan-worker limit.
 - Default plan-set name: the lowercase Git-safe basename of `plan-dir`; use `--plan-name` when the basename is invalid or another explicit namespace is required.
@@ -41,6 +42,7 @@ Resolve the plugin root as two directories above this skill. Use:
 
 ```text
 <plugin-root>/skills/plans/scripts/herder-plans.mjs
+<plugin-root>/agent-profiles/scripts/profile-registry.mjs
 <plugin-root>/skills/fire/scripts/coordination-ref.mjs
 <plugin-root>/skills/fire/scripts/namespace-run.mjs
 <plugin-root>/skills/fire/scripts/checkout-state.mjs
@@ -52,27 +54,27 @@ Resolve the plugin root as two directories above this skill. Use:
 <plugin-root>/skills/fire/scripts/cleanup-run.mjs
 ```
 
-The manager commands Fire needs are `validate`, `shape`, `ready`, `snapshot`, `transition`, `record-usage`, `usage`, `report`, and `migrate-usage`; the Accountant invokes each with `node <manager> ... --pretty`. It runs the namespace helper before any Git mutation for both `fire` and `resume`; its conflict exit is a deliberate stop, not permission to invent another name. Treat other nonzero exits as control-plane failures. Fire never parses or directly edits `README.md` or SQLite. Only the Accountant may invoke control-plane helper modes, run repository Git commands, or invoke the cleanup runner. The root may execute only exact host dispatch/wait/steer actions returned by the Accountant, including Orca's dispatch/wait transport commands; it must not duplicate, preflight, verify, or repair a control-plane operation.
+The manager commands Fire needs are `validate`, `shape`, `ready`, `snapshot`, `transition`, `bind-profile`, `profile`, `record-usage`, `usage`, `report`, and `migrate-usage`; the Accountant invokes each with `node <manager> ... --pretty`. Before an Accountant exists, the root may invoke only the read-only profile registry and, on resume/status/cleanup, the manager's read-only `profile` mode so it can select the recorded Accountant type. The Accountant runs the namespace helper before any Git mutation for both `fire` and `resume`; its conflict exit is a deliberate stop, not permission to invent another name. Treat other nonzero exits as control-plane failures. Fire never parses or directly edits `README.md` or SQLite. Only the Accountant may invoke mutating control-plane helper modes, run repository Git commands, or invoke the cleanup runner. The root may otherwise execute only exact host dispatch/wait/steer actions returned by the Accountant, including Orca's dispatch/wait transport commands; it must not duplicate, verify, or repair a control-plane operation.
 
 The backlog is normally local and Git-ignored. Always run `snapshot` in the stable coordination checkout and verify its input/content hashes. Materialize the immutable compiled plan set as a read-only, Git-ignored RUN bundle in the integration worktree, and materialize each assigned plan's exact compiled snapshot as a corresponding bundle in its stable plan worktree with `assignment-bundle.mjs`; pass the applicable absolute path and SHA-256 to every worker instead of sending workers to the source plan directory. Never copy the full backlog, mutable index, leak drafts, execution database, or coordinator paths into an execution worktree.
 
 ## Agent Roles
 
-| Logical role | Codex `agent_type` | Claude identifier |
-|--------------|--------------------|-------------------|
-| `plan-accountant` | `plan_accountant` | `herder:plan-accountant` |
-| `plan-implementer` | `plan_implementer` | `herder:plan-implementer` |
-| `plan-reviewer` | `plan_reviewer` | `herder:plan-reviewer` |
-| `plan-judge` | `plan_judge` | `herder:plan-judge` |
-| `plan-saver` | `plan_saver` | `herder:plan-saver` |
+Resolve the native host profile before mutation:
 
-Use the configured role, model, effort, and service tier; never substitute a generic agent or hardcode spawn overrides. The Accountant is fixed to Luna/max/Fast on Codex and Opus/medium on Claude. Spawn exactly one Accountant before any control-plane command or Git mutation and keep its thread addressable for the run. Fresh runs also resolve Implementer, Reviewer, and Judge before mutation and attribute every usage-bearing worker attempt. Keep Saver installed only so an old run whose persisted ledger already entered Saver can resume safely; never schedule Saver for a fresh six-round generation. Neither workers nor the Accountant may spawn workers.
+```text
+node <profile-registry> resolve --host <codex|claude> [--profile <name>] --pretty
+```
+
+The result contains the immutable profile hash, required root `orchestrator` model and effort, and exact `agent_type`, model, effort, and optional service tier for `plan-accountant`, `plan-implementer`, `plan-reviewer`, `plan-judge`, and `plan-saver`. The root must already be running the declared orchestrator model and effort. If the host exposes a different root model or effort, stop before mutation and show the required launch selection; if the host does not expose trustworthy root metadata, report the requirement without inventing proof. Use the five exact child identifiers; never derive names, substitute a generic agent, fall back to a default, or pass spawn-time model/effort/tier overrides. The unqualified `plan_accountant` / `herder:plan-accountant` and corresponding worker identifiers remain installed only for pre-profile resume compatibility.
+
+Spawn exactly one selected-profile Accountant before any control-plane command or Git mutation and keep its thread addressable for the run. Supply the complete resolved profile and hash in `BOOTSTRAP`; it owns the idempotent `bind-profile` write and must echo the same mapping in every action. Fresh runs resolve every role before mutation and attribute every usage-bearing worker attempt. Keep Saver installed so an old run whose persisted ledger already entered Saver can resume safely; never schedule Saver for a fresh six-round generation. Neither workers nor the Accountant may spawn workers.
 
 For `--runtime orca`, read [references/orca-runtime.md](references/orca-runtime.md) completely before action. Validate and preflight the explicit runtime profile, require the controller to be inside Orca, let Orca exclusively own worktree creation/removal, and use tracked Orca tasks plus adapter-delivered lifecycle prompts for every plan worker. The Accountant remains a native child of the Codex controller and is never an Orca-routed role. Native plan-worker spawn rules below do not apply to Orca children; all plan-loop, review, escalated Judge, gate, lifecycle, and integration semantics still do.
 
-Codex requires Multi-Agent V2, the `herder_agents` namespace, and installed Accountant, Implementer, Reviewer, and Judge custom agents. Its interface must accept `agent_type`, `fork_turns`, persistent follow-up, and long waits; otherwise stop before mutation and direct the user to `$herder:install` and a new session. Spawn `plan_accountant` once with `fork_turns: "none"`, then use follow-up turns on that exact thread for every event batch. Spawn every plan worker from the Accountant's returned action with its exact profile and `fork_turns: "none"`. Do not pass model, effort, or service-tier overrides. There is no `codex exec` fallback.
+Codex requires Multi-Agent V2, the `herder_agents` namespace, and every exact custom-agent type returned by the selected profile. Its interface must accept `agent_type`, `fork_turns`, persistent follow-up, and long waits; otherwise stop before mutation and direct the user to `$herder:install` and a new session. Spawn the resolved `plan-accountant` type once with `fork_turns: "none"`, then use follow-up turns on that exact thread for every event batch. Spawn every plan worker from the Accountant's returned action with its exact resolved type and `fork_turns: "none"`. Do not pass model, effort, or service-tier overrides. There is no `codex exec` fallback.
 
-Claude uses the native role identifiers shipped with the plugin. True persistence requires an addressable resumed subagent; require the `SendMessage` capability before mutation. If unavailable, stop and direct the user to start a new Claude Code session with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. Resume the same `herder:plan-accountant` agent ID for every event; never replace it with repeated fresh accounting agents unless host interruption requires reconstruction from durable state.
+Claude uses the exact native role identifiers returned by the selected profile. True persistence requires an addressable resumed subagent; require the `SendMessage` capability before mutation. If unavailable, stop and direct the user to start a new Claude Code session with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`. Resume the same selected Accountant agent ID for every event; never replace it with repeated fresh accounting agents unless host interruption requires reconstruction from durable state.
 
 ## Hard Boundaries
 
@@ -86,7 +88,8 @@ Claude uses the native role identifiers shipped with the plugin. True persistenc
 - On Codex, use persisted transcripts only for role/runtime, terminal-envelope, and usage evidence. Determine repository mutation from checkout-guard and exact Git-state proofs, never by parsing tool-call text for filesystem containment.
 - Keep integration history linear and repository-native. Review the exact frozen base/HEAD/tree, then, under the integration lock, save a stale approved HEAD under a private checkpoint ref and restack its branch onto current integration. Preserve approval only when patch equivalence, gates, and scope still pass; otherwise return the branch to the next round. Fast-forward integration only to that approved equivalent HEAD. Track completion only through a private plan-set-scoped Git ref. Never create a plan merge commit, marker commit, trailer, tag, or Herder-branded commit message. The only normal user-branch handoff is `git merge --ff-only herder/<plan-name>/integration`.
 - Fork dependents only from canonical integration HEAD after every dependency is reviewed, integrated, `DONE`, and represented by a reachable private completion ref.
-- Record one SQLite attempt after every usage-bearing probe or terminal attempt, including terminal attempts without a response. Copy host telemetry and known round/generation/runtime/timing fields when available; otherwise keep unavailable token fields `unknown`. Never estimate.
+- Record one SQLite attempt after every terminal worker attempt, including attempts without a response. Copy host telemetry and known round/generation/runtime/timing fields when available; otherwise keep unavailable token fields `unknown`. Never estimate.
+- A host rejection that occurs before it returns a worker handle and before any worker can run is a dispatch rejection, not an attempt or round. Report the exact profile, role, host, agent type, model, and host error to the Accountant; it releases the unused lease and may back off only for explicitly proven capacity. Never try another profile or model automatically.
 - Give each plan generation at most six substantive Implementer → gates → Reviewer rounds. The first evidence-complete review is bounded discovery and every later review is targeted verification. Rounds 1–2 send evidence-complete blocking Reviewer contracts directly to a fresh guided-repair Implementer. Beginning with unresolved round 3, dispatch Judge to filter Reviewer findings under the existing acceptance policy before authorizing rounds 4–6. Reviewer approval in any round skips Judge and queues integration. Proven clean host interruptions are free.
 - Measure every changed path for review evidence, never as a numeric gate. An implementation-discovered path may proceed only when it directly supports the original outcome, stays inside the declared bounded subsystem, adds no unplanned public transition or unordered-plan overlap, and has Implementer justification plus Reviewer acceptance; escalated rounds additionally require Judge acceptance. Stop for semantic scope violations, never for the number of changed or discovered paths.
 - Fresh runs never dispatch Saver: rounds 4–6 are the bounded recovery path. Distinguish agent attempts from substantive rounds. Record every host-interrupted attempt, but do not consume a round when the protocol proves no response or worktree mutation occurred. Confirmed transient capacity uses a fresh session with backoff and consumes no substantive budget; bound other same-attempt interruption restarts separately.

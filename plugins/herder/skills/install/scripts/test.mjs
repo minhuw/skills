@@ -11,6 +11,8 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const installer = path.join(scriptDir, "install-herder.mjs");
 const pluginRoot = path.resolve(scriptDir, "../../..");
+const manifest = JSON.parse(await readFile(path.join(pluginRoot, "agent-profiles/manifest.json"), "utf8"));
+const expectedCodexTargets = manifest.hosts.codex.files.map((file) => file.target).sort();
 const fixtureRoot = await mkdtemp(path.join(tmpdir(), "herder-plugin-install-test-"));
 
 let fakeCodex = "";
@@ -40,7 +42,10 @@ process.stdout.write("multi_agent_v2                       under development  tr
   assert.match(first, /multi_agent_v2 is enabled/);
   assert.match(first, /tool_namespace = "herder_agents"/);
   assert.match(first, /max_concurrent_threads_per_session = 6/);
-  assert.match(first, /Reserve one child thread for plan_accountant/);
+  assert.match(first, /Reserve one child thread for the selected profile's plan-accountant/);
+  assert.match(first, /Named profiles: eclipse, offcut/);
+  assert.match(first, /Orchestrator \(eclipse\): gpt-5\.6-sol\/max/);
+  assert.match(first, /Orchestrator \(offcut\): kimi-k3\/max/);
   const installed = path.join(projectRoot, ".codex/agents/plan_implementer.toml");
   const source = path.join(pluginRoot, "agent-profiles/codex/plan_implementer.toml");
   assert.deepEqual(await readFile(installed), await readFile(source));
@@ -64,6 +69,17 @@ process.stdout.write("multi_agent_v2                       under development  tr
   assert.match(accountant, /^model_reasoning_effort = "max"$/m);
   assert.match(accountant, /^service_tier = "fast"$/m);
   assert.match(accountant, /root exclusively owns host worker handles/);
+  const frontierAccountant = await readFile(path.join(projectRoot, ".codex/agents/offcut_plan_accountant.toml"), "utf8");
+  const frontierImplementer = await readFile(path.join(projectRoot, ".codex/agents/offcut_plan_implementer.toml"), "utf8");
+  const frontierReviewer = await readFile(path.join(projectRoot, ".codex/agents/offcut_plan_reviewer.toml"), "utf8");
+  const frontierSaver = await readFile(path.join(projectRoot, ".codex/agents/offcut_plan_saver.toml"), "utf8");
+  assert.match(frontierAccountant, /^model = "grok-4\.5"$/m);
+  assert.match(frontierAccountant, /^model_reasoning_effort = "max"$/m);
+  assert.match(frontierAccountant, /bind the resolved profile/);
+  assert.match(frontierImplementer, /^model = "grok-4\.5"$/m);
+  assert.match(frontierReviewer, /^model = "gpt-5\.6-sol"$/m);
+  assert.match(frontierReviewer, /^model_reasoning_effort = "xhigh"$/m);
+  assert.match(frontierSaver, /^model_reasoning_effort = "max"$/m);
   assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_implementer.toml"), "utf8"), /DISCOVERED_PATHS:/);
   assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_reviewer.toml"), "utf8"), /JUSTIFIED\|SCOPE_VIOLATION/);
   assert.match(await readFile(path.join(projectRoot, ".codex/agents/plan_judge.toml"), "utf8"), /ACCEPTED\|REJECTED/);
@@ -91,13 +107,7 @@ process.stdout.write("multi_agent_v2                       under development  tr
   const stamps = await readdir(backupRoot);
   assert.equal(stamps.length, 1);
   assert.equal(await readFile(path.join(backupRoot, stamps[0], "plan_implementer.toml"), "utf8"), "customized\n");
-  assert.deepEqual((await readdir(path.join(projectRoot, ".codex/agents"))).sort(), [
-    "plan_accountant.toml",
-    "plan_implementer.toml",
-    "plan_judge.toml",
-    "plan_reviewer.toml",
-    "plan_saver.toml",
-  ]);
+  assert.deepEqual((await readdir(path.join(projectRoot, ".codex/agents"))).sort(), expectedCodexTargets);
   await assert.rejects(access(path.join(projectRoot, ".codex/agents/.herder-backups")));
 
   const migrationProject = path.join(fixtureRoot, "migration-project");
@@ -123,18 +133,17 @@ process.stdout.write("multi_agent_v2                       under development  tr
     await readFile(path.join(migrationBackupRoot, migratedDirs[0], legacyStamp, "plan_reviewer.toml"), "utf8"),
     "legacy reviewer\n",
   );
-  assert.deepEqual((await readdir(path.join(migrationProject, ".codex/agents"))).sort(), [
-    "plan_accountant.toml",
-    "plan_implementer.toml",
-    "plan_judge.toml",
-    "plan_reviewer.toml",
-    "plan_saver.toml",
-  ]);
+  assert.deepEqual((await readdir(path.join(migrationProject, ".codex/agents"))).sort(), expectedCodexTargets);
 
   const claudeProject = path.join(fixtureRoot, "claude-project");
   const claude = run("--host", "claude", "--project-root", claudeProject);
   assert.match(claude, /Bundled: herder:plan-accountant/);
   assert.match(claude, /Bundled: herder:plan-implementer/);
+  assert.match(claude, /Bundled: herder:eclipse-plan-accountant/);
+  assert.match(claude, /Bundled: herder:eclipse-plan-reviewer/);
+  assert.match(claude, /Bundled: herder:offcut-plan-accountant/);
+  assert.match(claude, /Bundled: herder:offcut-plan-saver/);
+  assert.match(claude, /Named profiles: eclipse, offcut, shannon/);
   await assert.rejects(access(path.join(claudeProject, ".claude/agents")));
 
   const allProject = path.join(fixtureRoot, "all-project");

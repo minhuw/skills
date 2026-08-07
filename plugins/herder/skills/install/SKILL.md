@@ -1,15 +1,15 @@
 ---
 name: install
-description: Install or verify the accountant, implementer, reviewer, judge, and saver agent profiles required by Herder. Use when setting up the Herder plugin in a repository, when Herder reports a missing Codex role, or when the user asks to refresh Herder's host-native agent definitions.
+description: Install or verify all bundled named accountant, implementer, reviewer, judge, and saver profiles required by Herder. Use when setting up the Herder plugin in a repository, when Herder reports a missing Codex role, or when the user asks to refresh Herder's host-native agent definitions.
 ---
 
 # Herder Install
 
-Install or verify the five host-native agent profiles required by Herder. The profiles are bundled with the installed plugin, so the plugin version is the single verified release unit and no runtime network fetch is required.
+Install or verify every bundled host-native role definition required by Herder. Each curated profile declares one root-orchestrator launch requirement and compiles five child roles, all applicable profiles install by default, and the historical unqualified five-role set remains as a legacy resume alias. The plugin version is the single verified release unit and no runtime network fetch is required.
 
 Codex Fire uses these profiles as native custom agent types. It requires Codex Multi-Agent V2 and never falls back to nested `codex exec` processes. Claude Fire uses the bundled host-native agents directly.
 
-The bundled Codex Accountant uses Luna/max with Fast tier, and the Implementer also uses Luna with Fast tier. The Claude Accountant uses Opus/medium. Sol-backed roles and the parent coordinator remain on Standard tier.
+The catalog ships `eclipse`, `shannon`, and `offcut`. `eclipse` is the Codex default and is also compiled for Claude Code, `shannon` is the Claude default, and `offcut` is cross-host. `offcut` requires a Kimi K3/max root orchestrator, uses Grok 4.5/max for Accountant, Grok 4.5/high for Implementer, Sol/xhigh for Reviewer and Judge, and Sol/max for Saver. Fire selects profiles by name and never substitutes a model.
 
 ## Invocation
 
@@ -39,14 +39,14 @@ node <skill-dir>/scripts/install-herder.mjs \
   <remaining user arguments>
 ```
 
-4. Report every installed, bundled, unchanged, or conflicted profile.
+4. Report every installed, bundled, unchanged, or conflicted role definition and each named profile's required root-orchestrator model/effort.
 5. On Codex, report the installer's Multi-Agent V2 check. If it is disabled, explain that installation is incomplete for Fire and run `codex features enable multi_agent_v2` only with the user's authorization to change Codex configuration. Then, with the same authorization, replace the boolean feature entry with the namespaced configuration below. If the current release does not expose the flag, report that it is unsupported rather than suggesting an execution fallback. The host child capacity must reserve one Accountant slot in addition to Fire's requested plan-worker limit; default five-worker execution requires at least six child threads.
 6. On Codex, require a new session when the agent directory was first created or profiles changed. Native custom agents and feature flags are resolved when a session starts.
 7. On Claude, report that persistent accounting requires `SendMessage`. If it is absent in the current session, direct the user to start a new session with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` before Fire; do not silently use repeated one-shot accountants.
 
 Codex project scope installs to `<repo>/.codex/agents/`; user scope installs to `~/.codex/agents/`. Claude agents load directly from the plugin's `agents/` directory, so the installer only verifies their bundled definitions.
 
-After installing defaults, direct users who want different native Codex models or Orca role routing to `$herder:configure`. Configured native profiles intentionally differ from the bundled defaults, so a later install reports conflicts and preserves them. Use installer `--force` only when the user explicitly wants to reset configured profiles to bundled defaults.
+After installation, show the user `$herder:fire ... --profile <name>` for a bundled profile. Use `$herder:configure` for Orca routing or only when an older pre-profile run needs project-specific unqualified Codex aliases. Configured legacy aliases intentionally differ from bundled aliases, so a later install reports conflicts and preserves them. Use installer `--force` only when the user explicitly wants to reset them.
 
 ## Codex Requirement
 

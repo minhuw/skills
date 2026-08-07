@@ -68,17 +68,10 @@ else process.exit(2)
   const validated = JSON.parse(run(["validate", "--answers", orcaAnswersPath], env))
   assert.equal(validated.ok, true)
   assert.equal(validated.backend, "orca")
-  assert.equal(validated.uniqueRoutes, 5)
-
-  const availability = JSON.parse(run(["probe", "--answers", orcaAnswersPath], env))
-  assert.equal(availability.ok, true)
-  assert.equal(availability.results.length, 5)
-  assert.equal(availability.results.every((result) => /^[a-f0-9]{64}$/.test(result.outputSha256)), true)
-  assert.equal(availability.results.some((result) => result.roles.includes("plan-accountant") && result.model === "gpt-5.6-luna" && result.effort === "max"), true)
-
-  const live = JSON.parse(run(["probe", "--answers", orcaAnswersPath, "--live"], env))
-  assert.equal(live.ok, true)
-  assert.equal(live.results.every((result) => result.mode === "live"), true)
+  assert.equal(validated.roleCount, 5)
+  const removedProbe = spawnSync(process.execPath, [configure, "probe", "--answers", orcaAnswersPath], { encoding: "utf8", env })
+  assert.equal(removedProbe.status, 2)
+  assert.match(removedProbe.stderr, /Unknown command: probe/)
 
   const profilePath = path.join(root, ".herder", "orca-runtime.json")
   const generated = JSON.parse(run(["generate", "--answers", orcaAnswersPath, "--output", profilePath], env))
@@ -87,6 +80,7 @@ else process.exit(2)
   assert.equal(generated.changed, true)
   const profile = JSON.parse(await readFile(profilePath, "utf8"))
   assert.equal(profile.roles["plan-saver"].harness, "grok-build")
+  assert.equal(Object.hasOwn(profile.roles["plan-saver"], "probe"), false)
   assert.deepEqual(profile.roles["plan-reviewer"].command.slice(-2), ["--tools", "read,bash,grep,find,ls"])
   assert.equal(profile.roles["plan-implementer"].command.includes("--always-approve"), true)
   execFileSync(process.execPath, [orcaRuntime, "validate", "--profile", profilePath])
@@ -155,16 +149,6 @@ else process.exit(2)
   assert.equal(barePiResult.status, 1)
   assert.match(barePiResult.stderr, /provider\/model/)
 
-  const failedProbe = spawnSync(process.execPath, [configure, "probe", "--answers", orcaAnswersPath, "--live"], {
-    encoding: "utf8",
-    env: { ...env, HERDER_TEST_FAIL: "grok" },
-  })
-  assert.equal(failedProbe.status, 4)
-  assert.doesNotMatch(`${failedProbe.stdout}\n${failedProbe.stderr}`, /SUPERSECRET/)
-  const failedEvidence = JSON.parse(failedProbe.stdout)
-  assert.equal(failedEvidence.ok, false)
-  assert.equal(failedEvidence.results.find((result) => result.harness === "grok-build").status, "failed")
-
   const nativeAnswers = structuredClone(orcaAnswers)
   nativeAnswers.backend = "native-codex"
   delete nativeAnswers.name
@@ -180,8 +164,7 @@ else process.exit(2)
   await writeFile(nativeAnswersPath, JSON.stringify(nativeAnswers))
   const nativeValidated = JSON.parse(run(["validate", "--answers", nativeAnswersPath], env))
   assert.equal(nativeValidated.backend, "native-codex")
-  assert.equal(nativeValidated.uniqueRoutes, 3)
-  assert.equal(JSON.parse(run(["probe", "--answers", nativeAnswersPath, "--live"], env)).ok, true)
+  assert.equal(nativeValidated.roleCount, 5)
 
   const agentDir = path.join(root, "project", ".codex", "agents")
   const nativeGenerated = JSON.parse(run(["generate", "--answers", nativeAnswersPath, "--output", agentDir], env))

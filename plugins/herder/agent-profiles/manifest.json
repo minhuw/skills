@@ -1,6 +1,190 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "profile_set": "herder",
+  "catalog_sha256": "d8888ea08bf051b939150529f3c4ad3885e98a7cd48e260b6e190df124e71ff2",
+  "defaults": {
+    "codex": "eclipse",
+    "claude": "shannon"
+  },
+  "profiles": {
+    "eclipse": {
+      "description": "Herder's native Codex role mapping, also available from Claude Code.",
+      "sha256": "c8dc927eb2137710075b6e67f4095981454f7b9bafbac0a561a45f4533b10c94",
+      "orchestrator": {
+        "model": "gpt-5.6-sol",
+        "effort": "max"
+      },
+      "hosts": {
+        "codex": {
+          "roles": {
+            "plan-accountant": {
+              "agent_type": "eclipse_plan_accountant",
+              "model": "gpt-5.6-luna",
+              "effort": "max",
+              "service_tier": "fast"
+            },
+            "plan-implementer": {
+              "agent_type": "eclipse_plan_implementer",
+              "model": "gpt-5.6-luna",
+              "effort": "max",
+              "service_tier": "fast"
+            },
+            "plan-reviewer": {
+              "agent_type": "eclipse_plan_reviewer",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            },
+            "plan-judge": {
+              "agent_type": "eclipse_plan_judge",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            },
+            "plan-saver": {
+              "agent_type": "eclipse_plan_saver",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            }
+          }
+        },
+        "claude": {
+          "roles": {
+            "plan-accountant": {
+              "agent_type": "herder:eclipse-plan-accountant",
+              "model": "gpt-5.6-luna",
+              "effort": "max"
+            },
+            "plan-implementer": {
+              "agent_type": "herder:eclipse-plan-implementer",
+              "model": "gpt-5.6-luna",
+              "effort": "max"
+            },
+            "plan-reviewer": {
+              "agent_type": "herder:eclipse-plan-reviewer",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            },
+            "plan-judge": {
+              "agent_type": "herder:eclipse-plan-judge",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            },
+            "plan-saver": {
+              "agent_type": "herder:eclipse-plan-saver",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            }
+          }
+        }
+      }
+    },
+    "shannon": {
+      "description": "Herder's native Claude Code role mapping.",
+      "sha256": "72a32c0b0c76471b07fc4221c18f2a981b7234b9d59ff6df7f65f893e656bfb9",
+      "orchestrator": {
+        "model": "claude-opus-4-8",
+        "effort": "high"
+      },
+      "hosts": {
+        "claude": {
+          "roles": {
+            "plan-accountant": {
+              "agent_type": "herder:shannon-plan-accountant",
+              "model": "claude-opus-4-8",
+              "effort": "medium"
+            },
+            "plan-implementer": {
+              "agent_type": "herder:shannon-plan-implementer",
+              "model": "claude-opus-4-8",
+              "effort": "high"
+            },
+            "plan-reviewer": {
+              "agent_type": "herder:shannon-plan-reviewer",
+              "model": "claude-opus-4-8",
+              "effort": "xhigh"
+            },
+            "plan-judge": {
+              "agent_type": "herder:shannon-plan-judge",
+              "model": "claude-opus-4-8",
+              "effort": "xhigh"
+            },
+            "plan-saver": {
+              "agent_type": "herder:shannon-plan-saver",
+              "model": "claude-opus-4-8",
+              "effort": "xhigh"
+            }
+          }
+        }
+      }
+    },
+    "offcut": {
+      "description": "Kimi orchestrates, Grok accounts and implements, and Sol reviews, judges, and recovers.",
+      "sha256": "8a06e848902c33d32ef290066f10fd8d1d5a289fd7d7d3a18f8bb742378c693b",
+      "orchestrator": {
+        "model": "kimi-k3",
+        "effort": "max"
+      },
+      "hosts": {
+        "codex": {
+          "roles": {
+            "plan-accountant": {
+              "agent_type": "offcut_plan_accountant",
+              "model": "grok-4.5",
+              "effort": "max"
+            },
+            "plan-implementer": {
+              "agent_type": "offcut_plan_implementer",
+              "model": "grok-4.5",
+              "effort": "high"
+            },
+            "plan-reviewer": {
+              "agent_type": "offcut_plan_reviewer",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            },
+            "plan-judge": {
+              "agent_type": "offcut_plan_judge",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            },
+            "plan-saver": {
+              "agent_type": "offcut_plan_saver",
+              "model": "gpt-5.6-sol",
+              "effort": "max"
+            }
+          }
+        },
+        "claude": {
+          "roles": {
+            "plan-accountant": {
+              "agent_type": "herder:offcut-plan-accountant",
+              "model": "grok-4.5",
+              "effort": "max"
+            },
+            "plan-implementer": {
+              "agent_type": "herder:offcut-plan-implementer",
+              "model": "grok-4.5",
+              "effort": "high"
+            },
+            "plan-reviewer": {
+              "agent_type": "herder:offcut-plan-reviewer",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            },
+            "plan-judge": {
+              "agent_type": "herder:offcut-plan-judge",
+              "model": "gpt-5.6-sol",
+              "effort": "xhigh"
+            },
+            "plan-saver": {
+              "agent_type": "herder:offcut-plan-saver",
+              "model": "gpt-5.6-sol",
+              "effort": "max"
+            }
+          }
+        }
+      }
+    }
+  },
   "hosts": {
     "codex": {
       "mode": "copy",
@@ -8,27 +192,102 @@
         {
           "source": "agent-profiles/codex/plan_accountant.toml",
           "target": "plan_accountant.toml",
+          "legacy": true,
           "sha256": "0ba634a2f65cab0551d285ad125b8604c747187ca76596112a2258ce2d483b04"
         },
         {
           "source": "agent-profiles/codex/plan_implementer.toml",
           "target": "plan_implementer.toml",
+          "legacy": true,
           "sha256": "531e842d70c6901a075537cbefdd07676c8820e0f2947629f8503c71bfc07802"
         },
         {
           "source": "agent-profiles/codex/plan_reviewer.toml",
           "target": "plan_reviewer.toml",
+          "legacy": true,
           "sha256": "0632b2761632a0bc274c257adff7f4ac76a9702062b87aa0641ceda44746c5aa"
         },
         {
           "source": "agent-profiles/codex/plan_judge.toml",
           "target": "plan_judge.toml",
+          "legacy": true,
           "sha256": "2419db5e04007f37f423a64980909b55d38f90c1dfa3096f2c785c4f882df67f"
         },
         {
           "source": "agent-profiles/codex/plan_saver.toml",
           "target": "plan_saver.toml",
+          "legacy": true,
           "sha256": "2dd7bc9a9f2400fdee8737d9f8f1c0ea010abcf556dee79d286f26d3a6528edc"
+        },
+        {
+          "source": "agent-profiles/generated/codex/eclipse_plan_accountant.toml",
+          "target": "eclipse_plan_accountant.toml",
+          "profile": "eclipse",
+          "role": "plan-accountant",
+          "sha256": "5c9ce7757f7f6ad30e5002367145aad338269e5281507d7ce9469670fb8fb2f6"
+        },
+        {
+          "source": "agent-profiles/generated/codex/eclipse_plan_implementer.toml",
+          "target": "eclipse_plan_implementer.toml",
+          "profile": "eclipse",
+          "role": "plan-implementer",
+          "sha256": "3549011b69e83fa2edfc242320226dbfbad519427e3ef7ed5ad46f5755c8f989"
+        },
+        {
+          "source": "agent-profiles/generated/codex/eclipse_plan_reviewer.toml",
+          "target": "eclipse_plan_reviewer.toml",
+          "profile": "eclipse",
+          "role": "plan-reviewer",
+          "sha256": "1ca8ab73c70cefb5736ca50b22ba0723211cd5799c22187da11c50a8d0ca8a93"
+        },
+        {
+          "source": "agent-profiles/generated/codex/eclipse_plan_judge.toml",
+          "target": "eclipse_plan_judge.toml",
+          "profile": "eclipse",
+          "role": "plan-judge",
+          "sha256": "8c4bd52a74c36250d209cbe7f18cdbf02d47a1a4b6b94083b00a49e11239d1d7"
+        },
+        {
+          "source": "agent-profiles/generated/codex/eclipse_plan_saver.toml",
+          "target": "eclipse_plan_saver.toml",
+          "profile": "eclipse",
+          "role": "plan-saver",
+          "sha256": "0c5a6b554db3327dbca08cd97cf385b24105fed3af8dcf8876fcd0770aede2b2"
+        },
+        {
+          "source": "agent-profiles/generated/codex/offcut_plan_accountant.toml",
+          "target": "offcut_plan_accountant.toml",
+          "profile": "offcut",
+          "role": "plan-accountant",
+          "sha256": "a226f96d02bbecb58d394fa5c230591aeb3570904eb3ced25ccc76572ad657e3"
+        },
+        {
+          "source": "agent-profiles/generated/codex/offcut_plan_implementer.toml",
+          "target": "offcut_plan_implementer.toml",
+          "profile": "offcut",
+          "role": "plan-implementer",
+          "sha256": "7496d68e6d6bc78be49c7b226392b4d0cdc6d0339cee15c938f1ff6d708db95b"
+        },
+        {
+          "source": "agent-profiles/generated/codex/offcut_plan_reviewer.toml",
+          "target": "offcut_plan_reviewer.toml",
+          "profile": "offcut",
+          "role": "plan-reviewer",
+          "sha256": "a8f3adb831e0018d7d750d6b0b853323e1dc26d6fc763d8cc3a80c6c8893af20"
+        },
+        {
+          "source": "agent-profiles/generated/codex/offcut_plan_judge.toml",
+          "target": "offcut_plan_judge.toml",
+          "profile": "offcut",
+          "role": "plan-judge",
+          "sha256": "708af919accb793438c5e46c2621d6880c9dce9b6761c290e773c674661ddf24"
+        },
+        {
+          "source": "agent-profiles/generated/codex/offcut_plan_saver.toml",
+          "target": "offcut_plan_saver.toml",
+          "profile": "offcut",
+          "role": "plan-saver",
+          "sha256": "7b8c5341c17832990c9e31c62790f1378a4fde140ced7aefd5353548709a991d"
         }
       ]
     },
@@ -38,27 +297,137 @@
         {
           "source": "agents/plan-accountant.md",
           "identifier": "herder:plan-accountant",
+          "legacy": true,
           "sha256": "e9386e46f4a51ca3d4fc47e891e3f1e04b57a54deac00075a7626d3a61d04242"
         },
         {
           "source": "agents/plan-implementer.md",
           "identifier": "herder:plan-implementer",
+          "legacy": true,
           "sha256": "d4589c99ecab68a51b5d89d6dea56f5c4842a4fac281ad67a2d5c22600454c24"
         },
         {
           "source": "agents/plan-reviewer.md",
           "identifier": "herder:plan-reviewer",
+          "legacy": true,
           "sha256": "7f0e5ebe73046aa117ce0519d994a3b4ebc8ea256b024ff163b60e22e092f8d6"
         },
         {
           "source": "agents/plan-judge.md",
           "identifier": "herder:plan-judge",
+          "legacy": true,
           "sha256": "a5d38318c9f8ea9393b9affd8d1ecbec621dfcc2d853f5b321e90cbfc76a5165"
         },
         {
           "source": "agents/plan-saver.md",
           "identifier": "herder:plan-saver",
+          "legacy": true,
           "sha256": "dc322d047d746c35a6f1ff7057ad2ffd604dc5a495cb739ff3e5605be8bd7304"
+        },
+        {
+          "source": "agents/eclipse-plan-accountant.md",
+          "identifier": "herder:eclipse-plan-accountant",
+          "profile": "eclipse",
+          "role": "plan-accountant",
+          "sha256": "e07c8fba0c0ba2e6ffe753404cab51640da1f95586ed7167e540698a75a1c2cc"
+        },
+        {
+          "source": "agents/eclipse-plan-implementer.md",
+          "identifier": "herder:eclipse-plan-implementer",
+          "profile": "eclipse",
+          "role": "plan-implementer",
+          "sha256": "53a0ded74dec56337532491e5499df8e7c785509126718054d61ac4cfa963eb1"
+        },
+        {
+          "source": "agents/eclipse-plan-reviewer.md",
+          "identifier": "herder:eclipse-plan-reviewer",
+          "profile": "eclipse",
+          "role": "plan-reviewer",
+          "sha256": "68bf10d49fb5e353c95ddfef6d1ab9ab900f2b5a830118c1cb8ac91f7292de36"
+        },
+        {
+          "source": "agents/eclipse-plan-judge.md",
+          "identifier": "herder:eclipse-plan-judge",
+          "profile": "eclipse",
+          "role": "plan-judge",
+          "sha256": "21972571f2dd40da2a5482aa8eb765b68c119be083e32491c16124637934b155"
+        },
+        {
+          "source": "agents/eclipse-plan-saver.md",
+          "identifier": "herder:eclipse-plan-saver",
+          "profile": "eclipse",
+          "role": "plan-saver",
+          "sha256": "6a366140e63d9a0d4f2e8a4af73c2ec5d3c618febab1e0a97d1882a124374400"
+        },
+        {
+          "source": "agents/shannon-plan-accountant.md",
+          "identifier": "herder:shannon-plan-accountant",
+          "profile": "shannon",
+          "role": "plan-accountant",
+          "sha256": "7226580b24e06a0f13f5abdc5bd86b1a132ca7373d0f5e4d5c07a30b70781b31"
+        },
+        {
+          "source": "agents/shannon-plan-implementer.md",
+          "identifier": "herder:shannon-plan-implementer",
+          "profile": "shannon",
+          "role": "plan-implementer",
+          "sha256": "4e897caa16a8676ffb5927e1add934205aa19b5e8ab97f80bd701dc45a955977"
+        },
+        {
+          "source": "agents/shannon-plan-reviewer.md",
+          "identifier": "herder:shannon-plan-reviewer",
+          "profile": "shannon",
+          "role": "plan-reviewer",
+          "sha256": "25ca11d2a92c03787fab530df04a14161efd930f843f7d89a5646c70a320dea0"
+        },
+        {
+          "source": "agents/shannon-plan-judge.md",
+          "identifier": "herder:shannon-plan-judge",
+          "profile": "shannon",
+          "role": "plan-judge",
+          "sha256": "de2c40771de428bb9ecf346a2dcd79c5a4ec25b584afbddbff8033b0a1638e1e"
+        },
+        {
+          "source": "agents/shannon-plan-saver.md",
+          "identifier": "herder:shannon-plan-saver",
+          "profile": "shannon",
+          "role": "plan-saver",
+          "sha256": "d377db8c168c51b98534b187e6f844f3c9bf58ac15bef611ae6b3ab4595d6e1f"
+        },
+        {
+          "source": "agents/offcut-plan-accountant.md",
+          "identifier": "herder:offcut-plan-accountant",
+          "profile": "offcut",
+          "role": "plan-accountant",
+          "sha256": "59e42eede501648e98fca5aad0a67fa16ead086a6a47dd83cb1ac18cac47fd4e"
+        },
+        {
+          "source": "agents/offcut-plan-implementer.md",
+          "identifier": "herder:offcut-plan-implementer",
+          "profile": "offcut",
+          "role": "plan-implementer",
+          "sha256": "b1fb31524e444dca02de02a082544a513ba2af6287f2b6d0c100934b0ad22754"
+        },
+        {
+          "source": "agents/offcut-plan-reviewer.md",
+          "identifier": "herder:offcut-plan-reviewer",
+          "profile": "offcut",
+          "role": "plan-reviewer",
+          "sha256": "d8fab8c21718e7644bdb2414607e96c1ab8f531df4cc5ab3c48c7edd64e52aa2"
+        },
+        {
+          "source": "agents/offcut-plan-judge.md",
+          "identifier": "herder:offcut-plan-judge",
+          "profile": "offcut",
+          "role": "plan-judge",
+          "sha256": "82115d9f98b64089016609c77b533bd2b66b97e78bd4078aac884f22de87b068"
+        },
+        {
+          "source": "agents/offcut-plan-saver.md",
+          "identifier": "herder:offcut-plan-saver",
+          "profile": "offcut",
+          "role": "plan-saver",
+          "sha256": "e0b3d95357eff01a5d8e814e0904fcd037f63ceb2884344b76609627ac21eb87"
         }
       ]
     }

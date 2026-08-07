@@ -29,7 +29,7 @@ Resolve:
 - `base_ref`: `refs/plan-herder/<plan_name>/base`.
 - `completion_ref(<id>)`: `refs/plan-herder/<plan_name>/completed/<id>`.
 - `checkpoint_ref(<id>, <generation>, <ordinal>)`: the coordination-ref formatter's canonical `refs/plan-herder/<plan_name>/checkpoints/<id>/generation-<n>-<zero-padded-ordinal>` output.
-- `plan_manager`, `coordination_ref`, `namespace_runner`, `checkout_guard`, `assignment_manager`, `codex_evidence_reader`, `gate_runner`, `round_policy`, and `cleanup_runner`: absolute installed script paths.
+- `plan_manager`, `profile_registry`, `coordination_ref`, `namespace_runner`, `checkout_guard`, `assignment_manager`, `codex_evidence_reader`, `gate_runner`, `round_policy`, and `cleanup_runner`: absolute installed script paths.
 - `base_commit`: current user-checkout `HEAD` for fresh Fire, or `base_ref` for resume.
 - `worktree_root`: outside the user's checkout, with integration at `<worktree_root>/<plan_name>/integration` and plans at `<worktree_root>/<plan_name>/<id>`.
 - `gate_log_root`: `<worktree_root>/<plan_name>/logs`, outside every Git worktree.
@@ -37,7 +37,8 @@ Resolve:
 - `control_slots`: exactly `1`, reserved for the persistent Accountant and excluded from the plan-worker pool.
 - `host_child_capacity`: the host-confirmed concurrent child-thread capacity, excluding the root. Fire/resume requires at least `2`; if capacity cannot be confirmed, stop before mutation rather than guess.
 - `parallel_limit`: `min(requested_worker_limit, host_child_capacity - control_slots)`. It is one global plan-worker limit across Implementer, Reviewer, and Judge. Default five-worker execution therefore requires child capacity of at least six.
-- `accountant_thread`: the one native `plan_accountant` / `herder:plan-accountant` child addressable across the run. It never counts in `parallel_limit`.
+- `selected_profile`: for native Fire, the registry-resolved profile name, SHA-256, host, required root-orchestrator model/effort, and exact five-role child mapping. Fresh Fire uses the host default only when `--profile` is absent. Resume uses the SQLite binding and never silently adopts a changed default. Orca retains its separately hashed runtime profile.
+- `accountant_thread`: the one native child whose exact type comes from `selected_profile.roles.plan-accountant`, addressable across the run. It never counts in `parallel_limit`.
 - `scheduler_state`: Accountant-owned state for each plan: round 1–6, review pass, active role if any, queued next action, approved base/HEAD/tree, and integration-ready state; plus the optional integration-lock owner. Reconstruct this state from README lifecycle, SQLite attempts, refs, worktrees, assignments, and proofs on resume rather than writing a second state file.
 - `review_state`: per-generation round count, exact review surfaces, repair deltas, finding ledger, Judge outcomes from round 3 onward, and leak records. Use a separate ledger for final cross-plan audit.
 - `checkout_state_token`: the checkout guard token excluding only `plan_dir`.
@@ -56,9 +57,9 @@ An **agent attempt** is one worker dispatch and always receives a unique usage r
 
 ## 1A. Persistent Accountant Contract
 
-Before any helper, repository Git command, or coordination write, the root spawns exactly one Accountant. On Codex use `agent_type: plan_accountant` with `fork_turns: "none"`; the installed profile pins Luna/max/Fast. On Claude use `herder:plan-accountant`; the bundled profile pins Opus/medium and requires an addressable resumed-subagent capability. The Accountant is a native controller child even when plan workers use Orca.
+Before any mutating control-plane helper, repository Git command, or coordination write, the root resolves the native profile with the read-only registry. The resolved `orchestrator` is a launch requirement, not a child definition: when the host exposes trustworthy root model/effort metadata, require an exact match or stop before mutation with the required launch selection. Profile selection never changes a running root. Then spawn exactly one Accountant using the exact `plan-accountant.agent_type`. Resume/status/cleanup may first invoke only `node <plan_manager> profile <plan_dir> --pretty` to discover the immutable binding needed to choose that type. Codex uses `fork_turns: "none"`; Claude requires an addressable resumed-subagent capability. The Accountant is a native controller child even when plan workers use Orca. Do not pass model, effort, or service-tier overrides because they are compiled into the selected definition.
 
-The Accountant is the exclusive control-plane owner. It alone runs every control-plane helper mode and repository Git command, evaluates worker envelopes, records usage, writes lifecycle or leak state, creates or removes refs/branches/worktrees/locks, runs gates, restacks, integrates, audits, and cleans. The root never duplicates or independently repairs those operations. The root may execute only exact host dispatch/wait/steer transport actions returned by the Accountant, including Orca dispatch/wait commands. The Accountant never spawns, waits for, steers, interrupts, lists, or messages agents and never asks the user a question directly.
+The Accountant is the exclusive mutating control-plane owner. Apart from the root's pre-spawn read-only `profile` lookup, it alone runs every control-plane helper mode and repository Git command, evaluates worker envelopes, records usage, writes lifecycle or leak state, creates or removes refs/branches/worktrees/locks, runs gates, restacks, integrates, audits, and cleans. The root never duplicates or independently repairs those operations. The root may execute only exact host dispatch/wait/steer transport actions returned by the Accountant, including Orca dispatch/wait commands. The Accountant never spawns, waits for, steers, interrupts, lists, or messages agents and never asks the user a question directly.
 
 The root sends one event at a time to the same Accountant thread:
 
@@ -68,12 +69,13 @@ EVENT_ID: <run-unique monotonic ID>
 REQUESTED_WORKER_LIMIT: <positive integer>
 HOST_CHILD_CAPACITY: <confirmed integer>
 ACTIVE_WORKERS: <exact host handles, roles, plans, attempts, or none>
+PROFILE: <exact resolved name, SHA-256, host, orchestrator requirement, and five-role mapping for native; native Accountant mapping plus Orca runtime hash for Orca>
 PAYLOAD: <exact invocation, terminal envelopes/evidence, dispatch results, or user answer>
 ```
 
-On `BOOTSTRAP`, the Accountant resolves the repository and installed helper paths, reads this complete protocol, records its SHA-256 in the response, and performs preflight. Every later event echoes that protocol hash; a mismatch stops without mutation. On `RESUME`, a replacement Accountant reconstructs from durable Plans state, refs, branches, worktrees, locks, assignments, gates, and supplied host inventory. Conversation history is never authority.
+On `BOOTSTRAP`, the Accountant resolves the repository and installed helper paths, reads this complete protocol, records its SHA-256 in the response, and performs preflight. For fresh native Fire it transactionally binds the exact profile through Plans before Git mutation. Every later event echoes the protocol and profile hashes; a mismatch stops without mutation. On `RESUME`, the root first reads the SQLite binding through Plans, resolves that exact name, and requires the hash and complete mapping to match before it spawns the replacement Accountant. The Accountant then reconstructs from durable Plans state, refs, branches, worktrees, locks, assignments, gates, and supplied host inventory. Conversation history is never authority.
 
-Process `TERMINALS` as a stable batch sorted by plan, round, and role. The Accountant applies all now-eligible control work and returns enough ordered `DISPATCH` actions to fill every available plan-worker slot. Each action contains a unique action ID, exact role, plan, attempt ID, task name, and complete immutable worker message. The root executes actions exactly, never invents one, and returns one `DISPATCH_RESULTS` batch with the real host handle or exact failure for every action. Capacity failure consumes no attempt or round; the Accountant releases an unused lease and recalculates capacity.
+Process `TERMINALS` as a stable batch sorted by plan, round, and role. The Accountant applies all now-eligible control work and returns enough ordered `DISPATCH` actions to fill every available plan-worker slot. Each native action contains a unique action ID, exact logical role, selected-profile agent type, model, effort, optional service tier, plan, attempt ID, task name, and complete immutable worker message. The root executes actions exactly, never invents one, and returns one `DISPATCH_RESULTS` batch with the real host handle or exact failure for every action. Any host rejection before a worker handle exists and before work can begin consumes no attempt or round; the Accountant releases the unused lease. Only an explicitly proven capacity rejection triggers capacity backoff. Every other rejection stops that action with the exact profile/role/host/type/model error; never retry through another profile, model, or generic agent.
 
 The Accountant response envelope is:
 
@@ -100,12 +102,12 @@ The Accountant completes every check before creating refs, branches, or worktree
 2. Run `node <checkout_guard> --repo <repo_root> --exclude <plan_dir> --pretty`; require `ok: true` and retain its `stateToken` without exposing file contents.
 3. Run Plans `validate` and `shape`. Reject graph, semantic-scope, or overlap errors. Ignore legacy review-budget metadata and every file-count or LOC STOP rule.
 4. Run `node <namespace_runner> ... --mode <fire|resume> --pretty`. A namespace conflict is a deliberate stop; never invent a timestamp, adopt unknown state, or overwrite evidence.
-5. Require the root to prove the Accountant thread and reserved control slot are addressable, then resolve Implementer, Reviewer, and Judge profiles and their configured routing. A packaged Saver profile is not part of fresh scheduling and is probed only when resuming a persisted legacy Saver state.
+5. Require the root to prove the selected Accountant thread and reserved control slot are addressable. For native Fire, require one registry result with all five exact role definitions. Validate only catalog schema, profile hash, supported host adapter, and agent-type presence; do not query a model catalog or spend tokens probing model availability. A packaged Saver definition is retained for legacy resume but is not part of fresh scheduling.
 6. For native Codex require Multi-Agent V2 `herder_agents` spawning with custom `agent_type`, `fork_turns`, follow-up, and long waits; never fall back to `codex exec` or a generic worker. For Claude require resumable `SendMessage` before mutation. For Orca, validate the explicit plan-worker runtime profile and every required route.
 7. Determine required verification commands from repository instructions, CI, and plan command tables. Do not guess when the plan specifies them.
 8. Confirm intended worktree paths are unused and Git metadata is writable.
 
-After every preflight check passes and before creating Git refs, branches, or worktrees, run `node <plan_manager> migrate-usage <plan_dir> --pretty`. This transactionally imports any legacy generated README attempt table into `execution_database` and only then removes that section. A malformed or conflicting legacy ledger stops without rewriting README. `status` remains read-only and never runs migration.
+After every preflight check passes and before creating Git refs, branches, or worktrees, run `node <plan_manager> migrate-usage <plan_dir> --pretty`. This transactionally imports any legacy generated README attempt table into `execution_database` and only then removes that section. A malformed or conflicting legacy ledger stops without rewriting README. For fresh native Fire, immediately bind the resolved selection using `bind-profile` with its name, SHA-256, host, and exact roles JSON. The binding is immutable and idempotent. Resume and status read it with `profile`; a conflicting name, hash, host, or role mapping stops. `status` remains otherwise read-only and never runs migration.
 
 For fresh native Fire, create absent `base_ref` and integration branch atomically with guarded `git update-ref --stdin`, then add the integration worktree. For Orca, let Orca create the worktree/branch and verify it before creating `base_ref`. Materialize and immediately verify the immutable RUN assignment:
 
@@ -165,7 +167,7 @@ git worktree lock --reason plan-herder:<plan-name>:<plan-id>:<role>:<attempt-id>
 
 One plan may have at most one active owner. A lock is a cleanup lease, not lifecycle state. The Accountant alone acquires and releases it around a root-dispatched worker.
 
-For native Codex, the Accountant returns a complete action for the exact `plan_implementer`, `plan_reviewer`, or `plan_judge` profile with `fork_turns: "none"`; the root dispatches it without model, effort, or service-tier overrides. For Orca the Accountant prepares one tracked task and adapter-delivered lifecycle prompt per attempt, and the root delivers it; matching `worker_done` task/dispatch/pane provenance replaces native terminal evidence.
+For native Codex, the Accountant returns a complete action using the selected profile's exact `plan-implementer`, `plan-reviewer`, or `plan-judge` agent type with `fork_turns: "none"`; the root dispatches it without model, effort, or service-tier overrides. Claude uses the corresponding selected identifier. For Orca the Accountant prepares one tracked task and adapter-delivered lifecycle prompt per attempt, and the root delivers it; matching `worker_done` task/dispatch/pane provenance replaces native terminal evidence.
 
 The Accountant runs immediately before authorizing and after receiving every worker attempt:
 
@@ -318,7 +320,7 @@ For transient capacity, do not increment any round, retry, interruption, or clar
 
 ## 8. Resume and Legacy Compatibility
 
-On resume, the Accountant reconstructs scheduler state from Plans lifecycle/usage, refs, branches, worktree leases, assignment hashes, round and review envelopes, exact reviewed surfaces, gates, findings, and child evidence. Conversation history is never required. The root supplies the exact live host inventory. Count every proven-live Implementer, Reviewer, or Judge against `parallel_limit`; reserve the separate Accountant control slot and keep no durable review-lane reservation. If role ownership is ambiguous, preserve that plan rather than dispatch competition.
+On native resume, read the immutable profile binding before spawning the Accountant, resolve that exact profile name, and require its SHA-256, host, orchestrator model/effort, and five agent types/models/efforts/tiers to match. An explicit `--profile` must name the same binding. Never resume with the current default merely because the original profile is unavailable. The Accountant reconstructs scheduler state from Plans lifecycle/usage, refs, branches, worktree leases, assignment hashes, round and review envelopes, exact reviewed surfaces, gates, findings, and child evidence. Conversation history is never required. The root supplies the exact live host inventory. Count every proven-live Implementer, Reviewer, or Judge against `parallel_limit`; reserve the separate Accountant control slot and keep no durable review-lane reservation. If role ownership is ambiguous, preserve that plan rather than dispatch competition.
 
 Classify retained branches:
 
@@ -334,7 +336,7 @@ Resume or restack never resets the six-round count, review-pass count, or findin
 
 The ownerless-rebase rule does not relax normal assignment containment. The Accountant must reconcile the exact `ACTIVE_WORKERS` inventory and leases, reject competing or ambiguous ownership, and use Section 3's explicit active-rebase capture and verification before returning the guided-repair action. A detached HEAD by itself is never recovery authority.
 
-For runs created by an older Herder version, preserve the recorded five-attempt-plus-Saver semantics only when the durable ledger proves that generation already dispatched or was explicitly authorized for Saver. The installed legacy Saver profile may finish that one generation under its original contract. Do not convert fresh or merely five-attempt-exhausted legacy work into Saver; all new generations use the six-round state machine.
+For a run created before profile binding existed, use only the installed unqualified legacy identifiers and require its recorded attempt models/efforts to be consistent with that host's historical mapping. Do not bind a modern default over ambiguous evidence. Preserve the recorded five-attempt-plus-Saver semantics only when the durable ledger proves that generation already dispatched or was explicitly authorized for Saver. The installed legacy Saver profile may finish that one generation under its original contract. Do not convert fresh or merely five-attempt-exhausted legacy work into Saver; all new generations use the six-round state machine.
 
 ## 9. Completion
 

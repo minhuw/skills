@@ -249,6 +249,8 @@ function readProfile(file) {
   for (const roleName of ROLE_NAMES) {
     const role = parsed.roles[roleName]
     if (!role || typeof role !== "object" || Array.isArray(role)) fail(`Missing Orca runtime role: ${roleName}`)
+    const unknownFields = Object.keys(role).filter((field) => !["harness", "provider", "model", "effort", "mutates", "command"].includes(field))
+    if (unknownFields.length > 0) fail(`${roleName} contains unknown fields: ${unknownFields.join(", ")}`)
     if (!Object.hasOwn(HARNESS_BINARIES, role.harness)) fail(`Unsupported harness for ${roleName}: ${JSON.stringify(role.harness)}`)
     if (roleName === "controller" && role.harness !== "codex") fail("Orca controller harness must be codex")
     if (!isString(role.provider) || !isString(role.model) || !isString(role.effort)) {
@@ -265,16 +267,6 @@ function readProfile(file) {
       fail(`${roleName}.command must not embed credentials`)
     }
     validateRoleCommand(roleName, role, command)
-    let probe = null
-    if (role.probe !== undefined) {
-      probe = stringArray(role.probe, `${roleName}.probe`)
-      if (probe[0] !== command[0]) fail(`${roleName}.probe must use the role harness binary`)
-      if (containsCredentialArgument(probe)) fail(`${roleName}.probe must not embed credentials`)
-    }
-    if (CHILD_ROLES.includes(roleName) && !probe) fail(`${roleName}.probe is required`)
-    if (role.probeIncludes !== undefined && !isString(role.probeIncludes)) {
-      fail(`${roleName}.probeIncludes must be a non-empty string`)
-    }
     roles[roleName] = {
       harness: role.harness,
       provider: role.provider,
@@ -282,8 +274,6 @@ function readProfile(file) {
       effort: role.effort,
       mutates: role.mutates,
       command,
-      probe,
-      probeIncludes: role.probeIncludes || null,
     }
   }
   const normalized = {
@@ -607,21 +597,6 @@ function preflight(loaded, options) {
     fail("Orca experimental orchestration is unavailable or returned an unsupported response")
   }
 
-  const probes = {}
-  for (const roleName of CHILD_ROLES) {
-    const role = loaded.profile.roles[roleName]
-    const result = run(role.probe[0], role.probe.slice(1), {
-      label: `${roleName} availability probe`,
-      timeout: 120000,
-    })
-    if (role.probeIncludes && !`${result.stdout}\n${result.stderr}`.includes(role.probeIncludes)) {
-      fail(`${roleName} availability probe did not expose configured model ${role.provider}/${role.model}`)
-    }
-    probes[roleName] = {
-      status: "passed",
-      outputSha256: sha256(`${result.stdout}\0${result.stderr}`),
-    }
-  }
   return {
     ok: true,
     runtime: "orca",
@@ -638,7 +613,6 @@ function preflight(loaded, options) {
         : orchestration.tasks.length,
     },
     executables,
-    probes,
   }
 }
 

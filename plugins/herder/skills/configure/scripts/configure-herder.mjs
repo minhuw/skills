@@ -37,18 +37,11 @@ const AGENT_FILES = {
   "plan-saver": "plan_saver.toml",
 }
 const ACCOUNTANT_FILE = "plan_accountant.toml"
-const ACCOUNTANT_MAPPING = { harness: "codex", model: "gpt-5.6-luna", effort: "max" }
 const EFFORTS = {
   codex: new Set(["low", "medium", "high", "xhigh", "max"]),
   "grok-build": new Set(["low", "medium", "high"]),
   pi: new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]),
 }
-const BINARIES = {
-  codex: process.env.HERDER_CONFIG_CODEX_BIN || "codex",
-  "grok-build": process.env.HERDER_CONFIG_GROK_BIN || "grok",
-  pi: process.env.HERDER_CONFIG_PI_BIN || "pi",
-}
-const MARKER = "HERDER_CONFIG_OK"
 const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:+/-]*$/
 
 class UsageError extends Error {}
@@ -81,19 +74,17 @@ function exists(file) {
 function parseArgs(argv) {
   const command = argv[0]
   if (!command || ["-h", "--help"].includes(command)) return { help: true }
-  if (!["validate", "probe", "generate"].includes(command)) throw new UsageError(`Unknown command: ${command}`)
+  if (!["validate", "generate"].includes(command)) throw new UsageError(`Unknown command: ${command}`)
   const options = {
     command,
     answers: "",
     output: "",
     force: false,
-    live: false,
     pretty: false,
   }
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === "--force") options.force = true
-    else if (argument === "--live") options.live = true
     else if (argument === "--pretty") options.pretty = true
     else if (["--answers", "--output"].includes(argument)) {
       const value = argv[index + 1]
@@ -106,14 +97,12 @@ function parseArgs(argv) {
   if (!options.answers) throw new UsageError("--answers is required")
   if (command === "generate" && !options.output) throw new UsageError("--output is required for generate")
   if (command !== "generate" && options.force) throw new UsageError("--force is valid only with generate")
-  if (command !== "probe" && options.live) throw new UsageError("--live is valid only with probe")
   return options
 }
 
 function usage() {
   return `Usage:
   configure-herder.mjs validate --answers <json> [--pretty]
-  configure-herder.mjs probe --answers <json> [--live] [--pretty]
   configure-herder.mjs generate --answers <json> --output <path> [--force] [--pretty]
 `
 }
@@ -199,10 +188,6 @@ function orcaRole(roleName, mapping) {
       effort: mapping.effort,
       mutates,
       command,
-      ...(roleName === "controller" ? {} : {
-        probe: ["codex", "--version"],
-        probeIncludes: "codex-cli",
-      }),
     }
   }
   if (mapping.harness === "grok-build") {
@@ -221,8 +206,6 @@ function orcaRole(roleName, mapping) {
       effort: mapping.effort,
       mutates,
       command,
-      probe: ["grok", "models"],
-      probeIncludes: mapping.model,
     }
   }
   const route = piRoute(mapping.model)
@@ -241,8 +224,6 @@ function orcaRole(roleName, mapping) {
       "--no-prompt-templates",
       "--tools", mutates ? "read,bash,edit,write,grep,find,ls" : "read,bash,grep,find,ls",
     ],
-    probe: ["pi", "--list-models", mapping.model],
-    probeIncludes: route.model,
   }
 }
 
@@ -309,133 +290,6 @@ function buildNativeProfiles(answers) {
       "--model", controller.model,
       "-c", `model_reasoning_effort="${controller.effort}"`,
     ],
-  }
-}
-
-function routeIdentity(mapping) {
-  const provider = mapping.harness === "pi" ? piRoute(mapping.model).provider : (
-    mapping.harness === "codex" ? "openai-codex" : "xai"
-  )
-  return `${mapping.harness}\0${provider}\0${mapping.model}\0${mapping.effort}`
-}
-
-function uniqueRoutes(answers) {
-  const routes = new Map()
-  for (const role of ROLES) {
-    const mapping = answers.roles[role]
-    const key = routeIdentity(mapping)
-    if (!routes.has(key)) routes.set(key, { ...mapping, roles: [] })
-    routes.get(key).roles.push(role)
-  }
-  const accountantKey = routeIdentity(ACCOUNTANT_MAPPING)
-  if (!routes.has(accountantKey)) routes.set(accountantKey, { ...ACCOUNTANT_MAPPING, roles: [] })
-  routes.get(accountantKey).roles.push("plan-accountant")
-  return [...routes.values()]
-}
-
-function runProbe(route, live) {
-  const binary = BINARIES[route.harness]
-  let args
-  let expected
-  if (!live && route.harness === "codex") {
-    args = ["--version"]
-    expected = /codex/i
-  } else if (!live && route.harness === "grok-build") {
-    args = ["models"]
-    expected = route.model
-  } else if (!live) {
-    args = ["--list-models", route.model]
-    expected = piRoute(route.model).model
-  } else if (route.harness === "codex") {
-    args = [
-      "exec",
-      "--ephemeral",
-      "--skip-git-repo-check",
-      "--ignore-rules",
-      "--sandbox", "read-only",
-      "--ask-for-approval", "never",
-      "--model", route.model,
-      "-c", `model_reasoning_effort="${route.effort}"`,
-      ...(route.roles.some((role) => role !== "controller") && isLunaModel(route.model)
-        ? ["-c", 'service_tier="fast"']
-        : []),
-      "--json",
-      `Return exactly ${MARKER}.`,
-    ]
-    expected = MARKER
-  } else if (route.harness === "grok-build") {
-    args = [
-      "--model", route.model,
-      "--effort", route.effort,
-      "--single", `Return exactly ${MARKER}.`,
-      "--permission-mode", "plan",
-      "--no-subagents",
-      "--no-memory",
-      "--disable-web-search",
-      "--verbatim",
-      "--output-format", "plain",
-    ]
-    expected = MARKER
-  } else {
-    args = [
-      "--model", route.model,
-      "--thinking", route.effort,
-      "--approve",
-      "--no-skills",
-      "--no-prompt-templates",
-      "--no-context-files",
-      "--tools", "read,grep,find,ls",
-      "--no-session",
-      "--print",
-      `Return exactly ${MARKER}.`,
-    ]
-    expected = MARKER
-  }
-  const probeRoot = live ? mkdtempSync(path.join(tmpdir(), "herder-route-probe-")) : process.cwd()
-  let result
-  try {
-    result = spawnSync(binary, args, {
-      cwd: probeRoot,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: live ? 300000 : 60000,
-    })
-  } finally {
-    if (live) rmSync(probeRoot, { recursive: true, force: true })
-  }
-  const output = `${result.stdout || ""}\0${result.stderr || ""}`
-  const matched = expected instanceof RegExp ? expected.test(output) : output.includes(expected)
-  const ok = result.status === 0 && !result.error && matched
-  const provider = route.harness === "pi" ? piRoute(route.model).provider : (
-    route.harness === "codex" ? "openai-codex" : "xai"
-  )
-  return {
-    harness: route.harness,
-    provider,
-    model: route.model,
-    effort: route.effort,
-    roles: route.roles,
-    mode: live ? "live" : "availability",
-    status: ok ? "passed" : "failed",
-    exitCode: Number.isInteger(result.status) ? result.status : null,
-    outputSha256: sha256(output),
-    ...(ok ? {} : {
-      remediation: route.harness === "codex"
-        ? "Run codex login and verify the selected account/model."
-        : route.harness === "grok-build"
-          ? "Run grok login, then grok models."
-          : `Run pi, use /login, then verify pi list and pi --list-models ${route.model}.`,
-    }),
-  }
-}
-
-function probe(answers, live) {
-  const results = uniqueRoutes(answers).map((route) => runProbe(route, live))
-  return {
-    ok: results.every((result) => result.status === "passed"),
-    backend: answers.backend,
-    mode: live ? "live" : "availability",
-    results,
   }
 }
 
@@ -541,14 +395,8 @@ function main() {
       backend: loaded.answers.backend,
       answersHash: loaded.answersHash,
       roles: loaded.answers.roles,
-      uniqueRoutes: uniqueRoutes(loaded.answers).length,
+      roleCount: ROLES.length,
     }, options.pretty)
-    return
-  }
-  if (options.command === "probe") {
-    const result = probe(loaded.answers, options.live)
-    emit(result, options.pretty)
-    if (!result.ok) process.exitCode = 4
     return
   }
   emit(generate(loaded, options.output, options.force), options.pretty)

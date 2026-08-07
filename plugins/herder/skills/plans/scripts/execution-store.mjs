@@ -5,7 +5,7 @@ import path from "node:path"
 const require = createRequire(import.meta.url)
 
 export const EXECUTION_DATABASE_RELATIVE = ".herder/execution.sqlite3"
-export const EXECUTION_SCHEMA_VERSION = 1
+export const EXECUTION_SCHEMA_VERSION = 2
 
 const LEGACY_SECTION_START = "<!-- herder-usage:start -->"
 const LEGACY_SECTION_END = "<!-- herder-usage:end -->"
@@ -105,7 +105,21 @@ function initializeSchema(database, { allowInitialize = true } = {}) {
       CREATE INDEX IF NOT EXISTS attempts_plan_id ON attempts(plan_id);
       CREATE INDEX IF NOT EXISTS attempts_role ON attempts(role);
       CREATE INDEX IF NOT EXISTS attempts_model_effort ON attempts(model, effort);
-      PRAGMA user_version = ${EXECUTION_SCHEMA_VERSION};
+      PRAGMA user_version = 1;
+    `)
+  }
+  if (version < 2) {
+    if (!allowInitialize) return
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS run_configuration (
+        singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+        profile_name TEXT NOT NULL,
+        profile_sha256 TEXT NOT NULL,
+        host TEXT NOT NULL,
+        roles_json TEXT NOT NULL,
+        recorded_at TEXT NOT NULL
+      );
+      PRAGMA user_version = 2;
     `)
   }
 }
@@ -342,6 +356,95 @@ function readDatabaseRecords(database) {
   return database.prepare("SELECT * FROM attempts ORDER BY rowid").all().map(rowToRecord)
 }
 
+function normalizeRunConfiguration(input = {}) {
+  const profile = requiredText(input.profile, "Profile")
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(profile)) fail("Profile must be a lowercase profile name")
+  const profileSha256 = requiredText(input.profileSha256, "Profile SHA-256").toLowerCase()
+  if (!/^[0-9a-f]{64}$/.test(profileSha256)) fail("Profile SHA-256 must contain 64 hexadecimal characters")
+  const host = requiredText(input.host, "Host")
+  if (!["codex", "claude"].includes(host)) fail("Host must be codex or claude")
+  let roles
+  try {
+    roles = typeof input.roles === "string" ? JSON.parse(input.roles) : input.roles
+  } catch (error) {
+    fail(`Roles JSON is invalid: ${error.message}`)
+  }
+  if (!roles || typeof roles !== "object" || Array.isArray(roles)) fail("Roles must be a JSON object")
+  const normalizedRoles = {}
+  for (const role of ["plan-accountant", "plan-implementer", "plan-reviewer", "plan-judge", "plan-saver"]) {
+    const mapping = roles[role]
+    if (!mapping || typeof mapping !== "object" || Array.isArray(mapping)) fail(`Missing run role ${role}`)
+    const unknownFields = Object.keys(mapping).filter((field) => !["agent_type", "model", "effort", "service_tier"].includes(field))
+    if (unknownFields.length > 0) fail(`Run role ${role} contains unknown fields: ${unknownFields.join(", ")}`)
+    normalizedRoles[role] = {
+      agent_type: requiredText(mapping.agent_type, `${role} agent type`),
+      model: requiredText(mapping.model, `${role} model`),
+      effort: requiredText(mapping.effort, `${role} effort`),
+      ...(mapping.service_tier ? { service_tier: requiredText(mapping.service_tier, `${role} service tier`) } : {}),
+    }
+  }
+  if (Object.keys(roles).some((role) => !Object.hasOwn(normalizedRoles, role))) fail("Run roles contain an unknown role")
+  return { profile, profileSha256, host, roles: normalizedRoles }
+}
+
+function rowToRunConfiguration(row) {
+  if (!row) return null
+  return {
+    profile: row.profile_name,
+    profileSha256: row.profile_sha256,
+    host: row.host,
+    roles: JSON.parse(row.roles_json),
+    recordedAt: row.recorded_at,
+  }
+}
+
+function readDatabaseRunConfiguration(database) {
+  const table = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'run_configuration'").get()
+  if (!table) return null
+  return rowToRunConfiguration(database.prepare("SELECT * FROM run_configuration WHERE singleton = 1").get())
+}
+
+function databaseSchemaVersion(database) {
+  return Number(database.prepare("PRAGMA user_version").get().user_version)
+}
+
+export function recordRunConfiguration(planDir, readme, input) {
+  const configuration = normalizeRunConfiguration(input)
+  migrateLegacyUsage(planDir, readme)
+  const database = openDatabase(planDir, { create: true })
+  let recorded = false
+  try {
+    withTransaction(database, () => {
+      const existing = readDatabaseRunConfiguration(database)
+      if (existing) {
+        const comparableExisting = { profile: existing.profile, profileSha256: existing.profileSha256, host: existing.host, roles: existing.roles }
+        if (JSON.stringify(comparableExisting) !== JSON.stringify(configuration)) {
+          fail(`Run profile is already bound to ${existing.profile} (${existing.profileSha256}) on ${existing.host}`)
+        }
+        return
+      }
+      database.prepare(`
+        INSERT INTO run_configuration (singleton, profile_name, profile_sha256, host, roles_json, recorded_at)
+        VALUES (1, ?, ?, ?, ?, ?)
+      `).run(configuration.profile, configuration.profileSha256, configuration.host, JSON.stringify(configuration.roles), new Date().toISOString())
+      recorded = true
+    })
+    return { recorded, configuration: readDatabaseRunConfiguration(database), database: executionDatabasePath(planDir) }
+  } finally {
+    database.close()
+  }
+}
+
+export function readRunConfiguration(planDir) {
+  const database = openDatabase(planDir, { readOnly: true })
+  if (!database) return { database: executionDatabasePath(planDir), schemaVersion: null, configuration: null }
+  try {
+    return { database: executionDatabasePath(planDir), schemaVersion: databaseSchemaVersion(database), configuration: readDatabaseRunConfiguration(database) }
+  } finally {
+    database.close()
+  }
+}
+
 function insertRecord(database, record) {
   const existing = database.prepare("SELECT * FROM attempts WHERE attempt_id = ?").get(record.attempt)
   if (existing) {
@@ -457,8 +560,14 @@ export function readUsageState(planDir, readme = path.join(path.resolve(planDir)
   const databaseExists = fs.existsSync(executionDatabasePath(planDir))
   const database = openDatabase(planDir, { readOnly: true })
   let records = []
+  let runConfiguration = null
+  let schemaVersion = null
   try {
-    if (database) records = readDatabaseRecords(database)
+    if (database) {
+      records = readDatabaseRecords(database)
+      runConfiguration = readDatabaseRunConfiguration(database)
+      schemaVersion = databaseSchemaVersion(database)
+    }
   } finally {
     database?.close()
   }
@@ -469,7 +578,8 @@ export function readUsageState(planDir, readme = path.join(path.resolve(planDir)
     storage: legacy.present
       ? (databaseExists ? "sqlite+legacy-pending" : "legacy-readonly")
       : (databaseExists ? "sqlite" : "uninitialized"),
-    schemaVersion: databaseExists ? EXECUTION_SCHEMA_VERSION : null,
+    schemaVersion,
+    runConfiguration,
     records,
   }
 }

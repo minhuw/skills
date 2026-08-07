@@ -18,11 +18,29 @@ codex plugin marketplace add minhuw/skills
 codex plugin add herder@herder
 ```
 
-Start a new Codex session and run `$herder:install`. Follow any printed Multi-Agent V2 setup instructions; if profiles or configuration change, start one more new session before using `$herder:fire`. The default five-plan-worker pool reserves one additional child thread for its Luna/max/Fast Accountant, so configure at least six concurrent child threads.
+Start a new Codex session and run `$herder:install`. Follow any printed Multi-Agent V2 setup instructions; if profiles or configuration change, start one more new session before using `$herder:fire`. The default five-plan-worker pool reserves one additional child thread for its selected persistent Accountant, so configure at least six concurrent child threads.
+
+## Native role profiles
+
+Install registers every bundled profile and keeps the historical unqualified roles only for old-run resume compatibility. Fire selects a named profile with `--profile`; without it, Codex uses `eclipse` and Claude uses `shannon`.
+
+| Profile | Root orchestrator | Accountant | Implementer | Reviewer | Judge | Saver |
+|---|---|---|---|---|---|---|
+| `eclipse` | GPT-5.6 Sol, max | GPT-5.6 Luna, max, Fast | GPT-5.6 Luna, max, Fast | GPT-5.6 Sol, xhigh | GPT-5.6 Sol, xhigh | GPT-5.6 Sol, xhigh |
+| `shannon` | Claude Opus 4.8, high | Claude Opus 4.8, medium | Claude Opus 4.8, high | Claude Opus 4.8, xhigh | Claude Opus 4.8, xhigh | Claude Opus 4.8, xhigh |
+| `offcut` | Kimi K3 (`kimi-k3`), max | Grok 4.5, max | Grok 4.5, high | GPT-5.6 Sol, xhigh | GPT-5.6 Sol, xhigh | GPT-5.6 Sol, max |
+
+`eclipse` and `offcut` are available on both native hosts; `shannon` is Claude-only. A profile declares the required root-orchestrator model and controls Herder's persistent Accountant and worker roles. Select the root model when launching Codex or Claude Code; `--profile` validates the requirement but cannot replace the model of an already-running session.
+
+```text
+$herder:fire herder-plans --profile offcut
+```
+
+Herder validates profile structure and exact agent identifiers but does not query model catalogs or make token-consuming availability probes. If the host rejects a real dispatch before returning a worker handle, Herder reports the exact profile/role/model failure, releases the lease, consumes no attempt or round, and never substitutes another model.
 
 ## Configure role routing
 
-Run `$herder:configure` to choose native Codex or Orca, review each role's harness/model/effort mapping, and validate every unique route before writing configuration. Configure never accepts credentials in chat: unavailable routes stop before writing and direct you to the selected CLI's login or provider setup.
+Run `$herder:configure` to generate an Orca runtime profile or maintain legacy unqualified Codex aliases for an older run. Fresh native Fire uses the installed named catalog and `--profile`. Configure validates schema and harness adapters before writing, never accepts credentials in chat, and leaves model availability to the real Fire dispatch.
 
 ## Observe a run
 

@@ -10,7 +10,9 @@ import {
   executionReport,
   initializeExecutionStore,
   migrateLegacyUsage,
+  readRunConfiguration,
   readUsageState,
+  recordRunConfiguration,
   recordUsageRecord,
   usageReport,
 } from "./execution-store.mjs"
@@ -731,6 +733,16 @@ export function migrateUsage(inputDir = DEFAULT_PLAN_DIR) {
   return { planDir: graph.planDir, readme: graph.readme, ...migration }
 }
 
+export function bindRunProfile(inputDir = DEFAULT_PLAN_DIR, input = {}) {
+  const graph = buildGraph(inputDir)
+  return recordRunConfiguration(graph.planDir, graph.readme, input)
+}
+
+export function getRunProfile(inputDir = DEFAULT_PLAN_DIR) {
+  const graph = buildGraph(inputDir)
+  return { planDir: graph.planDir, readme: graph.readme, ...readRunConfiguration(graph.planDir) }
+}
+
 export function getExecutionReport(inputDir = DEFAULT_PLAN_DIR, inputPlan = "RUN") {
   const graph = buildGraph(inputDir)
   const requested = String(inputPlan ?? "RUN").trim()
@@ -744,6 +756,7 @@ export function getExecutionReport(inputDir = DEFAULT_PLAN_DIR, inputPlan = "RUN
     database: state.database,
     storage: state.storage,
     schemaVersion: state.schemaVersion,
+    runConfiguration: state.runConfiguration,
     lifecycle: plan === "RUN"
       ? { complete: graph.complete, counts: graph.counts }
       : { title: planRecord.title, status: planRecord.status, statusDetail: planRecord.statusDetail },
@@ -762,6 +775,8 @@ function usage() {
     "  herder-plans snapshot <plan-id> [plan-dir] [--pretty]",
     "  herder-plans transition <plan-id> <status> [plan-dir] [--detail <text>] [--pretty]",
     "  herder-plans record-usage <plan-id|RUN> <role> [plan-dir] --attempt <id> --model <model> --effort <effort> --outcome <outcome> [--input-tokens <n|unknown>] [--cached-input-tokens <n|unknown>] [--output-tokens <n|unknown>] [--reasoning-tokens <n|unknown>] [--source <host-source|unknown>] [--round <1..6>] [--generation <id>] [--runtime <native|orca>] [--harness <name>] [--service-tier <tier>] [--started-at <iso>] [--finished-at <iso>] [--duration-ms <n>] [--pretty]",
+    "  herder-plans bind-profile [plan-dir] --profile <name> --profile-sha256 <hash> --host <codex|claude> --roles-json <json> [--pretty]",
+    "  herder-plans profile [plan-dir] [--pretty]",
     "  herder-plans usage [plan-dir] [--pretty]",
     "  herder-plans report <plan-id|RUN> [plan-dir] [--pretty]",
     "  herder-plans migrate-usage [plan-dir] [--pretty]",
@@ -807,23 +822,30 @@ function main(argv) {
     finishedAt: takeFlag(args, "--finished-at"),
     durationMs: takeFlag(args, "--duration-ms"),
   }
+  const profileOptions = {
+    profile: takeFlag(args, "--profile"),
+    profileSha256: takeFlag(args, "--profile-sha256"),
+    host: takeFlag(args, "--host"),
+    roles: takeFlag(args, "--roles-json"),
+  }
   const hasUsageOptions = Object.values(usageOptions).some((value) => value !== null)
+  const hasProfileOptions = Object.values(profileOptions).some((value) => value !== null)
   const unknown = args.filter((argument) => argument.startsWith("--"))
   if (unknown.length > 0) fail(`Unknown option: ${unknown[0]}\n${usage()}`)
 
   const command = args.shift()
   let result
   if (command === "init") {
-    if (args.length > 1 || detail || hasUsageOptions) fail(usage())
+    if (args.length > 1 || detail || hasUsageOptions || hasProfileOptions) fail(usage())
     result = initPlanDir(args[0] ?? DEFAULT_PLAN_DIR, { track })
   } else if (["validate", "status"].includes(command)) {
-    if (args.length > 1 || detail || track || hasUsageOptions) fail(usage())
+    if (args.length > 1 || detail || track || hasUsageOptions || hasProfileOptions) fail(usage())
     result = buildGraph(args[0] ?? DEFAULT_PLAN_DIR)
   } else if (command === "shape") {
-    if (args.length > 1 || detail || track || hasUsageOptions) fail(usage())
+    if (args.length > 1 || detail || track || hasUsageOptions || hasProfileOptions) fail(usage())
     result = getShapeReport(args[0] ?? DEFAULT_PLAN_DIR)
   } else if (command === "ready") {
-    if (args.length > 1 || detail || track || hasUsageOptions) fail(usage())
+    if (args.length > 1 || detail || track || hasUsageOptions || hasProfileOptions) fail(usage())
     const graph = buildGraph(args[0] ?? DEFAULT_PLAN_DIR)
     result = {
       planDir: graph.planDir,
@@ -834,30 +856,37 @@ function main(argv) {
       complete: graph.complete,
     }
   } else if (command === "snapshot") {
-    if (args.length < 1 || args.length > 2 || detail || track || hasUsageOptions) fail(usage())
+    if (args.length < 1 || args.length > 2 || detail || track || hasUsageOptions || hasProfileOptions) fail(usage())
     result = snapshotPlan(args[1] ?? DEFAULT_PLAN_DIR, args[0])
   } else if (command === "transition") {
-    if (args.length < 2 || args.length > 3 || track || hasUsageOptions) fail(usage())
+    if (args.length < 2 || args.length > 3 || track || hasUsageOptions || hasProfileOptions) fail(usage())
     result = transitionStatus(args[2] ?? DEFAULT_PLAN_DIR, args[0], args[1], detail)
   } else if (command === "record-usage") {
     if (args.length < 2 || args.length > 3 || detail || track
-      || !usageOptions.attempt || !usageOptions.model || !usageOptions.effort || !usageOptions.outcome) fail(usage())
+      || hasProfileOptions || !usageOptions.attempt || !usageOptions.model || !usageOptions.effort || !usageOptions.outcome) fail(usage())
     result = recordUsage(args[2] ?? DEFAULT_PLAN_DIR, {
       plan: args[0],
       role: args[1],
       ...usageOptions,
     })
   } else if (command === "usage") {
-    if (args.length > 1 || detail || track || hasUsageOptions) fail(usage())
+    if (args.length > 1 || detail || track || hasUsageOptions || hasProfileOptions) fail(usage())
     result = getUsageReport(args[0] ?? DEFAULT_PLAN_DIR)
   } else if (command === "report") {
-    if (args.length < 1 || args.length > 2 || detail || track || hasUsageOptions) fail(usage())
+    if (args.length < 1 || args.length > 2 || detail || track || hasUsageOptions || hasProfileOptions) fail(usage())
     result = getExecutionReport(args[1] ?? DEFAULT_PLAN_DIR, args[0])
   } else if (command === "migrate-usage") {
-    if (args.length > 1 || detail || track || hasUsageOptions) fail(usage())
+    if (args.length > 1 || detail || track || hasUsageOptions || hasProfileOptions) fail(usage())
     result = migrateUsage(args[0] ?? DEFAULT_PLAN_DIR)
+  } else if (command === "bind-profile") {
+    if (args.length > 1 || detail || track || hasUsageOptions
+      || !profileOptions.profile || !profileOptions.profileSha256 || !profileOptions.host || !profileOptions.roles) fail(usage())
+    result = bindRunProfile(args[0] ?? DEFAULT_PLAN_DIR, profileOptions)
+  } else if (command === "profile") {
+    if (args.length > 1 || detail || track || hasUsageOptions || hasProfileOptions) fail(usage())
+    result = getRunProfile(args[0] ?? DEFAULT_PLAN_DIR)
   } else if (["track", "untrack"].includes(command)) {
-    if (args.length > 1 || detail || track || hasUsageOptions) fail(usage())
+    if (args.length > 1 || detail || track || hasUsageOptions || hasProfileOptions) fail(usage())
     result = setTracking(args[0] ?? DEFAULT_PLAN_DIR, command === "track")
   } else {
     fail(usage())

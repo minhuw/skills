@@ -34,12 +34,7 @@
         "--always-approve",
         "--no-subagents",
         "--no-auto-update"
-      ],
-      "probe": [
-        "grok",
-        "models"
-      ],
-      "probeIncludes": "grok-4.5"
+      ]
     },
     "plan-reviewer": {
       "harness": "pi",
@@ -58,13 +53,7 @@
         "--no-prompt-templates",
         "--tools",
         "read,bash,grep,find,ls"
-      ],
-      "probe": [
-        "pi",
-        "--list-models",
-        "kimi-coding/k3"
-      ],
-      "probeIncludes": "k3"
+      ]
     },
     "plan-judge": {
       "harness": "pi",
@@ -84,13 +73,7 @@
         "--no-prompt-templates",
         "--tools",
         "read,bash,grep,find,ls"
-      ],
-      "probe": [
-        "pi",
-        "--list-models",
-        "openai/gpt-5.6-sol"
-      ],
-      "probeIncludes": "gpt-5.6-sol"
+      ]
     },
     "plan-saver": {
       "harness": "grok-build",
@@ -107,12 +90,7 @@
         "--always-approve",
         "--no-subagents",
         "--no-auto-update"
-      ],
-      "probe": [
-        "grok",
-        "models"
-      ],
-      "probeIncludes": "grok-4.5"
+      ]
     }
   }
 }

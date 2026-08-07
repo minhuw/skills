@@ -648,6 +648,7 @@ function main() {
     const fireText = fs.readFileSync(path.join(installedPath, "skills", "fire", "SKILL.md"), "utf8")
     const configureText = fs.readFileSync(path.join(installedPath, "skills", "configure", "SKILL.md"), "utf8")
     const configureScript = path.join(installedPath, "skills", "configure", "scripts", "configure-herder.mjs")
+    const profileRegistry = path.join(installedPath, "agent-profiles", "scripts", "profile-registry.mjs")
     const fireProtocolText = fs.readFileSync(path.join(installedPath, "skills", "fire", "references", "orchestration-protocol.md"), "utf8")
     const validateText = fs.readFileSync(path.join(installedPath, "skills", "validate", "SKILL.md"), "utf8")
     const dashboardText = fs.readFileSync(path.join(installedPath, "skills", "dashboard", "SKILL.md"), "utf8")
@@ -667,7 +668,7 @@ function main() {
     assert.match(fireText, /references\/orca-runtime\.md/)
     assert.match(fireText, /--include-failed/)
     assert.match(fireText, /--finalize/)
-    assert.match(fireText, /Only the Accountant may invoke control-plane helper modes/)
+    assert.match(fireText, /Only the Accountant may invoke mutating control-plane helper modes/)
     assert.match(fireText, /root coordinator owns only host-agent dispatch, waits, and user interaction/)
     assert.match(fireText, /persistent Accountant/)
     assert.match(fireText, /Keep integration history linear/)
@@ -679,9 +680,24 @@ function main() {
     assert.match(fireText, /never as a numeric gate/)
     assert.doesNotMatch(fireText, /files<=|hard ceiling `N\+3`|three-file contingency/)
     assert.match(configureText, /Ask one focused question at a time/)
-    assert.match(configureText, /live validation makes one minimal call per unique/)
-    assert.match(configureText, /Do not accept an API key in chat/)
+    assert.match(configureText, /does not query model catalogs or spend tokens/)
+    assert.match(configureText, /pre-handle rejection consumes no attempt or round/)
     assert.equal(fs.existsSync(configureScript), true, "missing installed Configure generator")
+    assert.equal(fs.existsSync(profileRegistry), true, "missing installed profile registry")
+    const frontierProfile = parseJson(run("node", [
+      profileRegistry,
+      "resolve", "--host", "codex", "--profile", "offcut", "--pretty",
+    ], { cwd: project }).stdout, "offcut profile resolution")
+    assert.deepEqual(frontierProfile.orchestrator, { model: "kimi-k3", effort: "max" })
+    assert.equal(frontierProfile.roles["plan-accountant"].model, "grok-4.5")
+    assert.equal(frontierProfile.roles["plan-implementer"].model, "grok-4.5")
+    assert.equal(frontierProfile.roles["plan-reviewer"].effort, "xhigh")
+    assert.equal(frontierProfile.roles["plan-saver"].effort, "max")
+    const defaultProfile = parseJson(run("node", [
+      profileRegistry,
+      "resolve", "--host", "codex", "--pretty",
+    ], { cwd: project }).stdout, "default profile resolution")
+    assert.equal(defaultProfile.profile, "eclipse")
     assert.match(fireProtocolText, /Each plan has exactly one stable branch and at most one worktree/)
     assert.match(fireProtocolText, /herder\/<plan-name>\/integration/)
     assert.match(fireProtocolText, /git rebase --onto <integration-head> <reviewed-base>/)
@@ -708,7 +724,7 @@ function main() {
     assert.match(fireProtocolText, /number of changed or undeclared paths.*never gate the plan/)
     assert.doesNotMatch(fireProtocolText, /files<=|N\+3|hard file|8\/3\/11/)
     assert.match(fireProtocolText, /matching `worker_done` task\/dispatch\/pane provenance/)
-    assert.match(fireProtocolText, /Accountant is the exclusive control-plane owner/)
+    assert.match(fireProtocolText, /Accountant is the exclusive mutating control-plane owner/)
     assert.match(fireProtocolText, /Default five-worker execution therefore requires child capacity of at least six/)
     assert.match(fireProtocolText, /Process `TERMINALS` as a stable batch sorted by plan, round, and role/)
     assert.match(validateText, /herder:validate \[<plan-dir>\] \[--fix\]/)
@@ -764,7 +780,7 @@ function main() {
       "--pretty",
     ], { cwd: project }).stdout, "installed Configure validation")
     assert.equal(configuredRouting.ok, true)
-    assert.equal(configuredRouting.uniqueRoutes, 5)
+    assert.equal(configuredRouting.roleCount, 5)
     const checkoutGuard = path.join(installedPath, "skills", "fire", "scripts", "checkout-state.mjs")
     assert.equal(fs.existsSync(checkoutGuard), true, "missing installed Fire checkout-state guard")
     const cleanupRunner = path.join(installedPath, "skills", "fire", "scripts", "cleanup-run.mjs")
@@ -780,6 +796,18 @@ function main() {
     assert.equal(emptyGraph.counts.total, 0)
     const emptyShape = parseJson(run("node", [manager, "shape", "herder-plans", "--pretty"], { cwd: project }).stdout, "empty shape")
     assert.equal(emptyShape.shapeReady, true)
+    const boundProfile = parseJson(run("node", [
+      manager,
+      "bind-profile", "herder-plans",
+      "--profile", defaultProfile.profile,
+      "--profile-sha256", defaultProfile.profile_sha256,
+      "--host", defaultProfile.host,
+      "--roles-json", JSON.stringify(defaultProfile.roles),
+      "--pretty",
+    ], { cwd: project }).stdout, "profile binding")
+    assert.equal(boundProfile.recorded, true)
+    const readProfile = parseJson(run("node", [manager, "profile", "herder-plans", "--pretty"], { cwd: project }).stdout, "profile read")
+    assert.equal(readProfile.configuration.profile, "eclipse")
     const dashboardSnapshot = parseJson(run("node", [
       dashboardRunner,
       "--snapshot", "--pretty", "--plan-dir", "herder-plans",
@@ -835,6 +863,9 @@ function main() {
       assert.match(installMessage, /multi.agent.v2|multi_agent_v2|enabled/i)
       for (const profile of ["plan_accountant", "plan_implementer", "plan_reviewer", "plan_judge", "plan_saver"]) {
         assert.equal(fs.existsSync(path.join(codexHome, "agents", `${profile}.toml`)), true, `missing installed profile ${profile}`)
+      }
+      for (const profile of ["eclipse_plan_accountant", "eclipse_plan_implementer", "eclipse_plan_reviewer", "eclipse_plan_judge", "eclipse_plan_saver", "offcut_plan_accountant", "offcut_plan_implementer", "offcut_plan_reviewer", "offcut_plan_judge", "offcut_plan_saver"]) {
+        assert.equal(fs.existsSync(path.join(codexHome, "agents", `${profile}.toml`)), true, `missing installed named profile ${profile}`)
       }
       const installedAccountant = fs.readFileSync(path.join(codexHome, "agents", "plan_accountant.toml"), "utf8")
       assert.match(installedAccountant, /^model = "gpt-5\.6-luna"$/m)
@@ -916,11 +947,11 @@ function main() {
         assert.equal(agentEvidence.every((item) => item.userMessageCount === 0), true, "child context was not isolated")
         assert.equal(agentEvidence.every((item) => item.cwd === project), true, "child session did not inherit the intended repository context")
         assert.equal(agentEvidence.every((item) => item.usage && Number.isSafeInteger(item.usage.inputTokens)), true)
-        const accountants = agentEvidence.filter((item) => item.agentRole === "plan_accountant")
-        const implementers = agentEvidence.filter((item) => item.agentRole === "plan_implementer")
-        const reviewers = agentEvidence.filter((item) => item.agentRole === "plan_reviewer")
-        const judges = agentEvidence.filter((item) => item.agentRole === "plan_judge")
-        const savers = agentEvidence.filter((item) => item.agentRole === "plan_saver")
+        const accountants = agentEvidence.filter((item) => item.agentRole === "eclipse_plan_accountant")
+        const implementers = agentEvidence.filter((item) => item.agentRole === "eclipse_plan_implementer")
+        const reviewers = agentEvidence.filter((item) => item.agentRole === "eclipse_plan_reviewer")
+        const judges = agentEvidence.filter((item) => item.agentRole === "eclipse_plan_judge")
+        const savers = agentEvidence.filter((item) => item.agentRole === "eclipse_plan_saver")
         assert.equal(accountants.length, 1, "Fire must use exactly one persistent Accountant thread")
         assert.equal(accountants[0].taskMessageCount >= 2, true, "Accountant must receive repeated task envelopes on one persistent thread")
         assert.equal(accountants[0].model === "gpt-5.6-luna" && accountants[0].effort === "max" && accountants[0].sandbox === "workspace-write", true)
@@ -938,15 +969,15 @@ function main() {
         assert.equal(spawnEvidence.every((item) => item.namespace === "herder_agents"), true)
         assert.equal(spawnEvidence.every((item) => item.encryptedMessagePresent), true)
         assert.equal(spawnEvidence.every((item) => item.arguments.fork_turns === "none"), true)
-        assert.equal(spawnEvidence.every((item) => ["plan_accountant", "plan_implementer", "plan_reviewer", "plan_judge", "plan_saver"].includes(item.arguments.agent_type)), true)
-        assert.equal(spawnEvidence.filter((item) => item.arguments.agent_type === "plan_accountant").length, 1)
+        assert.equal(spawnEvidence.every((item) => ["eclipse_plan_accountant", "eclipse_plan_implementer", "eclipse_plan_reviewer", "eclipse_plan_judge", "eclipse_plan_saver"].includes(item.arguments.agent_type)), true)
+        assert.equal(spawnEvidence.filter((item) => item.arguments.agent_type === "eclipse_plan_accountant").length, 1)
         assert.equal(spawnEvidence.every((item) => !("model" in item.arguments) && !("reasoning_effort" in item.arguments) && !("service_tier" in item.arguments)), true)
         assert.equal(spawnEvidence.every((item) => item.coordinatorModel === "gpt-5.6-sol" && item.coordinatorEffort === "max" && item.multiAgentVersion === "v2"), true)
         fs.writeFileSync(path.join(reports, "native-spawn-evidence.json"), `${JSON.stringify(spawnEvidence, null, 2)}\n`)
 
         const fireTranscript = fs.readFileSync(path.join(transcripts, "02-fire-run.jsonl"), "utf8")
         assert.doesNotMatch(fireTranscript, /run-codex-worker\.mjs/)
-        assert.match(fireTranscript, /plan_accountant/, "Fire did not spawn the persistent Accountant")
+        assert.match(fireTranscript, /eclipse_plan_accountant/, "Fire did not spawn the persistent Accountant")
         const accountantTranscript = fs.readFileSync(accountants[0].transcript, "utf8")
         assert.match(accountantTranscript, /assignment-bundle\.mjs/, "Accountant did not materialize and verify worktree-local assignment context")
         assert.match(accountantTranscript, /run-gate\.mjs/, "Accountant did not isolate gate output")

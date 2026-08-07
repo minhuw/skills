@@ -303,6 +303,7 @@ export function buildDashboardState(input = {}) {
       databaseExists: usage.databaseExists,
       storage: usage.storage,
       schemaVersion: usage.schemaVersion,
+      runConfiguration: usage.runConfiguration,
       attempts: runReport.attempts,
       rounds: runReport.rounds,
       interruptions: runReport.interruptions,

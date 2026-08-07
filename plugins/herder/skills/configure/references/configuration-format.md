@@ -37,11 +37,11 @@ Use schema version 1. The temporary answers file contains no credentials:
 }
 ```
 
-`backend` is `orca` or `native-codex`. The answers schema still contains the controller and four configurable worker roles; every native harness must be `codex`. Its controller mapping becomes a launch command, the four worker mappings become project or user agent profiles, and generation also copies the fixed bundled `plan_accountant` profile. The Accountant is always Luna/max/Fast and is never an Orca-routed role.
+`backend` is `orca` or `native-codex`. The answers schema still contains the controller and four configurable worker roles; every native harness must be `codex`. Native generation updates only the unqualified legacy aliases used by pre-profile runs: its controller mapping becomes a launch command, the four worker mappings become project or user aliases, and generation also copies the fixed bundled `plan_accountant` alias. It does not alter any installed named profile. The legacy Accountant is always Luna/max/Fast and is never an Orca-routed role.
 
 For native Codex profiles and Orca roles backed by Codex, the generator adds `service_tier = "fast"` to child roles whose model ID ends in `-luna`. It removes that setting from non-Luna child profiles and never enables Fast tier for the controller.
 
-Validation and probing add the fixed native `plan-accountant` route (`gpt-5.6-luna`, `max`, Fast tier) to the configurable routes before deduplication. This applies to both backends because Orca routes plan workers only; it does not host the Accountant.
+Validation checks only schema, role completeness, supported harness adapters, model-string shape, and effort values. Model IDs are otherwise opaque. Configure never queries a model catalog or performs a token-consuming live probe; Fire reports an exact dispatch rejection without fallback when the selected host cannot run a configured model.
 
 Role names are exact. Unknown or missing roles fail validation.
 
@@ -51,4 +51,4 @@ Harness rules:
 - `grok-build`: model is a Grok model ID; effort is `low`, `medium`, or `high`.
 - `pi`: model is the exact `provider/model` route; effort is `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
 
-The generator derives providers, commands, permission modes, and credential-free probes. Do not add raw command arrays to the answers file.
+The generator derives providers, commands, and permission modes. Do not add raw command arrays to the answers file.

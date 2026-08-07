@@ -6,9 +6,11 @@ import os from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import {
+  bindRunProfile,
   buildGraph,
   getExecutionReport,
   getShapeReport,
+  getRunProfile,
   getUsageReport,
   initPlanDir,
   migrateUsage,
@@ -191,6 +193,25 @@ try {
   assert.equal(Object.hasOwn(shape.plans.find((plan) => plan.id === "002"), "reviewBudget"), false)
 
   const readmeBeforeUsage = fs.readFileSync(valid.readme, "utf8")
+  const runProfile = {
+    profile: "offcut",
+    profileSha256: "1c5a08366d983d588fe0b8dfaf9f2c03d1c0801ab194b27c85da8b5e7f6453e2",
+    host: "codex",
+    roles: {
+      "plan-accountant": { agent_type: "offcut_plan_accountant", model: "grok-4.5", effort: "max" },
+      "plan-implementer": { agent_type: "offcut_plan_implementer", model: "grok-4.5", effort: "high" },
+      "plan-reviewer": { agent_type: "offcut_plan_reviewer", model: "gpt-5.6-sol", effort: "xhigh" },
+      "plan-judge": { agent_type: "offcut_plan_judge", model: "gpt-5.6-sol", effort: "xhigh" },
+      "plan-saver": { agent_type: "offcut_plan_saver", model: "gpt-5.6-sol", effort: "max" },
+    },
+  }
+  assert.equal(bindRunProfile(valid.planDir, runProfile).recorded, true)
+  assert.equal(bindRunProfile(valid.planDir, runProfile).recorded, false)
+  assert.deepEqual(getRunProfile(valid.planDir).configuration.roles, runProfile.roles)
+  expectFailure(
+    () => bindRunProfile(valid.planDir, { ...runProfile, profile: "eclipse" }),
+    /already bound to offcut/,
+  )
   const implementerUsage = {
     plan: "002",
     role: "plan-implementer",
@@ -243,6 +264,7 @@ try {
   assert.equal(usage.byRole.find((row) => row.key === "plan-implementer").knownTokens, 1200)
   assert.equal(usage.byModel.find((row) => row.key === "gpt-5.6-sol / xhigh").tokenAttempts, 0)
   assert.equal(usage.storage, "sqlite")
+  assert.equal(usage.runConfiguration.profile, "offcut")
   assert.equal(fs.readFileSync(valid.readme, "utf8"), readmeBeforeUsage)
   assert.equal(fs.existsSync(executionDatabasePath(valid.planDir)), true)
   const databaseBeforeReports = fs.readFileSync(executionDatabasePath(valid.planDir))
@@ -259,6 +281,7 @@ try {
   assert.equal(planReport.byGeneration.find((row) => row.key === "generation-1").attempts, 2)
   assert.equal(planReport.byServiceTier.find((row) => row.key === "fast").attempts, 1)
   assert.equal(planReport.lifecycle.status, "TODO")
+  assert.equal(planReport.runConfiguration.profile, "offcut")
   assert.deepEqual(fs.readFileSync(executionDatabasePath(valid.planDir)), databaseBeforeReports)
   expectFailure(
     () => recordUsage(valid.planDir, { ...implementerUsage, outcome: "FAILED" }),

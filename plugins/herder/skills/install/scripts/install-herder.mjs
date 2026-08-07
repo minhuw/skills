@@ -97,8 +97,11 @@ function parseManifest(bytes) {
   } catch (error) {
     throw new Error(`Invalid bundled profile manifest: ${error.message}`);
   }
-  if (manifest.schema_version !== 1 || manifest.profile_set !== "herder") {
+  if (manifest.schema_version !== 2 || manifest.profile_set !== "herder") {
     throw new Error("Unsupported bundled Herder profile manifest.");
+  }
+  if (!manifest.defaults || !manifest.profiles || typeof manifest.catalog_sha256 !== "string") {
+    throw new Error("Bundled Herder profile manifest is incomplete.");
   }
   return manifest;
 }
@@ -106,19 +109,21 @@ function parseManifest(bytes) {
 function validateFiles(manifest, host) {
   const entry = manifest.hosts?.[host];
   const expectedMode = host === "codex" ? "copy" : "bundled";
-  if (entry?.mode !== expectedMode || !Array.isArray(entry.files) || entry.files.length !== 5) {
-    throw new Error(`Manifest must define exactly five ${host} profiles in ${expectedMode} mode.`);
+  if (entry?.mode !== expectedMode || !Array.isArray(entry.files) || entry.files.length < 5) {
+    throw new Error(`Manifest must define at least five ${host} profiles in ${expectedMode} mode.`);
   }
 
-  const expectedPrefix = host === "codex" ? "agent-profiles/codex/" : "agents/";
   const seen = new Set();
   for (const file of entry.files) {
-    if (typeof file.source !== "string" || !file.source.startsWith(expectedPrefix)) {
+    const sourcePattern = host === "codex"
+      ? /^agent-profiles\/(?:codex|generated\/codex)\/[A-Za-z0-9_-]+\.toml$/
+      : /^agents\/(?:generated\/)?[A-Za-z0-9_-]+\.md$/;
+    if (typeof file.source !== "string" || !sourcePattern.test(file.source)) {
       throw new Error(`Unsafe ${host} profile source in manifest.`);
     }
-    const suffix = file.source.slice(expectedPrefix.length);
-    if (!suffix || suffix.includes("/") || suffix.includes("\\")) {
-      throw new Error(`Nested or unsafe ${host} profile source in manifest.`);
+    const normalizedSource = path.posix.normalize(file.source);
+    if (normalizedSource !== file.source || normalizedSource.startsWith("../") || normalizedSource.includes("\\")) {
+      throw new Error(`Unsafe ${host} profile source in manifest.`);
     }
     if (!/^[0-9a-f]{64}$/i.test(file.sha256 || "")) {
       throw new Error(`Invalid SHA-256 for ${file.source}.`);
@@ -197,6 +202,7 @@ async function loadProfiles(manifest, hosts, options) {
         source: sourcePath,
         target: destination ? path.join(destination, file.target) : null,
         identifier: file.identifier || null,
+        profile: file.profile || null,
       });
     }
   }
@@ -309,11 +315,11 @@ function printCodexRequirement(feature) {
   console.log("hide_spawn_agent_metadata = false");
   console.log('tool_namespace = "herder_agents"');
   console.log("max_concurrent_threads_per_session = 6");
-  console.log("Reserve one child thread for plan_accountant; use at least --max-parallel + 1.");
+  console.log("Reserve one child thread for the selected profile's plan-accountant; use at least --max-parallel + 1.");
   console.log("Then start a new Codex session before using $herder:fire.");
 }
 
-function printResult(profiles, result, options, feature) {
+function printResult(profiles, result, options, feature, manifest) {
   console.log(`Plugin: ${PLUGIN_ROOT}`);
   const mode = options.dryRun ? "Would install" : "Installed";
   for (const profile of result.install) console.log(`${mode}: ${profile.target}`);
@@ -324,6 +330,15 @@ function printResult(profiles, result, options, feature) {
   for (const profile of result.unchanged) console.log(`Unchanged: ${profile.target}`);
   for (const profile of profiles.filter((item) => item.host === "claude")) {
     console.log(`Bundled: ${profile.identifier}`);
+  }
+  const namedProfiles = [...new Set(profiles.map((item) => item.profile).filter(Boolean))].sort();
+  if (namedProfiles.length > 0) console.log(`Named profiles: ${namedProfiles.join(", ")}`);
+  for (const name of namedProfiles) {
+    const orchestrator = manifest.profiles?.[name]?.orchestrator;
+    if (!orchestrator?.model || !orchestrator?.effort) {
+      throw new Error(`Bundled Herder profile ${JSON.stringify(name)} is missing its orchestrator requirement.`);
+    }
+    console.log(`Orchestrator (${name}): ${orchestrator.model}/${orchestrator.effort}`);
   }
   if (feature) {
     printCodexRequirement(feature);
@@ -344,7 +359,7 @@ export async function main(argv = process.argv.slice(2)) {
   const feature = hosts.includes("codex") ? codexMultiAgentV2Status() : null;
   const profiles = await loadProfiles(manifest, hosts, options);
   const result = await installCodex(profiles, options);
-  printResult(profiles, result, options, feature);
+  printResult(profiles, result, options, feature, manifest);
 }
 
 const isEntryPoint = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);

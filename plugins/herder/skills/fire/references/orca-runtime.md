@@ -17,7 +17,7 @@ The bundled interoperability profile is:
 <plugin-root>/skills/fire/references/orca-heterogeneous-profile.json
 ```
 
-Use `$herder:configure` to generate and live-validate a project-specific profile. Do not hand-author command arrays or copy credentials into a profile.
+Use `$herder:configure` to generate and structurally validate a project-specific profile. Do not hand-author command arrays or copy credentials into a profile.
 
 It deliberately exercises:
 
@@ -62,12 +62,11 @@ Require:
 - current controller terminal handle and Orca worktree identity available;
 - controller profile and launcher hashes inherited from `launch-controller`;
 - every configured harness executable available;
-- every configured non-controller provider/model probe successful;
 - current controller routing consistent with the configured controller role;
 - repository registered with Orca;
 - no selected role silently substituted with another harness, provider, model, or effort.
 
-Availability probes are not agent turns and must not modify the repository. Their output is reduced to pass/fail and a SHA-256; the Accountant returns only that compact evidence to the root. Never include raw authentication, balance, or account output in root context. A failed probe stops before mutation.
+Preflight validates the runtime, controller attestation, harness executables, and profile structure. It deliberately does not query model catalogs or spend tokens on model probes. If an actual dispatch is rejected before a worker handle exists, report the exact role/harness/provider/model failure, release its lease, consume no attempt or round, and never substitute another route.
 
 ## Worktree authority
 
