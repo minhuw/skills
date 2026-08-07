@@ -8,6 +8,7 @@ import process from "node:process"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { parseWorktreeRecords } from "./cleanup-run.mjs"
+import { formatCheckpointRef } from "./coordination-ref.mjs"
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const cleanup = path.join(scriptDir, "cleanup-run.mjs")
@@ -234,11 +235,36 @@ try {
   assert.deepEqual(failedCleanup.removed.map((item) => item.branch), [blockedBranch])
   assert.equal(fs.existsSync(blocked), false)
 
+  const currentCheckpointRef = formatCheckpointRef({
+    planName: "plans",
+    plan: "001",
+    generation: "generation-1",
+    ordinal: "1",
+  }).ref
+  git(repo, "update-ref", currentCheckpointRef, completionCommit, "")
   const blockedFinalization = cleanupResult(repo, planDir, ["--finalize", "--dry-run"]).json
   assert.equal(blockedFinalization.finalization.eligible, false)
   assert.equal(blockedFinalization.finalization.blockers.some((item) => item.reason === "plan-not-terminal"), true)
   assert.equal(blockedFinalization.finalization.blockers.some((item) => item.reason === "plan-branch-would-remain"), true)
+  assert.equal(blockedFinalization.finalization.blockers.some((item) => item.reason === "unrecognized-coordination-ref"), false)
+  assert.deepEqual(
+    blockedFinalization.finalization.refsPlanned.find((item) => item.ref === currentCheckpointRef),
+    { ref: currentCheckpointRef, target: completionCommit, kind: "checkpoint", plan: "001" },
+  )
+  assert.equal(git(repo, "rev-parse", currentCheckpointRef), completionCommit)
   assert.equal(fs.existsSync(proofless), true)
+
+  const malformedCheckpointRef = "refs/plan-herder/plans/checkpoints/001/generation-x-001"
+  git(repo, "update-ref", malformedCheckpointRef, completionCommit, "")
+  const malformedFinalization = cleanupResult(repo, planDir, ["--finalize", "--dry-run"]).json
+  assert.equal(
+    malformedFinalization.finalization.blockers.some((item) => (
+      item.reason === "unrecognized-coordination-ref" && item.ref === malformedCheckpointRef
+    )),
+    true,
+  )
+  assert.equal(git(repo, "rev-parse", malformedCheckpointRef), completionCommit)
+  git(repo, "update-ref", "-d", malformedCheckpointRef, completionCommit)
 
   const finalRepo = path.join(root, "final-repo")
   const finalWorktrees = path.join(root, "final-worktrees")
@@ -268,6 +294,13 @@ try {
   git(finalRepo, "update-ref", finalCompletionRef, finalCompletionCommit, "")
   const finalCheckpointRef = "refs/plan-herder/plans/checkpoints/001/0-1"
   git(finalRepo, "update-ref", finalCheckpointRef, finalCompletionCommit, "")
+  const finalCurrentCheckpointRef = formatCheckpointRef({
+    planName: "plans",
+    plan: "001",
+    generation: "generation-1",
+    ordinal: "1",
+  }).ref
+  git(finalRepo, "update-ref", finalCurrentCheckpointRef, finalCompletionCommit, "")
   const finalRejectedBranch = "herder/plans/002"
   const finalRejected = addWorktree(finalRepo, finalWorktrees, finalRejectedBranch, finalIntegrationBranch)
   commitFile(finalRejected, "rejected.txt", "rejected\n", "test: retain rejected experiment")
@@ -278,6 +311,7 @@ try {
   assert.deepEqual(finalizePreview.finalization.refsPlanned, [
     { ref: finalBaseRef, target: finalInitial, kind: "base" },
     { ref: finalCheckpointRef, target: finalCompletionCommit, kind: "checkpoint", plan: "001" },
+    { ref: finalCurrentCheckpointRef, target: finalCompletionCommit, kind: "checkpoint", plan: "001" },
     { ref: finalCompletionRef, target: finalCompletionCommit, kind: "completed", plan: "001" },
   ])
 

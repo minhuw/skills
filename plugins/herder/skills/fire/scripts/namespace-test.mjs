@@ -8,6 +8,7 @@ import process from "node:process"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { inspectNamespace, validatePlanName } from "./namespace-run.mjs"
+import { formatCheckpointRef } from "./coordination-ref.mjs"
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), "namespace-run.mjs")
 
@@ -83,6 +84,7 @@ Keep the fixture small.
 
 function writePlans(repo) {
   const planDir = path.join(repo, "plans")
+  const planIds = ["001", "009", "019", "020", "021", "023"]
   fs.mkdirSync(planDir)
   fs.writeFileSync(path.join(planDir, "README.md"), `# Herder Plans
 
@@ -90,9 +92,11 @@ function writePlans(repo) {
 
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
-| [001](001-namespace.md) | Namespace | P1 | S | — | TODO |
+${planIds.map((id) => `| [${id}](${id}-namespace.md) | Namespace ${id} | P1 | S | — | TODO |`).join("\n")}
 `)
-  fs.writeFileSync(path.join(planDir, "001-namespace.md"), planBody("001"))
+  for (const id of planIds) {
+    fs.writeFileSync(path.join(planDir, `${id}-namespace.md`), planBody(id))
+  }
   return planDir
 }
 
@@ -136,6 +140,33 @@ try {
   assert.equal(resumed.integration.branch, "herder/plans/integration")
   assert.equal(resumed.baseRef.ref, "refs/plan-herder/plans/base")
   assert.deepEqual(resumed.planBranches.map((item) => item.relative), ["001"])
+
+  const currentCheckpoints = ["009", "019", "020", "021"].map((plan) => formatCheckpointRef({
+    planName: "plans",
+    plan,
+    generation: "generation-1",
+    ordinal: "1",
+  }).ref)
+  const numericCheckpoint = "refs/plan-herder/plans/checkpoints/001/0-1"
+  for (const currentCheckpoint of currentCheckpoints) {
+    git(repo, "update-ref", currentCheckpoint, git(repo, "rev-parse", "main"), "")
+  }
+  git(repo, "update-ref", numericCheckpoint, git(repo, "rev-parse", "main"), "")
+  const checkpointResume = inspectNamespace({ repo, planDir, mode: "resume" })
+  assert.equal(checkpointResume.ok, true)
+  assert.deepEqual(checkpointResume.unknownCoordinationRefs, [])
+  for (const currentCheckpoint of currentCheckpoints) {
+    assert.equal(checkpointResume.coordinationRefs.some((item) => item.ref === currentCheckpoint), true)
+  }
+  assert.equal(checkpointResume.coordinationRefs.some((item) => item.ref === numericCheckpoint), true)
+
+  const malformedCheckpoint = "refs/plan-herder/plans/checkpoints/001/generation-x-001"
+  git(repo, "update-ref", malformedCheckpoint, git(repo, "rev-parse", "main"), "")
+  const malformedResume = inspectNamespace({ repo, planDir, mode: "resume" })
+  assert.equal(malformedResume.ok, false)
+  assert.equal(malformedResume.reason, "namespace-ambiguous")
+  assert.equal(malformedResume.conflicts.some((item) => item.type === "unknown-coordination-ref" && item.ref === malformedCheckpoint), true)
+  git(repo, "update-ref", "-d", malformedCheckpoint)
 
   const other = inspectNamespace({ repo, planDir, planName: "other-plans", mode: "fire" })
   assert.equal(other.ok, true)

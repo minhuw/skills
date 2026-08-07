@@ -7,6 +7,7 @@ import path from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
 import { buildGraph, snapshotPlan } from "../../plans/scripts/herder-plans.mjs"
+import { parseCheckpointRefRelative } from "./coordination-ref.mjs"
 
 export const ASSIGNMENT_SCHEMA_VERSION = 1
 export const ASSIGNMENT_KIND = "herder-plan-assignment"
@@ -560,9 +561,12 @@ function activeRebaseEvidence(options, { includeStateHash }) {
   if (git(execution.root, ["check-ref-format", branchRef], { allowFailure: true }).status !== 0) {
     throw new Error(`invalid expected plan branch: ${expectedBranch}`)
   }
-  const checkpointPrefix = `refs/plan-herder/${planName}/checkpoints/${planId}/`
-  if (!expectedCheckpointRef.startsWith(checkpointPrefix)
-    || !/^\d+-\d+$/.test(expectedCheckpointRef.slice(checkpointPrefix.length))
+  const coordinationPrefix = `refs/plan-herder/${planName}/`
+  const checkpointIdentity = expectedCheckpointRef.startsWith(coordinationPrefix)
+    ? parseCheckpointRefRelative(expectedCheckpointRef.slice(coordinationPrefix.length))
+    : null
+  if (!checkpointIdentity
+    || checkpointIdentity.plan !== planId
     || git(execution.root, ["check-ref-format", expectedCheckpointRef], { allowFailure: true }).status !== 0) {
     throw new Error(`invalid expected Herder checkpoint ref: ${expectedCheckpointRef}`)
   }

@@ -8,6 +8,7 @@ import path from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
 import { initPlanDir, snapshotPlan } from "../../plans/scripts/herder-plans.mjs"
+import { formatCheckpointRef } from "./coordination-ref.mjs"
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const assignmentManager = path.join(scriptDir, "assignment-bundle.mjs")
@@ -314,7 +315,12 @@ try {
   git(rebase.worktree, "add", "src/worker.mjs")
   git(rebase.worktree, "commit", "-qm", "Implement plan change")
   const planHead = git(rebase.worktree, "rev-parse", "HEAD")
-  const checkpointRef = "refs/plan-herder/rebase/checkpoints/001/0-1"
+  const checkpointRef = formatCheckpointRef({
+    planName: "rebase",
+    plan: "001",
+    generation: "generation-1",
+    ordinal: "1",
+  }).ref
   git(rebase.repo, "update-ref", checkpointRef, planHead, "")
 
   fs.writeFileSync(path.join(rebase.repo, "src", "worker.mjs"), "export const ready = 'integration'\n")

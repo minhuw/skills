@@ -7,6 +7,7 @@ import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { buildGraph } from "../../plans/scripts/herder-plans.mjs"
+import { parseCoordinationRefRelative } from "./coordination-ref.mjs"
 
 function fail(message) {
   throw new Error(message)
@@ -332,24 +333,8 @@ function listCoordinationRefs(repoRoot, planName) {
     const ref = line.slice(0, separator)
     const target = line.slice(separator + 1)
     const relative = ref.slice(prefix.length)
-    let kind = null
-    let plan = null
-    if (relative === "base") kind = "base"
-    else {
-      const completed = relative.match(/^completed\/(\d{3,})$/)
-      const checkpoint = relative.match(/^checkpoints\/(\d{3,})\/(\d+)-(\d+)$/)
-      const runCheckpoint = relative.match(/^checkpoints\/RUN\/(\d+)$/)
-      if (completed) {
-        kind = "completed"
-        plan = completed[1]
-      } else if (checkpoint) {
-        kind = "checkpoint"
-        plan = checkpoint[1]
-      } else if (runCheckpoint) {
-        kind = "run-checkpoint"
-      }
-    }
-    return { ref, target, relative, kind, plan }
+    const identity = parseCoordinationRefRelative(relative)
+    return { ref, target, relative, kind: identity?.kind ?? null, plan: identity?.plan ?? null }
   })
 }
 

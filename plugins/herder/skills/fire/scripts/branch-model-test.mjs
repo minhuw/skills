@@ -7,6 +7,7 @@ import path from "node:path"
 import process from "node:process"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { formatCheckpointRef } from "./coordination-ref.mjs"
 import { inspectNamespace } from "./namespace-run.mjs"
 import { transitionStatus } from "../../plans/scripts/herder-plans.mjs"
 
@@ -135,7 +136,12 @@ try {
   git(integrationWorktree, "commit", "-q", "-m", "feat: integrate independent behavior")
   const restackBase = git(integrationWorktree, "rev-parse", "HEAD")
 
-  const checkpointRef = "refs/plan-herder/plans/checkpoints/001/0-1"
+  const checkpointRef = formatCheckpointRef({
+    planName: "plans",
+    plan: "001",
+    generation: "generation-1",
+    ordinal: "1",
+  }).ref
   git(repo, "update-ref", checkpointRef, preRestackHead, "")
   git(planWorktree, "rebase", "--onto", restackBase, base, planBranch)
   const reviewedHead = git(planWorktree, "rev-parse", "HEAD")

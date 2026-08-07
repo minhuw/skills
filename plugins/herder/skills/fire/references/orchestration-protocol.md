@@ -28,8 +28,8 @@ Resolve:
 - `plan_branch(<id>)`: `herder/<plan_name>/<id>`.
 - `base_ref`: `refs/plan-herder/<plan_name>/base`.
 - `completion_ref(<id>)`: `refs/plan-herder/<plan_name>/completed/<id>`.
-- `checkpoint_ref(<id>, <generation>, <ordinal>)`: `refs/plan-herder/<plan_name>/checkpoints/<id>/<generation>-<ordinal>`.
-- `plan_manager`, `namespace_runner`, `checkout_guard`, `assignment_manager`, `codex_evidence_reader`, `gate_runner`, `round_policy`, and `cleanup_runner`: absolute installed script paths.
+- `checkpoint_ref(<id>, <generation>, <ordinal>)`: the coordination-ref formatter's canonical `refs/plan-herder/<plan_name>/checkpoints/<id>/generation-<n>-<zero-padded-ordinal>` output.
+- `plan_manager`, `coordination_ref`, `namespace_runner`, `checkout_guard`, `assignment_manager`, `codex_evidence_reader`, `gate_runner`, `round_policy`, and `cleanup_runner`: absolute installed script paths.
 - `base_commit`: current user-checkout `HEAD` for fresh Fire, or `base_ref` for resume.
 - `worktree_root`: outside the user's checkout, with integration at `<worktree_root>/<plan_name>/integration` and plans at `<worktree_root>/<plan_name>/<id>`.
 - `gate_log_root`: `<worktree_root>/<plan_name>/logs`, outside every Git worktree.
@@ -43,6 +43,14 @@ Resolve:
 - `checkout_state_token`: the checkout guard token excluding only `plan_dir`.
 - `assignment_state(<id|RUN>)`: worktree-local assignment path, bundle SHA-256, compiled snapshot SHA-256, generation base, and branch. A preserved active rebase additionally has an ephemeral `rebase_state_sha256` captured and consumed immediately before one guided-repair dispatch; it is evidence, not scheduler state.
 - `execution_runtime`: explicit `native` or `orca`, never inferred.
+
+Construct every new checkpoint ref with the shared helper; do not interpolate ref names in prose or scheduler logic:
+
+```text
+node <coordination_ref> format-checkpoint --plan-name <plan_name> --plan <id> --generation generation-<n> --ordinal <positive-integer> --pretty
+```
+
+`generation-<n>` is the canonical generation identifier used by current execution accounting, and the formatter emits a minimum three-digit ordinal such as `generation-1-001`. Namespace validation, active-rebase verification, and cleanup use the same parser. For compatibility, readers also recognize an existing legacy numeric checkpoint suffix `<n>-<ordinal>` such as `0-1`; writers never emit or rewrite that legacy form. Every other checkpoint suffix remains unknown coordination state and fails closed.
 
 An **agent attempt** is one worker dispatch and always receives a unique usage row. A **substantive round** is an Implementer attempt that returns a result or may have mutated its worktree, followed by Accountant-run gates and Reviewer when the branch becomes reviewable. A proven clean host interruption consumes no round. Restacking an unchanged patch consumes no round.
 
@@ -287,7 +295,7 @@ Under the lock only:
 
 1. Require integration HEAD to equal the expected value captured when the lock was acquired.
 2. Verify the approved plan branch is clean, assignment-valid, merge-free, and still at approved HEAD/tree/status.
-3. If its reviewed base is stale, create a unique immutable checkpoint ref naming the pre-restack HEAD, then run `git rebase --onto <integration-head> <reviewed-base>` in the same plan worktree.
+3. If its reviewed base is stale, obtain `checkpoint_ref(<id>, <generation>, <ordinal>)` from `node <coordination_ref> format-checkpoint ...`, then create that absent unique immutable checkpoint ref naming the pre-restack HEAD and run `git rebase --onto <integration-head> <reviewed-base>` in the same plan worktree. Never rename or rewrite an existing current or legacy checkpoint ref.
 4. Prove patch equivalence with the checkpoint using `git cherry`, then rerun required gates and scope/path measurement. If the patch is equivalent and gates pass, preserve approval without another review. A conflict, material patch change, gate failure, or scope change releases the lock and consumes the next guided-repair round; never abort, reset, clean, or create another branch.
 5. Recheck integration HEAD and fast-forward with `git merge --ff-only <plan-branch>`.
 6. Require integration HEAD to equal the approved/restacked plan HEAD, create absent `completion_ref(<id>)`, verify reachability, and transition the plan to `DONE`.

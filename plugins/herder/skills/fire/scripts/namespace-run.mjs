@@ -6,6 +6,7 @@ import process from "node:process"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { buildGraph } from "../../plans/scripts/herder-plans.mjs"
+import { parseCoordinationRefRelative } from "./coordination-ref.mjs"
 
 function fail(message) {
   throw new Error(message)
@@ -165,16 +166,11 @@ export function inspectNamespace(input) {
   const planBranches = branches.filter((item) => /^\d{3,}$/.test(item.relative))
   const unknownBranches = branches.filter((item) => item.relative !== "integration" && !/^\d{3,}$/.test(item.relative))
   const unindexedBranches = planBranches.filter((item) => !planIds.has(item.relative))
-  const recognizedCoordinationRefs = coordinationRefs.filter((item) => (
-    item.relative === "base"
-    || /^completed\/\d{3,}$/.test(item.relative)
-    || /^checkpoints\/\d{3,}\/\d+-\d+$/.test(item.relative)
-    || /^checkpoints\/RUN\/\d+$/.test(item.relative)
-  ))
+  const recognizedCoordinationRefs = coordinationRefs.filter((item) => parseCoordinationRefRelative(item.relative))
   const unknownCoordinationRefs = coordinationRefs.filter((item) => !recognizedCoordinationRefs.includes(item))
   const unindexedCoordinationRefs = recognizedCoordinationRefs.filter((item) => {
-    const match = item.relative.match(/^(?:completed|checkpoints)\/(\d{3,})(?:\/|$)/)
-    return match ? !planIds.has(match[1]) : false
+    const identity = parseCoordinationRefRelative(item.relative)
+    return identity?.plan ? !planIds.has(identity.plan) : false
   })
   const worktrees = listWorktrees(repoRoot)
   const namespaceBranchNames = new Set(branches.map((item) => item.branch))
@@ -205,7 +201,7 @@ export function inspectNamespace(input) {
       conflicts.push({ type: "base-not-reachable", ref: baseRef.ref, target: baseRef.target, integrationHead: integration.head })
     }
     if (integration) {
-      for (const item of recognizedCoordinationRefs.filter((ref) => /^completed\/\d{3,}$/.test(ref.relative))) {
+      for (const item of recognizedCoordinationRefs.filter((ref) => parseCoordinationRefRelative(ref.relative)?.kind === "completed")) {
         if (!isAncestor(repoRoot, item.target, integration.head)) {
           conflicts.push({ type: "completion-not-reachable", ref: item.ref, target: item.target, integrationHead: integration.head })
         }
