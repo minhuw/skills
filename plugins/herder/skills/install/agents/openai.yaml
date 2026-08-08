@@ -1,4 +1,0 @@
-interface:
-  display_name: "Herder Install"
-  short_description: "Install Herder worker roles"
-  default_prompt: "Use $herder:install to install or verify the Implementer, Reviewer, and Judge roles for this project."

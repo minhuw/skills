@@ -1,4 +1,0 @@
-interface:
-  display_name: "Herder Plans"
-  short_description: "Shape, validate, and manage Herder plans"
-  default_prompt: "Use $herder:plans to initialize, shape, validate, inspect, or report token usage for this repository’s Herder plans."

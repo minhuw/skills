@@ -1,4 +1,0 @@
-interface:
-  display_name: "Herder Dashboard"
-  short_description: "Track live Herder plans in a local graph"
-  default_prompt: "Use $herder:dashboard to open a read-only local graph of this Herder plan run."

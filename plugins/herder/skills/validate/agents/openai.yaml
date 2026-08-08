@@ -1,4 +1,0 @@
-interface:
-  display_name: "Herder Validate"
-  short_description: "Audit shape and repair Herder plans safely"
-  default_prompt: "Use $herder:validate to audit this repository’s Herder plan graph and report whether its shape and semantics are Fire-ready."
